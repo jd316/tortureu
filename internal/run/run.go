@@ -362,9 +362,8 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 	}
 	v.Metrics = metrics
 
-	activeFaults := len(cfg.Faults)
-	thresholdPassed, thresholdFindings := evaluateThresholds(metrics, activeFaults)
-	promPassed, promFindings := evaluatePromqlAsserts(cfg.Assert, deps.Prom, activeFaults)
+	thresholdPassed, thresholdFindings := evaluateThresholds(metrics, cfg.Faults, sys)
+	promPassed, promFindings := evaluatePromqlAsserts(cfg.Assert, deps.Prom, cfg.Faults, sys)
 
 	// 6. Tear down every fault (R-EXE-5), before the verdict is emitted.
 	teardownAll()

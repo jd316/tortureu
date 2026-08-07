@@ -2,9 +2,11 @@ package run
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jdb316/tortureu/internal/config"
+	"github.com/jdb316/tortureu/internal/detect"
 	"github.com/jdb316/tortureu/internal/verdict"
 )
 
@@ -15,12 +17,27 @@ func TestEvaluateThresholds_HeldThresholdIsListedAsPassed(t *testing.T) {
 			"thresholds": map[string]any{"p(95)<500": map[string]any{"ok": true}},
 		},
 	}
-	passed, findings := evaluateThresholds(metrics, 1)
+	passed, findings := evaluateThresholds(metrics, oneFault(), detect.System{})
 	if len(findings) != 0 {
 		t.Fatalf("findings = %v, want none", findings)
 	}
 	if len(passed) != 1 || passed[0].Assertion != "http_req_duration: p(95)<500" {
 		t.Errorf("passed = %v, want one entry naming the metric and expr", passed)
+	}
+}
+
+// oneFault/twoFaults are placeholder fault lists for tests that only care
+// about the *count* (confidence), not attribution — see
+// TestEvaluateThresholds_SingleActiveFaultRecordsItAsCause etc. for tests
+// that care about the fault's actual content.
+func oneFault() []config.Fault {
+	return []config.Fault{{Name: "f1", Target: "svc:1", Verb: "latency", At: "peak"}}
+}
+
+func twoFaults() []config.Fault {
+	return []config.Fault{
+		{Name: "f1", Target: "svc:1", Verb: "latency", At: "peak"},
+		{Name: "f2", Target: "svc:2", Verb: "down", At: "peak"},
 	}
 }
 
@@ -31,7 +48,7 @@ func TestEvaluateThresholds_BrokenThresholdWithOneFaultIsCorrelated(t *testing.T
 			"thresholds": map[string]any{"p(99)<1500": map[string]any{"ok": false}},
 		},
 	}
-	_, findings := evaluateThresholds(metrics, 1)
+	_, findings := evaluateThresholds(metrics, oneFault(), detect.System{})
 	if len(findings) != 1 {
 		t.Fatalf("findings = %v, want exactly one", findings)
 	}
@@ -47,7 +64,7 @@ func TestEvaluateThresholds_BrokenThresholdWithMultipleFaultsIsAmbiguous(t *test
 			"thresholds": map[string]any{"p(99)<1500": map[string]any{"ok": false}},
 		},
 	}
-	_, findings := evaluateThresholds(metrics, 2)
+	_, findings := evaluateThresholds(metrics, twoFaults(), detect.System{})
 	if findings[0].Confidence != verdict.Ambiguous {
 		t.Errorf("Confidence = %q, want ambiguous with >=2 candidate faults and no traces", findings[0].Confidence)
 	}
@@ -63,16 +80,135 @@ func TestEvaluateThresholds_NeverReportsCausedWithoutATracePipeline(t *testing.T
 			"thresholds": map[string]any{"p(99)<1500": map[string]any{"ok": false}},
 		},
 	}
-	_, findings := evaluateThresholds(metrics, 1)
+	_, findings := evaluateThresholds(metrics, oneFault(), detect.System{})
 	if findings[0].Confidence == verdict.Caused {
 		t.Error("Confidence = caused, but no trace pipeline exists to justify that claim")
+	}
+}
+
+// spec: R-VER-3
+func TestEvaluateThresholds_SingleActiveFaultRecordsItAsCause(t *testing.T) {
+	// D-4's confidence model is a claim about attribution; a finding marked
+	// correlated with no Cause recorded doesn't say what it's attributing
+	// to, which makes the confidence label meaningless.
+	metrics := map[string]any{
+		"http_req_duration": map[string]any{
+			"thresholds": map[string]any{"p(99)<1500": map[string]any{"ok": false}},
+		},
+	}
+	faults := []config.Fault{{
+		Name: "pg_slow", At: "peak", For: "60s", Target: "postgres:5432",
+		Verb: "latency", Inject: map[string]any{"latency": "300ms", "jitter": "50ms"},
+	}}
+	_, findings := evaluateThresholds(metrics, faults, detect.System{})
+	if len(findings) != 1 {
+		t.Fatalf("findings = %v, want exactly one", findings)
+	}
+	cause := findings[0].Cause
+	if cause == nil {
+		t.Fatal("Cause is nil, want the single active fault recorded")
+	}
+	if cause.Fault != "pg_slow" {
+		t.Errorf("Cause.Fault = %q, want pg_slow", cause.Fault)
+	}
+	if cause.Target != "postgres:5432" {
+		t.Errorf("Cause.Target = %q, want postgres:5432", cause.Target)
+	}
+	if cause.Inject["latency"] != "300ms" {
+		t.Errorf("Cause.Inject = %v, want the fault's own inject: block", cause.Inject)
+	}
+	if len(cause.Window) == 0 {
+		t.Error("Cause.Window is empty, want the fault's phase anchor recorded")
+	}
+}
+
+// spec: R-VER-3
+func TestEvaluateThresholds_MultipleActiveFaultsRecordNoSingleCause(t *testing.T) {
+	// Ambiguous means >=2 candidate causes — fabricating a single Cause here
+	// would misreport an attribution this package cannot actually make.
+	metrics := map[string]any{
+		"http_req_duration": map[string]any{
+			"thresholds": map[string]any{"p(99)<1500": map[string]any{"ok": false}},
+		},
+	}
+	_, findings := evaluateThresholds(metrics, twoFaults(), detect.System{})
+	if findings[0].Cause != nil {
+		t.Errorf("Cause = %+v, want nil — ambiguous confidence must not fabricate a single attribution", findings[0].Cause)
+	}
+}
+
+// spec: R-VER-4
+func TestEvaluateThresholds_CandidatesComeFromTargetDetectedClients(t *testing.T) {
+	// D-9: explain_failure looks up candidate config knobs from the causing
+	// fault's target; with Candidates empty the MCP tool can only echo Broke
+	// back, so this is what makes that feature do anything at all.
+	metrics := map[string]any{
+		"http_req_duration": map[string]any{
+			"thresholds": map[string]any{"p(99)<1500": map[string]any{"ok": false}},
+		},
+	}
+	faults := []config.Fault{{
+		Name: "pg_slow", At: "peak", Target: "postgres:5432",
+		Verb: "latency", Inject: map[string]any{"latency": "300ms"},
+	}}
+	deps := []detect.Dep{{
+		Name: "postgres", Type: "postgresql", Address: "postgres:5432",
+		Clients: []string{"github.com/jackc/pgx/v5"},
+	}}
+	_, findings := evaluateThresholds(metrics, faults, detect.System{Deps: deps})
+	if len(findings) != 1 {
+		t.Fatalf("findings = %v, want exactly one", findings)
+	}
+	candidates := findings[0].Candidates
+	if len(candidates) != 1 {
+		t.Fatalf("Candidates = %v, want exactly one (the target's one detected client)", candidates)
+	}
+	c := candidates[0]
+	if !strings.Contains(c.Library, "pgx") {
+		t.Errorf("Candidate.Library = %q, want the detected pgx client", c.Library)
+	}
+	if len(c.Knobs) == 0 {
+		t.Error("Candidate.Knobs is empty, want pgx's known pool-config knobs")
+	}
+	for _, k := range c.Knobs {
+		// R-VER-4: a candidate is a library + knob names, never a file:line.
+		if strings.ContainsAny(k, ":") || strings.Contains(k, ".go") {
+			t.Errorf("Candidate.Knobs contains %q, which looks like a file:line, not a knob name (R-VER-4)", k)
+		}
+	}
+}
+
+// spec: R-VER-4
+func TestEvaluateThresholds_UnknownClientLibraryGetsNoFabricatedKnobs(t *testing.T) {
+	// The honesty rule: where this package cannot determine the actual
+	// config surface, it must leave Knobs empty rather than guess one.
+	metrics := map[string]any{
+		"http_req_duration": map[string]any{
+			"thresholds": map[string]any{"p(99)<1500": map[string]any{"ok": false}},
+		},
+	}
+	faults := []config.Fault{{
+		Name: "svc_slow", At: "peak", Target: "widget:1234",
+		Verb: "latency", Inject: map[string]any{"latency": "300ms"},
+	}}
+	deps := []detect.Dep{{
+		Name: "widget", Type: "widget", Address: "widget:1234",
+		Clients: []string{"some-org/unheard-of-client"},
+	}}
+	_, findings := evaluateThresholds(metrics, faults, detect.System{Deps: deps})
+	candidates := findings[0].Candidates
+	if len(candidates) != 1 {
+		t.Fatalf("Candidates = %v, want one entry naming the client even without known knobs", candidates)
+	}
+	if len(candidates[0].Knobs) != 0 {
+		t.Errorf("Knobs = %v, want empty for a client library this package has no known knob table for", candidates[0].Knobs)
 	}
 }
 
 // spec: R-CFG-17
 func TestEvaluatePromqlAsserts_SkipsUnrunAssertionsWithNoQuerierRatherThanPassingThem(t *testing.T) {
 	asserts := []config.AssertEntry{{"promql": "up == 1"}}
-	passed, findings := evaluatePromqlAsserts(asserts, nil, 1)
+	passed, findings := evaluatePromqlAsserts(asserts, nil, oneFault(), detect.System{})
 	if len(passed) != 0 || len(findings) != 0 {
 		t.Errorf("passed=%v findings=%v, want both empty — an unrun assertion must not look like a held one (R-VER-5)", passed, findings)
 	}
@@ -89,7 +225,7 @@ func (f fakeQuerier) Query(expr string) (bool, string, error) { return f.holds, 
 // spec: R-CFG-17
 func TestEvaluatePromqlAsserts_FailedQueryIsAFinding(t *testing.T) {
 	asserts := []config.AssertEntry{{"promql": "orders_total == payments_total"}}
-	_, findings := evaluatePromqlAsserts(asserts, fakeQuerier{holds: false, observed: "no results"}, 1)
+	_, findings := evaluatePromqlAsserts(asserts, fakeQuerier{holds: false, observed: "no results"}, oneFault(), detect.System{})
 	if len(findings) != 1 {
 		t.Fatalf("findings = %v, want one", findings)
 	}
@@ -101,7 +237,7 @@ func TestEvaluatePromqlAsserts_FailedQueryIsAFinding(t *testing.T) {
 // spec: R-CFG-17
 func TestEvaluatePromqlAsserts_QueryErrorIsAmbiguousFinding(t *testing.T) {
 	asserts := []config.AssertEntry{{"promql": "invalid{"}}
-	_, findings := evaluatePromqlAsserts(asserts, fakeQuerier{err: errors.New("bad query")}, 1)
+	_, findings := evaluatePromqlAsserts(asserts, fakeQuerier{err: errors.New("bad query")}, oneFault(), detect.System{})
 	if len(findings) != 1 || findings[0].Confidence != verdict.Ambiguous {
 		t.Fatalf("findings = %v, want one ambiguous finding for a query error", findings)
 	}

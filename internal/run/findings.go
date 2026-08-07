@@ -2,8 +2,10 @@ package run
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/jdb316/tortureu/internal/config"
+	"github.com/jdb316/tortureu/internal/detect"
 	"github.com/jdb316/tortureu/internal/verdict"
 )
 
@@ -33,13 +35,135 @@ func confidenceFor(activeFaults int) verdict.Confidence {
 	return verdict.Ambiguous
 }
 
+// clientKnobPatterns maps a substring of a detected client import path
+// (detect.Dep.Clients, e.g. "github.com/jackc/pgx/v5") to the config knobs
+// a candidate config surface (R-VER-4, D-9) should name for it. This is a
+// small, bounded, hand-curated table — the same posture R-AUD-5 takes for
+// known-library audits — not general source inspection: a client whose
+// import path matches nothing here gets no knobs, never a guessed one (see
+// buildCandidate's doc comment).
+var clientKnobPatterns = []struct {
+	substr string
+	knobs  []string
+}{
+	{"jackc/pgx", []string{"MaxConns", "MinConns", "ConnConfig.ConnectTimeout"}},
+	{"lib/pq", []string{"MaxOpenConns", "MaxIdleConns", "ConnMaxLifetime"}},
+	{"go-redis/redis", []string{"PoolSize", "DialTimeout", "ReadTimeout", "WriteTimeout"}},
+	{"redis/go-redis", []string{"PoolSize", "DialTimeout", "ReadTimeout", "WriteTimeout"}},
+	{"gomodule/redigo", []string{"MaxIdle", "MaxActive", "IdleTimeout"}},
+	{"cenkalti/backoff", []string{"MaxRetries", "InitialInterval", "MaxElapsedTime"}},
+}
+
+// manifestFor names the manifest file a detected client library was almost
+// certainly declared in, from detect.System.Lang — the closest thing this
+// package has to D-9's `source` field, since detect.Dep.Clients records
+// only the import path, not which manifest it came from.
+func manifestFor(lang string) string {
+	switch lang {
+	case "go":
+		return "go.mod"
+	case "node":
+		return "package.json"
+	case "python":
+		return "pyproject.toml"
+	default:
+		return ""
+	}
+}
+
+// depForTarget finds the detected dependency whose address matches a
+// fault's target ("host:port", the same shape config.Fault.Target and
+// detect.Dep.Address both use), or nil if none was detected — an external
+// or otherwise-undetected target simply has no candidate config surface to
+// report, which is the honest answer, not an error.
+func depForTarget(deps []detect.Dep, target string) *detect.Dep {
+	for i := range deps {
+		if deps[i].Address == target {
+			return &deps[i]
+		}
+	}
+	return nil
+}
+
+// knobsFor returns the known config knobs for a client import path, or nil
+// if this package has no curated entry for it — never a guess (the honesty
+// rule this codebase applies everywhere else: R-AUD-6, R-DC2-6, and this
+// package's own refusal to ever emit `caused` without a trace pipeline).
+func knobsFor(client string) []string {
+	for _, p := range clientKnobPatterns {
+		if strings.Contains(client, p.substr) {
+			return p.knobs
+		}
+	}
+	return nil
+}
+
+// buildCandidates turns one fault's detected dependency into the D-9
+// candidate list (R-VER-4): library + known knobs, one entry per client
+// library the target dependency was detected using. A target with no
+// matching detect.Dep (an external host, or one detection simply never
+// saw) produces no candidates — not a fabricated one.
+func buildCandidates(f config.Fault, deps []detect.Dep, lang string) []verdict.Candidate {
+	dep := depForTarget(deps, f.Target)
+	if dep == nil {
+		return nil
+	}
+	source := manifestFor(lang)
+	candidates := make([]verdict.Candidate, 0, len(dep.Clients))
+	for _, client := range dep.Clients {
+		candidates = append(candidates, verdict.Candidate{
+			Library: client,
+			Source:  source,
+			Knobs:   knobsFor(client),
+		})
+	}
+	return candidates
+}
+
+// faultWindow renders a fault's declared anchor as the two-element
+// [start, end] window VERDICT.md's Cause.window carries. end is only
+// meaningful when for: is present (R-CFG-10: absent means "until end of
+// run", which has no fixed end to name).
+func faultWindow(f config.Fault) []string {
+	if f.For == "" {
+		return []string{f.At}
+	}
+	return []string{f.At, f.At + "+" + f.For}
+}
+
+// attribute fills in a finding's Cause and Candidates from the faults
+// active during this run (R-VER-3, R-VER-4, D-9). Cause is only set when
+// there is exactly one candidate fault — the same condition confidenceFor
+// calls `correlated` — since attributing to a specific fault when >=2 were
+// active would be exactly the fabrication `ambiguous` exists to prevent.
+// Candidates, by contrast, are legitimately a list: D-4 defines `ambiguous`
+// as ">=2 candidate causes", so every active fault's target contributes its
+// own candidate config surface regardless of how many there are.
+func attribute(f *verdict.Finding, faults []config.Fault, deps []detect.Dep, lang string) {
+	if len(faults) == 1 {
+		c := faults[0]
+		f.Cause = &verdict.Cause{
+			Fault:  c.Name,
+			Target: c.Target,
+			Inject: c.Inject,
+			Window: faultWindow(c),
+		}
+	}
+	for _, fault := range faults {
+		f.Candidates = append(f.Candidates, buildCandidates(fault, deps, lang)...)
+	}
+}
+
 // evaluateThresholds reads k6's per-metric threshold results out of
 // IngestSummary's metrics map (k6's own JSON shape: metrics[name].thresholds
 // is {expr: {ok: bool}}) and turns each into a Passed or Finding entry
 // (R-VER-3, R-VER-5). Metrics with no thresholds sub-object are not
 // k6-threshold assertions (they're plain metrics, or promql/sql entries
-// internal/k6 already passes over) and are skipped here.
-func evaluateThresholds(metrics map[string]any, activeFaults int) ([]verdict.Passed, []verdict.Finding) {
+// internal/k6 already passes over) and are skipped here. faults are every
+// fault declared for this run (used for Cause/Candidates attribution, see
+// attribute); deps are internal/detect's dependency list (D-9's client
+// libraries, for Candidates).
+func evaluateThresholds(metrics map[string]any, faults []config.Fault, sys detect.System) ([]verdict.Passed, []verdict.Finding) {
 	var passed []verdict.Passed
 	var findings []verdict.Finding
 
@@ -73,14 +197,16 @@ func evaluateThresholds(metrics map[string]any, activeFaults int) ([]verdict.Pas
 				passed = append(passed, verdict.Passed{Assertion: assertion, Observed: "threshold held"})
 				continue
 			}
-			findings = append(findings, verdict.Finding{
+			finding := verdict.Finding{
 				ID:         fmt.Sprintf("f%d", len(findings)+1),
-				Confidence: confidenceFor(activeFaults),
+				Confidence: confidenceFor(len(faults)),
 				Broke: verdict.Broke{
 					Assertion: assertion,
 					Observed:  "threshold breached",
 				},
-			})
+			}
+			attribute(&finding, faults, sys.Deps, sys.Lang)
+			findings = append(findings, finding)
 		}
 	}
 	return passed, findings
@@ -90,8 +216,9 @@ func evaluateThresholds(metrics map[string]any, activeFaults int) ([]verdict.Pas
 // — the signals k6 cannot observe. A nil querier means no Prometheus
 // endpoint was configured; such entries cannot be evaluated and are skipped
 // rather than silently treated as passing (an unrun assertion must not look
-// like a held one, R-VER-5).
-func evaluatePromqlAsserts(asserts []config.AssertEntry, querier PromQuerier, activeFaults int) ([]verdict.Passed, []verdict.Finding) {
+// like a held one, R-VER-5). faults/deps feed Cause/Candidates attribution,
+// same as evaluateThresholds.
+func evaluatePromqlAsserts(asserts []config.AssertEntry, querier PromQuerier, faults []config.Fault, sys detect.System) ([]verdict.Passed, []verdict.Finding) {
 	if querier == nil {
 		return nil, nil
 	}
@@ -116,11 +243,13 @@ func evaluatePromqlAsserts(asserts []config.AssertEntry, querier PromQuerier, ac
 			passed = append(passed, verdict.Passed{Assertion: assertion, Observed: observed})
 			continue
 		}
-		findings = append(findings, verdict.Finding{
+		finding := verdict.Finding{
 			ID:         fmt.Sprintf("f%d", len(findings)+1),
-			Confidence: confidenceFor(activeFaults),
+			Confidence: confidenceFor(len(faults)),
 			Broke:      verdict.Broke{Assertion: assertion, Observed: observed},
-		})
+		}
+		attribute(&finding, faults, sys.Deps, sys.Lang)
+		findings = append(findings, finding)
 	}
 	return passed, findings
 }
