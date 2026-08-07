@@ -2,7 +2,10 @@ package fault
 
 import (
 	"errors"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 )
 
 // Manager tracks applied faults so they can all be torn down together
@@ -81,4 +84,41 @@ func (m *Manager) Teardown() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// WatchSignals arms Teardown to run when the process receives SIGINT or
+// SIGTERM (R-EXE-16) — the ordinary "developer hit Ctrl-C" and
+// "orchestrator sent docker stop" abort paths, distinct from the in-process
+// panic path TestManager_TeardownRunsOnPanicMidApply covers.
+//
+// It returns caught, which receives the signal once Teardown has finished
+// running (the caller typically selects on it and calls os.Exit with an
+// appropriate code), and stop, which disarms the handler and MUST be
+// deferred by the caller once the run completes normally so this package
+// stops intercepting the process's signals.
+//
+// SIGKILL cannot be caught — see the package doc comment. WatchSignals
+// provides no protection against it.
+func (m *Manager) WatchSignals() (caught <-chan os.Signal, stop func()) {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	out := make(chan os.Signal, 1)
+	stopped := make(chan struct{})
+	go func() {
+		select {
+		case sig := <-sigCh:
+			m.Teardown()
+			out <- sig
+		case <-stopped:
+		}
+	}()
+
+	var stopOnce sync.Once
+	return out, func() {
+		stopOnce.Do(func() {
+			signal.Stop(sigCh)
+			close(stopped)
+		})
+	}
 }

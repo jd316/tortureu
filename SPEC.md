@@ -450,6 +450,22 @@ This distinction is load-bearing. Without it R-AUD-1/2 are unanswerable — know
 which is noise, not signal. The audit's entire value (RESEARCH.md §19: no resilience linter exists)
 depends on actually reading the constructor.
 
+**R-DC2-6** — Every egress function **MUST** fail closed on a class value it does not recognise,
+independently of upstream validation. Classification, abort, and audit **MUST NOT** assume
+`config.Parse` already rejected an unknown class.
+
+A safety boundary that depends on a check somewhere else is not a boundary — it is a convention.
+The concrete failure: an unrecognised class string is neither a known class nor literally
+`"unclassified"`, so the abort check skips it and the audit's switch drops it into no bucket at
+all, producing a **clean-looking audit for a host that was never classified**. That is the exact
+"clean audit that isn't" outcome DC-2 exists to prevent, and it becomes reachable the moment
+anyone weakens the parser in a refactor. *(raised by the Task 6 review)*
+
+**R-DC2-7** — The project **MUST NOT** claim the DC-2 guarantee — in README, marketing, or CLI
+output — until the topology overlay is applied by an executable run path and proven end to end.
+Until then the parts exist but the guarantee does not, and claiming it would be the most damaging
+possible misstatement for a tool whose positioning is that it cannot reach the internet.
+
 **R-EXE-15** — Fault verbs are **owned by layers**, and a layer **MUST** pass over verbs it does not
 own rather than rejecting them. Rejection is only correct for a verb no layer owns.
 

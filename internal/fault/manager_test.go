@@ -2,7 +2,9 @@ package fault
 
 import (
 	"errors"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/jdb316/tortureu/internal/config"
 )
@@ -139,5 +141,90 @@ func TestManager_TeardownContinuesPastAnUndoError(t *testing.T) {
 	}
 	if !secondRan {
 		t.Fatal("Teardown: a failing undo must not prevent the remaining undos from running")
+	}
+}
+
+// spec: R-EXE-16
+// A developer aborting a run with Ctrl-C (SIGINT) is the ordinary case, not
+// the exceptional one — R-EXE-5's "torn down on abort" has to cover it, not
+// just an in-process panic. WatchSignals MUST run Teardown when the process
+// receives SIGINT, before whatever the caller does next (typically os.Exit).
+func TestManager_WatchSignalsTearsDownOnSIGINT(t *testing.T) {
+	m := &Manager{}
+	undone := false
+	m.track(func() error { undone = true; return nil })
+
+	caught, stop := m.WatchSignals()
+	defer stop()
+
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatalf("sending SIGINT to self: %v", err)
+	}
+
+	select {
+	case sig := <-caught:
+		if sig != syscall.SIGINT {
+			t.Fatalf("caught signal = %v, want SIGINT", sig)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("WatchSignals: SIGINT was not observed within 2s")
+	}
+
+	if !undone {
+		t.Fatal("WatchSignals: Teardown was not run on SIGINT")
+	}
+}
+
+// spec: R-EXE-16
+// Same contract for SIGTERM (the signal `docker stop`/most orchestrators
+// send), covered separately from SIGINT since R-EXE-16 names both and a
+// handler for one is not evidence the other is wired.
+func TestManager_WatchSignalsTearsDownOnSIGTERM(t *testing.T) {
+	m := &Manager{}
+	undone := false
+	m.track(func() error { undone = true; return nil })
+
+	caught, stop := m.WatchSignals()
+	defer stop()
+
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatalf("sending SIGTERM to self: %v", err)
+	}
+
+	select {
+	case sig := <-caught:
+		if sig != syscall.SIGTERM {
+			t.Fatalf("caught signal = %v, want SIGTERM", sig)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("WatchSignals: SIGTERM was not observed within 2s")
+	}
+
+	if !undone {
+		t.Fatal("WatchSignals: Teardown was not run on SIGTERM")
+	}
+}
+
+// spec: R-EXE-16
+// stop() MUST disarm the handler: after it returns, this package's
+// WatchSignals goroutine must not fire Teardown again, and — just as
+// important for a test suite sending real signals to its own process — the
+// signal must fall through to Go's default disposition instead of being
+// swallowed forever. This proves stop() actually calls signal.Stop rather
+// than merely closing an internal channel.
+func TestManager_WatchSignalsStopDisarmsHandler(t *testing.T) {
+	m := &Manager{}
+	calls := 0
+	m.track(func() error { calls++; return nil })
+
+	caught, stop := m.WatchSignals()
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatalf("sending SIGINT to self: %v", err)
+	}
+	<-caught
+	stop()
+
+	if calls != 1 {
+		t.Fatalf("Teardown ran %d times after one SIGINT, want 1", calls)
 	}
 }

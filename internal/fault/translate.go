@@ -1,3 +1,14 @@
+// Package fault translates config.Fault into Toxiproxy toxics and Docker
+// actions (SPEC.md §4.4, §5), and tears every applied fault down on exit
+// (R-EXE-5, R-EXE-16).
+//
+// Teardown limit (R-EXE-16): Manager's teardown runs on an in-process
+// panic (a deferred Teardown/recover) and on SIGINT/SIGTERM (WatchSignals).
+// SIGKILL cannot be caught by any process — the OS terminates immediately,
+// so no Go code in this package or anywhere else runs, and a SIGKILL'd run
+// WILL leave faults applied. This package does not claim otherwise. It does
+// not yet make faults recoverable on next start (R-EXE-16's SHOULD); a
+// SIGKILL'd run's faults must currently be removed manually.
 package fault
 
 import (
@@ -14,6 +25,11 @@ type ActionKind string
 const (
 	KindToxic  ActionKind = "toxic"
 	KindDocker ActionKind = "docker"
+	// KindPassed marks a verb this package does not own (R-EXE-15): the
+	// fault is well-formed, but ownership belongs to another layer (the
+	// mock provider or the queue-fault broker producer). Toxic and Docker
+	// are both nil; Owner names the layer the caller should route to.
+	KindPassed ActionKind = "passed"
 )
 
 // Toxic is a Toxiproxy toxic ready to be applied to the proxy for a
@@ -37,23 +53,27 @@ type DockerAction struct {
 	Args      map[string]any
 }
 
-// Action is one translated fault.
+// Action is one translated fault. When Kind is KindPassed, Toxic and Docker
+// are both nil and Owner names the layer that owns the verb instead.
 type Action struct {
 	Fault  config.Fault
 	Kind   ActionKind
 	Toxic  *Toxic
 	Docker *DockerAction
+	Owner  string
 }
 
 // networkVerbs applies to a network target and translates to a Toxiproxy
 // toxic. serviceVerbs applies to a service/container and translates to a
-// Docker action. Table is SPEC.md §4.4 / R-CFG-14, minus the verbs this
-// package does not translate (see unsupportedVerbs).
+// Docker action. Table is SPEC.md §4.4 / R-CFG-14 plus the Toxiproxy-only
+// verbs R-EXE-15 adds (timeout, reset_peer).
 var networkVerbs = map[string]bool{
-	"latency":   true,
-	"down":      true,
-	"bandwidth": true,
-	"slicer":    true,
+	"latency":    true,
+	"down":       true,
+	"bandwidth":  true,
+	"slicer":     true,
+	"timeout":    true,
+	"reset_peer": true,
 }
 
 var serviceVerbs = map[string]bool{
@@ -89,38 +109,44 @@ var faultVerbModifiers = map[string]map[string]bool{
 	"graceful":    {},
 	"poison_pill": {"count": true},
 	"duplicate":   {},
+	"timeout":     {},
+	"reset_peer":  {},
 }
 
-// unsupportedVerbs are real R-CFG-14 verbs this package does not translate:
-// error_rate targets a mocked host (WireMock's fault mode, per
-// torture.example.yaml), and poison_pill/duplicate target a queue. Neither
-// is a Toxiproxy toxic nor a Docker action, which is the whole of this
-// package's scope per PLAN.md Task 5. See task-5-report.md for the gap.
-var unsupportedVerbs = map[string]string{
-	"error_rate":  "targets a mocked host (WireMock), not Toxiproxy or Docker",
-	"poison_pill": "targets a queue, not Toxiproxy or Docker",
-	"duplicate":   "targets a queue, not Toxiproxy or Docker",
+// otherLayerOwner is R-EXE-15's ownership table for verbs this package does
+// not translate itself: error_rate is legal only on a class: mock host and
+// is applied by the mock provider (WireMock); poison_pill/duplicate target
+// a queue and are applied by the broker producer. Translate MUST pass these
+// over rather than reject them — torture.example.yaml declares error_rate,
+// so rejecting it would make the project's own reference config unrunnable.
+var otherLayerOwner = map[string]string{
+	"error_rate":  "internal/egress",
+	"poison_pill": "internal/queuefault",
+	"duplicate":   "internal/queuefault",
 }
 
 // Translate converts one parsed fault into a Toxiproxy toxic or a Docker
-// action (PLAN.md Task 5). It re-validates the verb/modifier pairing
-// (R-CFG-14) rather than trusting the caller went through config.Parse.
+// action (PLAN.md Task 5), or passes it over (R-EXE-15) when it belongs to
+// a layer this package does not implement. It re-validates the
+// verb/modifier pairing (R-CFG-14) rather than trusting the caller went
+// through config.Parse. An error means the verb is not recognized by *any*
+// layer's table — that is the only case R-EXE-15 says a layer should reject.
 func Translate(f config.Fault) (Action, error) {
 	allowed, known := faultVerbModifiers[f.Verb]
 	if !known {
-		return Action{}, fmt.Errorf("fault %q: unknown inject verb %q", f.Name, f.Verb)
+		return Action{}, fmt.Errorf("fault %q: %q is not a recognized inject verb", f.Name, f.Verb)
 	}
 	for k := range f.Inject {
 		if k == f.Verb {
 			continue
 		}
 		if !allowed[k] {
-			return Action{}, fmt.Errorf("fault %q: modifier %q is not valid for verb %q", f.Name, k, f.Verb)
+			return Action{}, fmt.Errorf("fault %q: %q is not a valid modifier for verb %q", f.Name, k, f.Verb)
 		}
 	}
 
-	if reason, unsupported := unsupportedVerbs[f.Verb]; unsupported {
-		return Action{}, fmt.Errorf("fault %q: verb %q is not translated by internal/fault: %s", f.Name, f.Verb, reason)
+	if owner, ownedElsewhere := otherLayerOwner[f.Verb]; ownedElsewhere {
+		return Action{Fault: f, Kind: KindPassed, Owner: owner}, nil
 	}
 
 	if f.Target == "" {
@@ -133,7 +159,7 @@ func Translate(f config.Fault) (Action, error) {
 	case serviceVerbs[f.Verb]:
 		return translateDocker(f)
 	default:
-		return Action{}, fmt.Errorf("fault %q: verb %q has no translation", f.Name, f.Verb)
+		return Action{}, fmt.Errorf("fault %q: %q is not a supported inject verb", f.Name, f.Verb)
 	}
 }
 
@@ -157,6 +183,12 @@ func translateToxic(f config.Fault) (Action, error) {
 		if delay, ok := f.Inject["delay"]; ok {
 			t.Attributes["delay"] = delay
 		}
+	case "timeout":
+		t.Type = "timeout"
+		t.Attributes["timeout"] = f.Inject["timeout"]
+	case "reset_peer":
+		t.Type = "reset_peer"
+		t.Attributes["timeout"] = f.Inject["reset_peer"]
 	}
 	return Action{Fault: f, Kind: KindToxic, Toxic: t}, nil
 }
