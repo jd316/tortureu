@@ -21,6 +21,7 @@ import (
 	"sort"
 
 	"github.com/compose-spec/compose-go/v2/loader"
+	"github.com/compose-spec/compose-go/v2/types"
 	"gopkg.in/yaml.v3"
 
 	"github.com/jdb316/tortureu/internal/egress"
@@ -75,9 +76,60 @@ type overlayNetwork struct {
 // host. See ComposeTopologyApplier.Apply's doc comment for the fuller
 // picture and its limits.
 type overlayService struct {
-	Image    string   `yaml:"image,omitempty"`
-	Networks any      `yaml:"networks"`
-	Ports    []string `yaml:"ports,omitempty"`
+	Image       string            `yaml:"image,omitempty"`
+	Networks    any               `yaml:"networks"`
+	Ports       []string          `yaml:"ports,omitempty"`
+	Environment map[string]string `yaml:"environment,omitempty"`
+	Command     []string          `yaml:"command,omitempty"`
+	// Profiles disables a service under R-EXE-20's rename trick: a service
+	// with a profile that is never activated is not started by `up`, which
+	// is how the original internal dependency's own claim on its DNS name
+	// is removed without needing compose to support an actual "rename".
+	Profiles []string `yaml:"profiles,omitempty"`
+}
+
+// tortureuDisabledProfile is never passed to `docker compose up`, so any
+// service placed under it is simply never started (see overlayService's
+// Profiles doc comment).
+const tortureuDisabledProfile = "tortureu-disabled"
+
+// stringEnv converts compose-go's MappingWithEquals (map[string]*string,
+// nil meaning "inherit from the shell" — meaningless once cloned into a
+// container definition with no such shell) into the plain map this
+// package's overlayService carries, dropping any nil-valued entries.
+func stringEnv(env types.MappingWithEquals) map[string]string {
+	if len(env) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(env))
+	for k, v := range env {
+		if v != nil {
+			out[k] = *v
+		}
+	}
+	return out
+}
+
+// backendServiceName is the name R-EXE-20's rename trick gives the real
+// dependency once the proxy has taken over its original DNS name: SPEC.md's
+// own worked example is exactly this shape (`db` -> `db-tortureu-backend`).
+func backendServiceName(hostname string) string {
+	return hostname + "-tortureu-backend"
+}
+
+// networkFaultVerbs mirrors R-EXE-15's Toxiproxy row: the verbs that need a
+// network-level intercept (a Toxiproxy proxy) rather than a container-scoped
+// Docker action. Duplicated from internal/fault (whose table is unexported)
+// for the same reason internal/fault itself duplicates internal/config's —
+// this package must decide, independently, which faults R-EXE-20's
+// interception requirement applies to.
+var networkFaultVerbs = map[string]bool{
+	"latency":    true,
+	"down":       true,
+	"bandwidth":  true,
+	"slicer":     true,
+	"timeout":    true,
+	"reset_peer": true,
 }
 
 type overlay struct {
@@ -134,16 +186,36 @@ func (a ComposeTopologyApplier) up() []string {
 // overlay <Up...>` (R-DC2-3, R-EXE-3: this must complete before the load
 // generator's first request).
 //
-// externalHosts are the "host:port" egress keys classified mock or real
-// (class: block gets no alias at all — its hostname simply fails to
-// resolve, which is a reasonable reading of "dropped silently"; class:
-// internal hosts are existing compose services with their own container DNS
-// identity already, aliasing them to the proxy too would create an
-// ambiguous double claim on the same name, so they are out of scope here —
-// escalated in the Task 7 report). Each one becomes a network alias on the
-// proxy service (see overlayService's doc comment), so the SUT resolves
-// that hostname to the proxy instead of nothing.
-func (a ComposeTopologyApplier) Apply(composePath string, top egress.Topology, externalHosts []string) error {
+// externalHosts are the "host:port" egress keys classified mock or real.
+// Each becomes a network alias on the proxy service (see overlayService's
+// doc comment), so the SUT resolves that hostname to the proxy instead of
+// nothing. class: block gets no alias at all — its hostname simply fails to
+// resolve, a reasonable reading of "dropped silently".
+//
+// internalHosts are the "host:port" fault targets classified internal with
+// a network-verb fault attached (R-EXE-20): existing compose dependencies
+// (postgres, redis, ...) that already have their own container DNS
+// identity, which the external-host aliasing above cannot reuse — aliasing
+// the proxy to "redis" while the real redis container is *also* attached
+// under that same name is an ambiguous double claim, and Docker's embedded
+// DNS resolution between two identically-aliased containers is not
+// something this package can rely on picking correctly (or at all).
+//
+// R-EXE-20's workable shape instead: for each internal host, the real
+// dependency's service is moved aside — disabled under a profile that is
+// never activated so it stops claiming that name at all — and a clone of
+// its definition (image, environment, command) is declared under
+// backendServiceName, attached only to the SUT network. The proxy then
+// takes the *original* name as its own alias. The SUT's own configuration
+// is untouched: it still dials "redis"; that name now resolves to the
+// proxy, which forwards to the real container under its new name.
+//
+// If an internal host does not match any service compose-go actually
+// parsed from composePath, Apply returns an error rather than silently
+// proceeding — R-EXE-20's "run MUST fail loudly" applied at the one point
+// in Run's flow (before load ever starts) that can still stop the run
+// before a fault silently never reaches its target.
+func (a ComposeTopologyApplier) Apply(composePath string, top egress.Topology, externalHosts, internalHosts []string) error {
 	absPath, err := filepath.Abs(composePath)
 	if err != nil {
 		return err
@@ -185,9 +257,24 @@ func (a ComposeTopologyApplier) Apply(composePath string, top egress.Topology, e
 		return fmt.Errorf("run: topology: BuildTopology produced no proxy service")
 	}
 
+	// R-EXE-20: every internal host must resolve to a service compose-go
+	// actually parsed, or Apply fails loudly here — before load starts —
+	// rather than letting a fault silently target nothing.
+	internalHostnames := make(map[string]bool, len(internalHosts))
+	for _, h := range internalHosts {
+		hostname := hostnameOf(h)
+		if _, ok := project.Services[hostname]; !ok {
+			return fmt.Errorf("run: topology: internal-class fault target %q: no matching compose service %q found — cannot intercept it (R-EXE-20)", h, hostname)
+		}
+		internalHostnames[hostname] = true
+	}
+
 	var aliases []string
 	for _, h := range externalHosts {
 		aliases = append(aliases, hostnameOf(h))
+	}
+	for hostname := range internalHostnames {
+		aliases = append(aliases, hostname)
 	}
 	sort.Strings(aliases)
 
@@ -223,7 +310,24 @@ func (a ComposeTopologyApplier) Apply(composePath string, top egress.Topology, e
 		if name == proxyName {
 			continue
 		}
+		if internalHostnames[name] {
+			// Disable the original: it must stop claiming this DNS name so
+			// the proxy's alias (added above) is the only thing answering
+			// for it (R-EXE-20). Its definition lives on under
+			// backendServiceName instead, below.
+			ov.Services[name] = overlayService{Networks: []string{sutNetwork}, Profiles: []string{tortureuDisabledProfile}}
+			continue
+		}
 		ov.Services[name] = overlayService{Networks: []string{sutNetwork}}
+	}
+	for hostname := range internalHostnames {
+		svc := project.Services[hostname]
+		ov.Services[backendServiceName(hostname)] = overlayService{
+			Image:       svc.Image,
+			Command:     []string(svc.Command),
+			Environment: stringEnv(svc.Environment),
+			Networks:    []string{sutNetwork},
+		}
 	}
 
 	out, err := yaml.Marshal(ov)

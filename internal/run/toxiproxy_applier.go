@@ -93,24 +93,35 @@ func (a *ToxiproxyApplier) do(method, path string, body any) ([]byte, int, error
 	return respBody, resp.StatusCode, err
 }
 
-// ensureProxy creates a Toxiproxy proxy named after target if one does not
+// ensureProxy creates a Toxiproxy proxy named after name if one does not
 // already exist, so ApplyToxic has somewhere to attach a toxic. It binds the
-// SAME port target declares, not an ephemeral one: this proxy is reached by
-// a DNS alias pointed at the proxy container on the SUT-side network (see
+// SAME port name declares, not an ephemeral one: this proxy is reached by a
+// DNS alias pointed at the proxy container on the SUT-side network (see
 // topology.go's overlayService doc comment), and the SUT still dials the
 // port it always dialed — an ephemeral listen port would mean nothing ever
 // actually connects to it (R-DC2-3's enforcement finding: a proxy that
 // exists in Toxiproxy's control plane but isn't on the SUT's actual
 // connection path is decorative).
-func (a *ToxiproxyApplier) ensureProxy(target string) error {
+//
+// upstream is only used if this call actually creates the proxy (a 409 from
+// an existing one is not an error, and its upstream is left as whatever it
+// was already configured with — see ApplyToxic's call site, which always
+// passes name as its own best-effort upstream guess since by that point
+// EnsureProxies should already have created the real one, for both the
+// external-host case (upstream == name, resolved via resolveUpstream) and
+// the R-EXE-20 internal-dependency case (upstream is the renamed backend's
+// host:port, which resolveUpstream correctly leaves alone: this process
+// cannot resolve a Docker-internal-only compose service name, and Toxiproxy
+// — itself on that network — resolves it directly instead).
+func (a *ToxiproxyApplier) ensureProxy(name, upstream string) error {
 	listen := "0.0.0.0:0"
-	if _, port, err := net.SplitHostPort(target); err == nil && port != "" {
+	if _, port, err := net.SplitHostPort(name); err == nil && port != "" {
 		listen = "0.0.0.0:" + port
 	}
 	body, status, err := a.do(http.MethodPost, "/proxies", map[string]any{
-		"name":     target,
+		"name":     name,
 		"listen":   listen,
-		"upstream": resolveUpstream(target),
+		"upstream": resolveUpstream(upstream),
 	})
 	if err != nil {
 		return err
@@ -118,7 +129,7 @@ func (a *ToxiproxyApplier) ensureProxy(target string) error {
 	if status == http.StatusOK || status == http.StatusCreated || status == http.StatusConflict {
 		return nil
 	}
-	return fmt.Errorf("run: toxiproxy: create proxy %s: status %d: %s", target, status, body)
+	return fmt.Errorf("run: toxiproxy: create proxy %s: status %d: %s", name, status, body)
 }
 
 // resolveUpstream returns the address Toxiproxy should actually forward to.
@@ -150,17 +161,23 @@ func resolveUpstream(target string) string {
 	return net.JoinHostPort(addrs[0], port)
 }
 
-// EnsureProxies creates a Toxiproxy proxy for every host in targets
-// (host:port strings) up front, before load starts — not lazily, only when
-// a fault happens to target one. A classified host with no fault at all
-// must still never be reachable directly (R-DC2-2/R-DC2-3): if nothing
-// creates its proxy until a fault fires, the window before that fault (or
-// the entire run, for a host no fault ever targets) has no interception at
-// all despite the DNS alias pointing there.
-func (a *ToxiproxyApplier) EnsureProxies(targets []string) error {
-	for _, target := range targets {
-		if err := a.ensureProxy(target); err != nil {
-			return fmt.Errorf("run: toxiproxy: EnsureProxies(%s): %w", target, err)
+// EnsureProxies creates a Toxiproxy proxy for every entry in targets up
+// front, before load starts — not lazily, only when a fault happens to
+// target one. A classified host with no fault at all must still never be
+// reachable directly (R-DC2-2/R-DC2-3): if nothing creates its proxy until
+// a fault fires, the window before that fault (or the entire run, for a
+// host no fault ever targets) has no interception at all despite the DNS
+// alias pointing there.
+//
+// Each key is the identifier the SUT actually dials — either a classified
+// external "host:port" (R-DC2-3) or an internal dependency's original
+// "host:port" (R-EXE-20) — and each value is where the proxy should
+// actually forward to: the same string for an external host, or the
+// R-EXE-20 renamed backend's "host:port" for an internal one.
+func (a *ToxiproxyApplier) EnsureProxies(targets map[string]string) error {
+	for name, upstream := range targets {
+		if err := a.ensureProxy(name, upstream); err != nil {
+			return fmt.Errorf("run: toxiproxy: EnsureProxies(%s): %w", name, err)
 		}
 	}
 	return nil
@@ -177,7 +194,7 @@ func (a *ToxiproxyApplier) ApplyToxic(name string, t fault.Toxic) (func() error,
 		// silently proxy the wrong thing — the review finding this closes.
 		return nil, fmt.Errorf("run: toxiproxy: fault %q has no registered target (RegisterTarget was never called for it)", name)
 	}
-	if err := a.ensureProxy(target); err != nil {
+	if err := a.ensureProxy(target, target); err != nil {
 		return nil, err
 	}
 

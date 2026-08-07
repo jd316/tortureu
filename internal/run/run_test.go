@@ -30,7 +30,7 @@ type fakeTopology struct {
 	err    error
 }
 
-func (f *fakeTopology) Apply(composePath string, top egress.Topology, externalHosts []string) error {
+func (f *fakeTopology) Apply(composePath string, top egress.Topology, externalHosts, internalHosts []string) error {
 	f.called = true
 	return f.err
 }
@@ -97,6 +97,42 @@ func minimalConfig() *config.Config {
 		},
 		Assert: []config.AssertEntry{{"http_req_duration": []string{"p(95)<500"}}},
 		Reset:  config.Reset{Command: "true"},
+	}
+}
+
+// spec: R-EXE-20
+func TestRun_FailsLoudlyWhenInternalFaultTargetCannotBeIntercepted(t *testing.T) {
+	// A fault targeting a class: internal dependency with a network verb
+	// (pg_slow/redis_dies-shaped — R-EXE-20's primary case) requires
+	// Topology.Apply to perform the rename+alias interception. If Apply
+	// can't do that (ComposeTopologyApplier.Apply returns an error when the
+	// target names no real compose service — see topology_test.go's
+	// TestComposeTopologyApplier_FailsLoudlyWhenInternalHostIsNotAKnownService),
+	// Run must fail the whole run rather than proceed into a load where the
+	// fault silently never reaches its target.
+	cfg := minimalConfig()
+	cfg.Egress.Hosts["postgres:5432"] = config.EgressHost{Class: "internal"}
+	cfg.Faults = []config.Fault{{
+		Name: "pg_slow", At: "t=0s", Target: "postgres:5432",
+		Verb: "latency", Inject: map[string]any{"latency": "300ms"},
+	}}
+	sys := detect.System{EgressClass: map[string]string{"postgres:5432": "internal"}}
+
+	topo := &fakeTopology{err: errors.New("postgres:5432: no matching compose service (R-EXE-20)")}
+	load := &fakeLoadRunner{handle: newFakeLoadHandle()}
+
+	v := Run(cfg, sys, Deps{
+		Reset:    &fakeResetter{},
+		Topology: topo,
+		Load:     load,
+		Applier:  &fakeApplier{},
+	}, Options{})
+
+	if v.Status != verdict.StatusError {
+		t.Fatalf("Status = %q, want error", v.Status)
+	}
+	if load.called {
+		t.Error("Load.Start was called despite Topology.Apply failing — R-EXE-20 requires failing before load starts, not after a fault silently never fires")
 	}
 }
 
@@ -193,7 +229,7 @@ func TestRun_AppliesTopologyBeforeStartingLoad(t *testing.T) {
 
 type orderRecordingTopology struct{ order *[]string }
 
-func (o *orderRecordingTopology) Apply(composePath string, top egress.Topology, externalHosts []string) error {
+func (o *orderRecordingTopology) Apply(composePath string, top egress.Topology, externalHosts, internalHosts []string) error {
 	*o.order = append(*o.order, "topology")
 	return nil
 }

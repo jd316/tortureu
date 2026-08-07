@@ -30,8 +30,8 @@ func (c CombinedApplier) RegisterTarget(faultName, target string) {
 // EnsureProxies forwards to c.Toxiproxy if it supports eager proxy creation
 // (ToxiproxyApplier does; see its EnsureProxies doc comment on why Run calls
 // this before load starts, not only lazily per fault).
-func (c CombinedApplier) EnsureProxies(targets []string) error {
-	if p, ok := c.Toxiproxy.(interface{ EnsureProxies([]string) error }); ok {
+func (c CombinedApplier) EnsureProxies(targets map[string]string) error {
+	if p, ok := c.Toxiproxy.(interface{ EnsureProxies(map[string]string) error }); ok {
 		return p.EnsureProxies(targets)
 	}
 	return nil

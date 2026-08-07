@@ -20,6 +20,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -90,10 +91,12 @@ type LoadRunner interface {
 // compose stack so enforcement is structural (Docker's network stack), not
 // a policy check TortureU could get wrong. Apply MUST return before the
 // first request is generated (R-EXE-3). externalHosts are the classified
-// mock/real "host:port" egress keys that need a DNS path to the proxy (see
-// ComposeTopologyApplier.Apply's doc comment).
+// mock/real "host:port" egress keys that need a DNS path to the proxy;
+// internalHosts are class: internal fault targets needing the R-EXE-20
+// rename-and-alias treatment. Both are documented on
+// ComposeTopologyApplier.Apply.
 type TopologyApplier interface {
-	Apply(composePath string, top egress.Topology, externalHosts []string) error
+	Apply(composePath string, top egress.Topology, externalHosts, internalHosts []string) error
 }
 
 // PromQuerier evaluates one promql: expression over the run window
@@ -283,6 +286,9 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 	// real) need a proxy reachable *before* any fault ever targets them —
 	// a host with no fault at all must still never be reachable directly
 	// (R-DC2-2's guarantee holds for the whole run, not just fault windows).
+	// internalHosts (R-EXE-20) are class: internal fault targets with a
+	// network-verb fault attached: pg_slow/redis_dies-shaped faults, the
+	// product's primary case, not an edge case (SPEC.md's own words).
 	top := egress.BuildTopology(sutNetworkName, egressNetworkName, proxyServiceName)
 	var externalHosts []string
 	for host, class := range classes {
@@ -290,11 +296,21 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 			externalHosts = append(externalHosts, host)
 		}
 	}
-	if err := deps.Topology.Apply(cfg.Target.Compose, top, externalHosts); err != nil {
+	internalHosts := internalNetworkFaultTargets(cfg.Faults, classes)
+	if err := deps.Topology.Apply(cfg.Target.Compose, top, externalHosts, internalHosts); err != nil {
 		return finish(verdict.StatusError)
 	}
-	if preparer, ok := deps.Applier.(interface{ EnsureProxies([]string) error }); ok {
-		if err := preparer.EnsureProxies(externalHosts); err != nil {
+	if preparer, ok := deps.Applier.(interface{ EnsureProxies(map[string]string) error }); ok {
+		targets := map[string]string{}
+		for _, h := range externalHosts {
+			targets[h] = h
+		}
+		for _, h := range internalHosts {
+			if _, port, err := net.SplitHostPort(h); err == nil {
+				targets[h] = backendServiceName(hostnameOf(h)) + ":" + port
+			}
+		}
+		if err := preparer.EnsureProxies(targets); err != nil {
 			return finish(verdict.StatusError)
 		}
 	}
@@ -368,6 +384,26 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 		status = verdict.StatusFail
 	}
 	return finish(status)
+}
+
+// internalNetworkFaultTargets returns the deduplicated "host:port" targets
+// of every fault whose target is classified internal and whose verb needs
+// network-level interception (R-EXE-20) — never faults targeting a
+// container-scoped verb (cpu, pause, ...), which reach their target via
+// DockerApplier directly and need no proxy at all.
+func internalNetworkFaultTargets(faults []config.Fault, classes map[string]egress.Class) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, f := range faults {
+		if classes[f.Target] != egress.ClassInternal || !networkFaultVerbs[f.Verb] {
+			continue
+		}
+		if !seen[f.Target] {
+			seen[f.Target] = true
+			out = append(out, f.Target)
+		}
+	}
+	return out
 }
 
 func asStringSlice(v any) []string {
