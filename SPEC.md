@@ -522,6 +522,23 @@ delivered or consumed. Unlike a network toxic, a published message is durable �
 NOT** imply reversibility it cannot deliver, in the same posture as **R-EXE-16**'s SIGKILL caveat.
 *(Task 5b escalation)*
 
+**R-EXE-20** — Faults targeting a `class: internal` dependency **MUST** be intercepted. Internal
+dependencies are the *primary* fault target, not an edge case: `torture.example.yaml`'s flagship
+faults (`pg_slow`, `redis_dies`) both target them, and the capability the whole product exists to
+provide — "5k rps while Postgres gains 300ms" — is exactly this.
+
+Interception **MUST NOT** rely on aliasing the proxy to the dependency's own service name, which
+collides with that service's DNS identity. The workable shape is to move the real dependency aside
+and give the proxy the name the SUT already resolves: rename the backend service (or its alias) to
+e.g. `db-tortureu-backend`, give the Toxiproxy container the network alias `db`, and have the proxy
+forward to the renamed backend. The SUT's configuration is untouched — it still connects to `db` —
+which matters because requiring users to edit their app config to be testable defeats the premise.
+
+Until this holds, `run` **MUST** fail loudly for a fault targeting an internal dependency rather
+than executing a run in which the fault silently never reaches the traffic (**R-EXE-19**'s rule
+applied to interception rather than routing). *(escalated by Task 7 after DC-2 external enforcement
+was proven)*
+
 **R-EXE-19** — A verb passed over under **R-EXE-15** **MUST** be routed to its owning layer. Silently
 skipping it is forbidden, and if no owning layer is wired the run **MUST** fail rather than proceed.
 
