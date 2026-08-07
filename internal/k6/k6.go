@@ -87,6 +87,11 @@ func Compile(cfg *config.Config) (string, error) {
 		return "", err
 	}
 
+	thresholds, err := thresholdsJSON(cfg.Assert)
+	if err != nil {
+		return "", err
+	}
+
 	maxVUs := int(maxTarget*5) + 10
 	preAllocated := int(maxTarget) + 5
 
@@ -122,7 +127,9 @@ func Compile(cfg *config.Config) (string, error) {
 		fmt.Fprintf(&b, "      tags: { phase: %q },\n", s.Phase)
 		b.WriteString("    },\n")
 	}
-	b.WriteString("  },\n};\n\n")
+	b.WriteString("  },\n")
+	fmt.Fprintf(&b, "  thresholds: %s,\n", thresholds)
+	b.WriteString("};\n\n")
 
 	fmt.Fprintf(&b, "export function markPhase() {\n  console.log(%q + ' ' + exec.scenario.name.replace('phase_', '') + ' ' + Date.now());\n}\n\n", PhaseMarkerPrefix)
 
@@ -192,6 +199,32 @@ func scenariosJSON(scenarios []config.Scenario, baseURL string) (string, error) 
 	b, err := json.Marshal(out)
 	if err != nil {
 		return "", fmt.Errorf("k6: marshal scenarios: %w", err)
+	}
+	return string(b), nil
+}
+
+// thresholdsJSON renders the k6-threshold-shaped entries of assert: into a
+// k6 options.thresholds object, verbatim (R-CFG-16, D-2: k6 threshold syntax
+// is used as-is, with no TortureU-side translation layer).
+//
+// promql: and sql: entries are not k6-observable and belong to Task 7's
+// Prometheus/SQL evaluation instead; they are legal config here and are
+// passed over silently, never erroring and never appearing in the script.
+// If assert: contains only such entries, thresholds is rendered as {} so
+// the script stays valid.
+func thresholdsJSON(assert []config.AssertEntry) (string, error) {
+	thresholds := map[string]any{}
+	for _, entry := range assert {
+		for metric, exprs := range entry {
+			if metric == "promql" || metric == "sql" {
+				continue
+			}
+			thresholds[metric] = exprs
+		}
+	}
+	b, err := json.Marshal(thresholds)
+	if err != nil {
+		return "", fmt.Errorf("k6: marshal thresholds: %w", err)
 	}
 	return string(b), nil
 }

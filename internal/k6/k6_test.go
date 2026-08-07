@@ -205,6 +205,69 @@ func TestCompile_NeverImportsRemoteJavaScript(t *testing.T) {
 	}
 }
 
+// spec: R-CFG-16
+// Assertions MUST use k6 threshold expression syntax verbatim for
+// k6-visible metrics; TortureU MUST NOT define its own metric DSL. Compile
+// MUST carry each k6-shaped assert: entry into the generated script's
+// options.thresholds, unmodified.
+func TestCompile_EmitsK6ThresholdsVerbatim(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Assert = []config.AssertEntry{
+		{"http_req_duration": []any{"p(95)<500", "p(99)<1500"}},
+		{"http_req_failed": []any{"rate<0.01"}},
+	}
+
+	script, err := Compile(cfg)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	start := strings.Index(script, "thresholds: ")
+	if start == -1 {
+		t.Fatalf("script has no thresholds: field:\n%s", script)
+	}
+	rest := script[start+len("thresholds: "):]
+	end := strings.Index(rest, ",\n")
+	if end == -1 {
+		t.Fatalf("could not find end of thresholds literal")
+	}
+	var got map[string][]string
+	if err := json.Unmarshal([]byte(rest[:end]), &got); err != nil {
+		t.Fatalf("thresholds literal is not valid JSON: %v\n%s", err, rest[:end])
+	}
+
+	if strings.Join(got["http_req_duration"], ",") != "p(95)<500,p(99)<1500" {
+		t.Errorf("http_req_duration thresholds not carried verbatim: %+v", got["http_req_duration"])
+	}
+	if strings.Join(got["http_req_failed"], ",") != "rate<0.01" {
+		t.Errorf("http_req_failed thresholds not carried verbatim: %+v", got["http_req_failed"])
+	}
+}
+
+// spec: R-CFG-17
+// A promql: entry MUST be accepted for signals k6 cannot observe. It is not
+// k6's to evaluate (that is Task 7's job against Prometheus), so Compile
+// MUST pass it over without error and without it appearing in the script's
+// thresholds. A promql:-only assert: block MUST still produce a valid
+// (empty) thresholds object, not a malformed script.
+func TestCompile_PassesOverPromqlAssertsWithoutError(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Assert = []config.AssertEntry{
+		{"promql": "sum(rate(app_retries_total[30s])) < 100"},
+	}
+
+	script, err := Compile(cfg)
+	if err != nil {
+		t.Fatalf("Compile with only promql assert: want no error, got %v", err)
+	}
+	if strings.Contains(script, "promql") {
+		t.Errorf("script leaks the promql: key into generated JS:\n%s", script)
+	}
+	if !strings.Contains(script, "thresholds: {}") {
+		t.Errorf("promql-only assert: MUST still yield a valid empty thresholds object:\n%s", script)
+	}
+}
+
 // spec: R-LIC-1
 // TortureU MUST invoke k6 as a separate, unmodified process. It MUST NOT
 // import k6 Go packages, link against k6, or build an xk6 extension into its
