@@ -25,7 +25,10 @@ func (e *UnclassifiedError) Error() string {
 func CheckUnclassified(classes map[string]Class) error {
 	var hosts []string
 	for host, class := range classes {
-		if class == ClassUnclassified {
+		// R-DC2-6: an unrecognised class fails closed as unclassified,
+		// independently of whether Classify or config.Parse already caught
+		// it — this function does not trust either.
+		if class == ClassUnclassified || !isKnownClass(class) {
 			hosts = append(hosts, host)
 		}
 	}

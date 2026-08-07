@@ -27,7 +27,13 @@ func Classify(detected map[string]string, cfg config.Egress) map[string]Class {
 	classes := make(map[string]Class, len(detected))
 	for host, dclass := range detected {
 		if eh, ok := cfg.Hosts[host]; ok {
-			classes[host] = Class(eh.Class)
+			// R-DC2-6: fail closed rather than trust config.Parse already
+			// rejected an unrecognised class string.
+			class := Class(eh.Class)
+			if !isKnownClass(class) {
+				class = ClassUnclassified
+			}
+			classes[host] = class
 			continue
 		}
 		if dclass == string(ClassInternal) {

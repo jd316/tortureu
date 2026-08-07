@@ -19,6 +19,14 @@ func Audit(classes map[string]Class) verdict.EgressAudit {
 			a.Real = append(a.Real, host)
 		case ClassUnclassified:
 			a.Unclassified = append(a.Unclassified, host)
+		case ClassInternal:
+			// intentionally excluded, see doc comment above.
+		default:
+			// R-DC2-6: a class this package does not recognise MUST NOT
+			// fall through every case and land in no bucket at all — that
+			// is exactly the "clean audit that isn't" DC-2 exists to
+			// prevent. Fail closed into Unclassified.
+			a.Unclassified = append(a.Unclassified, host)
 		}
 	}
 	return a
