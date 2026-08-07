@@ -169,5 +169,26 @@ gomod = open('go.mod').read()
 ok('go.k6.io' not in gomod and 'k6' not in gomod.split('require')[-1].replace('tortureu', ''),
    "R-LIC-1: go.mod declares no k6 dependency")
 
+# ── Every internal package must be imported by something. "Built but unwired" has now
+# happened three times in this project: internal/egress had no caller; ValidateErrorRate was
+# written and never invoked (R-EXE-19); internal/applier was built against real Docker and
+# referenced by nothing. Each time the tests passed and the capability did not exist.
+pkgs, imports = {}, set()
+for root, _dirs, files in os.walk('.'):
+    if any(x in root for x in ('/.git', '/.superpowers', '/.private')):
+        continue
+    for f in files:
+        if not f.endswith('.go'):
+            continue
+        p = os.path.join(root, f)
+        rel = os.path.relpath(root, '.')
+        if rel.startswith('internal'):
+            pkgs.setdefault(rel.replace(os.sep, '/'), p)
+        for m in re.finditer(r'"github\.com/jdb316/tortureu/(internal/[\w/]+)"', open(p).read()):
+            if not root.replace(os.sep, '/').endswith(m.group(1)):
+                imports.add(m.group(1))
+orphans = sorted(set(pkgs) - imports)
+ok(not orphans, "every internal package has a caller" + (f" — UNWIRED: {orphans}" if orphans else ""))
+
 print(f"\n{len(fails)} failure(s)" if fails else "\nall checks passed")
 sys.exit(1 if fails else 0)
