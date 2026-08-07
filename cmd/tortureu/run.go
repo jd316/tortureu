@@ -37,8 +37,18 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	path := fs.String("config", "torture.yaml", "path to torture.yaml")
 	noReset := fs.Bool("no-reset", false, "skip the reset step (R-CFG-20)")
 	asJSON := fs.Bool("json", false, "print the verdict as JSON instead of the human rendering")
-	toxiproxyURL := fs.String("toxiproxy-url", "http://localhost:8474", "Toxiproxy control-plane address")
+	// Every endpoint below defaults to "" and is left for NewRealDepsFull to
+	// resolve: toxiproxyURL becomes NewRealDepsFull's own
+	// "http://localhost:<ProxyControlPort>" default; mockURL and brokerURL
+	// have no sensible default (a user's WireMock or broker is not
+	// necessarily at any address we'd guess), so "" leaves the
+	// corresponding Deps field nil and a run that then declares
+	// error_rate/poison_pill/duplicate fails loudly (R-EXE-19) instead of
+	// connecting to an invented address. None of these are hardcoded here.
+	toxiproxyURL := fs.String("toxiproxy-url", "", "Toxiproxy control-plane address; defaults to the standard local overlay port")
 	promURL := fs.String("prom-url", "", "Prometheus base URL; promql: asserts are skipped when empty")
+	mockURL := fs.String("mock-url", "", "WireMock base URL, for error_rate faults against a class: mock host; empty fails loudly if declared (R-EXE-19)")
+	brokerURL := fs.String("broker-url", "", "message broker base URL, for poison_pill/duplicate faults; empty fails loudly if declared (R-EXE-19)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -60,7 +70,19 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	deps := tortureurun.NewRealDeps(*toxiproxyURL, *promURL)
+	deps := buildRealDeps(*toxiproxyURL, *promURL, *mockURL, *brokerURL)
 	v := tortureurun.Run(cfg, *sys, deps, tortureurun.Options{NoReset: *noReset})
 	return emitVerdict(v, *asJSON, stdout)
+}
+
+// buildRealDeps is the one call site that wires the four `run` endpoint
+// flags into internal/run's real, live-infra Deps. It exists as its own
+// function — rather than inlined at runRun's call site — so a test can
+// prove the flags actually reach NewRealDepsFull (R-EXE-19) instead of the
+// wiring being asserted only by reading the source: passing -mock-url or
+// -broker-url must be observable as Deps.MockApplier / Deps.QueueApplier
+// going from nil to non-nil, the same way internal/run's own tests observe
+// NewRealDepsFull.
+func buildRealDeps(toxiproxyURL, promURL, mockURL, brokerURL string) tortureurun.Deps {
+	return tortureurun.NewRealDepsFull(toxiproxyURL, promURL, mockURL, brokerURL)
 }
