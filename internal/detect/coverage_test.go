@@ -83,11 +83,11 @@ require github.com/aws/aws-sdk-go-v2/service/s3 v1.34.0
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
 	}
-	if !sys.Coverage.AWS {
-		t.Errorf("Coverage.AWS = false, want true (aws-sdk-go-v2 in go.mod)")
+	if sys.Coverage.AWS != detect.FactTrue {
+		t.Errorf("Coverage.AWS = %v, want true (aws-sdk-go-v2 in go.mod)", sys.Coverage.AWS)
 	}
-	if sys.Coverage.Azure {
-		t.Errorf("Coverage.Azure = true, want false (no azure SDK present)")
+	if sys.Coverage.Azure != detect.FactFalse {
+		t.Errorf("Coverage.Azure = %v, want false (no azure SDK present, but go.mod was checked)", sys.Coverage.Azure)
 	}
 }
 
@@ -107,11 +107,11 @@ require github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.3.0
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
 	}
-	if !sys.Coverage.Azure {
-		t.Errorf("Coverage.Azure = false, want true (azure-sdk-for-go in go.mod)")
+	if sys.Coverage.Azure != detect.FactTrue {
+		t.Errorf("Coverage.Azure = %v, want true (azure-sdk-for-go in go.mod)", sys.Coverage.Azure)
 	}
-	if sys.Coverage.AWS {
-		t.Errorf("Coverage.AWS = true, want false (no aws SDK present)")
+	if sys.Coverage.AWS != detect.FactFalse {
+		t.Errorf("Coverage.AWS = %v, want false (no aws SDK present, but go.mod was checked)", sys.Coverage.AWS)
 	}
 }
 
@@ -127,8 +127,8 @@ func TestLacksOtelFactTrueWhenNoOtelClientOrCollectorPresent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
 	}
-	if !sys.Coverage.LacksOtel {
-		t.Errorf("Coverage.LacksOtel = false, want true (no otel client or collector anywhere)")
+	if sys.Coverage.LacksOtel != detect.FactTrue {
+		t.Errorf("Coverage.LacksOtel = %v, want true (no otel client or collector anywhere)", sys.Coverage.LacksOtel)
 	}
 }
 
@@ -148,8 +148,8 @@ require go.opentelemetry.io/otel v1.24.0
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
 	}
-	if sys.Coverage.LacksOtel {
-		t.Errorf("Coverage.LacksOtel = true, want false (go.opentelemetry.io/otel is in go.mod)")
+	if sys.Coverage.LacksOtel != detect.FactFalse {
+		t.Errorf("Coverage.LacksOtel = %v, want false (go.opentelemetry.io/otel is in go.mod)", sys.Coverage.LacksOtel)
 	}
 }
 
@@ -170,8 +170,8 @@ services:
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
 	}
-	if sys.Coverage.LacksOtel {
-		t.Errorf("Coverage.LacksOtel = true, want false (otel collector present in compose)")
+	if sys.Coverage.LacksOtel != detect.FactFalse {
+		t.Errorf("Coverage.LacksOtel = %v, want false (otel collector present in compose)", sys.Coverage.LacksOtel)
 	}
 }
 
@@ -193,10 +193,62 @@ func TestCoverageFactsAllFalseForPlainRepoWithNoIndicators(t *testing.T) {
 	if sys.Coverage.K8s {
 		t.Errorf("Coverage.K8s = true, want false")
 	}
-	if sys.Coverage.AWS {
-		t.Errorf("Coverage.AWS = true, want false")
+	if sys.Coverage.AWS != detect.FactFalse {
+		t.Errorf("Coverage.AWS = %v, want false (no manifest at all — genuinely nothing to find)", sys.Coverage.AWS)
 	}
-	if sys.Coverage.Azure {
-		t.Errorf("Coverage.Azure = true, want false")
+	if sys.Coverage.Azure != detect.FactFalse {
+		t.Errorf("Coverage.Azure = %v, want false (no manifest at all — genuinely nothing to find)", sys.Coverage.Azure)
+	}
+}
+
+// spec: R-COV-6
+// A predicate the system genuinely cannot evaluate MUST be reported as
+// unevaluable, never silently treated as false. When the only manifest
+// present is one R-DET-14 doesn't parse (Gemfile, pom.xml), AWS/Azure/
+// lacks:otel are undetermined, not verified-false — a false default on
+// lacks:otel in particular would have TortureU suggest OTel setup to a
+// team whose (unparsed) Gemfile already has an OTel client.
+func TestUnsupportedManifestOnlyReportsFactsAsUndeterminedNotFalse(t *testing.T) {
+	dir := t.TempDir()
+	compose := plainCompose(t, dir)
+	writeFile(t, dir, "Gemfile", `
+source "https://rubygems.org"
+gem "aws-sdk-s3"
+gem "opentelemetry-sdk"
+`)
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if sys.Coverage.AWS != detect.FactUnknown {
+		t.Errorf("Coverage.AWS = %v, want unknown (only manifest is an unsupported Gemfile)", sys.Coverage.AWS)
+	}
+	if sys.Coverage.Azure != detect.FactUnknown {
+		t.Errorf("Coverage.Azure = %v, want unknown (only manifest is an unsupported Gemfile)", sys.Coverage.Azure)
+	}
+	if sys.Coverage.LacksOtel != detect.FactUnknown {
+		t.Errorf("Coverage.LacksOtel = %v, want unknown — a false default would wrongly suggest OTel setup to a team that already has it", sys.Coverage.LacksOtel)
+	}
+}
+
+// spec: R-COV-6
+func TestUnsupportedPomXMLManifestOnlyReportsFactsAsUndeterminedNotFalse(t *testing.T) {
+	dir := t.TempDir()
+	compose := plainCompose(t, dir)
+	writeFile(t, dir, "pom.xml", `<project></project>`)
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if sys.Coverage.AWS != detect.FactUnknown {
+		t.Errorf("Coverage.AWS = %v, want unknown (only manifest is an unsupported pom.xml)", sys.Coverage.AWS)
+	}
+	if sys.Coverage.Azure != detect.FactUnknown {
+		t.Errorf("Coverage.Azure = %v, want unknown (only manifest is an unsupported pom.xml)", sys.Coverage.Azure)
+	}
+	if sys.Coverage.LacksOtel != detect.FactUnknown {
+		t.Errorf("Coverage.LacksOtel = %v, want unknown (only manifest is an unsupported pom.xml)", sys.Coverage.LacksOtel)
 	}
 }

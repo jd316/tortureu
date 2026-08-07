@@ -16,19 +16,50 @@ type Obs struct {
 	MaxConfidence string // "caused" if Traces, else "correlated"
 }
 
+// Fact is a tri-state predicate value (R-COV-6). A plain bool can only say
+// true/false, which conflates "verified absent" with "we couldn't check" —
+// exactly the silent-failure mode R-COV-6 forbids. The zero value is
+// FactUnknown, so an un-set Fact defaults to the safe "undetermined" state
+// rather than silently reading as false.
+type Fact int
+
+const (
+	FactUnknown Fact = iota
+	FactTrue
+	FactFalse
+)
+
+func (f Fact) String() string {
+	switch f {
+	case FactTrue:
+		return "true"
+	case FactFalse:
+		return "false"
+	default:
+		return "unknown"
+	}
+}
+
 // Coverage exposes the R-COV-5 facts each registry.yaml predicate namespace
 // needs, computed strictly from R-DET-1 inputs (compose + manifests; file
 // presence only, no source analysis). has:traffic-capture is intentionally
 // absent: it derives from torture.yaml config, which is not an R-DET-1
 // input, so internal/detect cannot compute it (reported, not implemented —
 // see the Task 1 report).
+//
+// OpenAPI/Proto/K8s stay plain bool: they are pure file-presence checks that
+// always run regardless of which manifest (if any) is present, so they are
+// never in an undetermined state. AWS/Azure/LacksOtel depend on parsing a
+// manifest whose format might not be supported (R-DET-14) — when the only
+// manifest present is unsupported (e.g. Gemfile, pom.xml), those three MUST
+// report FactUnknown, never FactFalse (R-COV-6).
 type Coverage struct {
 	OpenAPI   bool // spec:openapi — an OpenAPI/Swagger document exists
 	Proto     bool // spec:proto — .proto files exist
 	K8s       bool // platform:k8s — Kubernetes manifests or a Helm chart exist
-	AWS       bool // platform:aws — AWS SDK found in a manifest
-	Azure     bool // platform:azure — Azure SDK found in a manifest
-	LacksOtel bool // lacks:otel — no OTel client in any manifest, no collector in compose
+	AWS       Fact // platform:aws — AWS SDK found in a manifest
+	Azure     Fact // platform:azure — Azure SDK found in a manifest
+	LacksOtel Fact // lacks:otel — no OTel client in any manifest, no collector in compose
 }
 
 // System is what detection knows about a repo.
@@ -42,9 +73,10 @@ type System struct {
 	Gaps        []string // things we could not classify; reported, never guessed (R-DET-3, R-DET-7)
 	Lang        string   // detected from manifest
 
-	// otelClientSeen and otelCollectorSeen feed Coverage.LacksOtel; set by
-	// detectLockfiles and the compose service loop respectively, combined
-	// once both have run.
+	// otelClientSeen, otelClientUnknown and otelCollectorSeen feed
+	// Coverage.LacksOtel; set by detectLockfiles and the compose service
+	// loop respectively, combined once both have run.
 	otelClientSeen    bool
+	otelClientUnknown bool
 	otelCollectorSeen bool
 }

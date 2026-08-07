@@ -186,10 +186,19 @@ func Detect(composePath string) (*System, error) {
 		return nil, err
 	}
 
-	// R-COV-5 lacks:otel: true only when neither an OTel client (manifest,
-	// checked by detectLockfiles) nor an OTel collector (compose, checked
-	// above) was seen.
-	sys.Coverage.LacksOtel = !sys.otelClientSeen && !sys.otelCollectorSeen
+	// R-COV-5 lacks:otel, tri-state (R-COV-6): a verified collector or
+	// client wins outright — an OTel collector in compose proves the system
+	// has OTel regardless of whether its manifest could be parsed. Only
+	// once neither is confirmed does an unparsed manifest make the fact
+	// unknown rather than true.
+	switch {
+	case sys.otelClientSeen || sys.otelCollectorSeen:
+		sys.Coverage.LacksOtel = FactFalse
+	case sys.otelClientUnknown:
+		sys.Coverage.LacksOtel = FactUnknown
+	default:
+		sys.Coverage.LacksOtel = FactTrue
+	}
 
 	return sys, nil
 }

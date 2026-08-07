@@ -201,17 +201,40 @@ func detectLockfiles(dir string, sys *System) error {
 		imports = append(imports, pep621PackageNames(string(raw))...)
 	}
 
-	for _, imp := range imports {
-		matchClient(sys, clientTable, imp)
-		if hasImportPrefix(imp, awsSDKImports[sys.Lang]) {
-			sys.Coverage.AWS = true
+	switch {
+	case sys.Lang != "":
+		// A supported manifest was read: platform:aws/azure and the
+		// otel-client half of lacks:otel are verified, not guessed.
+		sys.Coverage.AWS = FactFalse
+		sys.Coverage.Azure = FactFalse
+		for _, imp := range imports {
+			matchClient(sys, clientTable, imp)
+			if hasImportPrefix(imp, awsSDKImports[sys.Lang]) {
+				sys.Coverage.AWS = FactTrue
+			}
+			if hasImportPrefix(imp, azureSDKImports[sys.Lang]) {
+				sys.Coverage.Azure = FactTrue
+			}
+			if hasImportPrefix(imp, otelClientImports[sys.Lang]) {
+				sys.otelClientSeen = true
+			}
 		}
-		if hasImportPrefix(imp, azureSDKImports[sys.Lang]) {
-			sys.Coverage.Azure = true
-		}
-		if hasImportPrefix(imp, otelClientImports[sys.Lang]) {
-			sys.otelClientSeen = true
-		}
+
+	case hasAnyUnsupportedManifest(dir):
+		// R-COV-6: a manifest exists — it may well declare an AWS/Azure SDK
+		// or an OTel client — but R-DET-14 gives us no parser for it. That
+		// is "undetermined", not "verified absent": defaulting to false
+		// here would, for lacks:otel, actively recommend OTel setup to a
+		// team that already has it.
+		sys.Coverage.AWS = FactUnknown
+		sys.Coverage.Azure = FactUnknown
+		sys.otelClientUnknown = true
+
+	default:
+		// No manifest of any kind: there is nothing that could declare a
+		// dependency, so absence is genuinely verified, not guessed.
+		sys.Coverage.AWS = FactFalse
+		sys.Coverage.Azure = FactFalse
 	}
 
 	for _, name := range unsupportedManifests {
@@ -227,6 +250,15 @@ func detectLockfiles(dir string, sys *System) error {
 func fileExists(dir, name string) bool {
 	_, err := os.Stat(filepath.Join(dir, name))
 	return err == nil
+}
+
+func hasAnyUnsupportedManifest(dir string) bool {
+	for _, name := range unsupportedManifests {
+		if fileExists(dir, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // matchClient attaches imp to a dependency if it matches any pattern in
