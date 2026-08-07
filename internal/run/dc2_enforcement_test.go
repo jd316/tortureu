@@ -23,18 +23,94 @@ import (
 // the outside world, and a classified host is genuinely reachable — through
 // the proxy, on the SUT-side network's DNS alias, exactly as the SUT would
 // dial it.
+//
+// The negative-control subtest is what makes the positive assertion mean
+// anything: it takes the identical stack Apply produced — same overlay,
+// same proxy, same alias, same containers — and surgically recreates only
+// the SUT-side network without Docker's own `internal: true` flag (which
+// can't be toggled on an existing network, hence "recreate": disconnect,
+// remove, create again with the one flag flipped, reconnect the same
+// containers under the same aliases). It then asserts the external address
+// IS reachable. Without this, a refactor that quietly stopped setting
+// `internal: true` in the overlay (topology.go's ov.Networks[name] =
+// overlayNetwork{Internal: n.Internal} silently receiving false) would
+// leave the positive subtest green — the proxy path would still work, and
+// nothing would notice the SUT regained a route to the internet, which is
+// the exact failure DC-2 exists to prevent.
 func TestDC2Enforcement_InternalNetworkBlocksExternalButProxyForwardsClassifiedHost(t *testing.T) {
 	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
 		t.Skip("docker compose not available")
 	}
 
+	stack := bringUpDC2Stack(t)
+
+	t.Run("isolated: external blocked, classified host reachable through the proxy", func(t *testing.T) {
+		out, err := exec.Command("docker", "exec", stack.sut, "wget", "-T", "3", "-qO-", "http://fake-upstream:80/").CombinedOutput()
+		if err != nil {
+			t.Errorf("SUT could not reach the classified host through the proxy: %v: %s", err, out)
+		} else if !strings.Contains(string(out), "nginx") && !strings.Contains(string(out), "html") {
+			t.Errorf("unexpected response reaching the classified host: %q", out)
+		}
+
+		out, err = exec.Command("docker", "exec", stack.sut, "wget", "-T", "3", "-qO-", "http://1.1.1.1/").CombinedOutput()
+		if err == nil {
+			t.Errorf("SUT reached an arbitrary external host — the internal SUT network is not actually isolated: %s", out)
+		}
+	})
+
+	t.Run("negative control: without internal:true, external IS reachable", func(t *testing.T) {
+		stack.removeIsolation(t)
+
+		out, err := exec.Command("docker", "exec", stack.sut, "wget", "-T", "3", "-qO-", "http://1.1.1.1/").CombinedOutput()
+		if err != nil {
+			t.Fatalf("SUT could not reach an arbitrary external host even with isolation removed: %v: %s — this means the positive subtest above could be passing for the wrong reason (a missing route or a DNS quirk unrelated to internal:true), not because DC-2 isolation actually works", err, out)
+		}
+	})
+}
+
+// dc2Stack is a running stack brought up through ComposeTopologyApplier.Apply.
+type dc2Stack struct {
+	sut, proxy, sutNet, egressNet string
+}
+
+// removeIsolation recreates s.sutNet without Docker's `internal: true` flag
+// — the property can't be toggled on an existing network, so this
+// disconnects every container from it, deletes it, recreates it as a
+// normal (non-internal) bridge network under the identical name, and
+// reconnects the same containers with the same aliases they had before.
+// Nothing else about the stack changes: same proxy, same alias, same SUT
+// container. This is the negative control for
+// TestDC2Enforcement_InternalNetworkBlocksExternalButProxyForwardsClassifiedHost.
+func (s dc2Stack) removeIsolation(t *testing.T) {
+	t.Helper()
+	run := func(args ...string) {
+		if out, err := exec.Command("docker", args...).CombinedOutput(); err != nil {
+			t.Fatalf("docker %v: %v: %s", args, err, out)
+		}
+	}
+	run("network", "disconnect", s.sutNet, s.sut)
+	run("network", "disconnect", s.sutNet, s.proxy)
+	run("network", "rm", s.sutNet)
+	run("network", "create", s.sutNet) // no --internal: the one flag flipped
+	run("network", "connect", s.sutNet, s.sut)
+	run("network", "connect", "--alias", "fake-upstream", s.sutNet, s.proxy)
+}
+
+// bringUpDC2Stack brings up a real compose stack (sut + a proxy dual-homed
+// onto a real "upstream" container standing in for a classified external
+// host) via ComposeTopologyApplier.Apply — the same call
+// TestDC2Enforcement_... asserts against, and the same one
+// removeIsolation's negative control starts from.
+func bringUpDC2Stack(t *testing.T) dc2Stack {
+	t.Helper()
+
 	suffix := fmt.Sprintf("dc2t%d", time.Now().UnixNano()%1_000_000)
 	sutNet := suffix + "_sut"
 	egressNet := suffix + "_egress"
 	proxyName := suffix + "-proxy"
-	sutContainer := suffix + "-sut-sut-1" // compose's default container-name shape: <project>-<service>-1
+	sutContainerName := suffix + "-sut-sut-1" // compose's default container-name shape: <project>-<service>-1
+	proxyContainerName := suffix + "-sut-" + proxyName + "-1"
 	upstreamContainer := suffix + "-upstream"
-	proxyContainer := suffix + "-proxy-" + proxyName + "-1"
 
 	dir := t.TempDir()
 	composePath := filepath.Join(dir, "docker-compose.yml")
@@ -75,30 +151,16 @@ func TestDC2Enforcement_InternalNetworkBlocksExternalButProxyForwardsClassifiedH
 		t.Fatalf("EnsureProxies: %v", err)
 	}
 
-	sut, err := findContainer(sutContainer, "sut")
+	sut, err := findContainer(sutContainerName, "sut")
 	if err != nil {
 		t.Fatalf("find SUT container: %v", err)
 	}
-
-	// The classified host, dialed exactly as the SUT would dial it, must
-	// reach the real upstream — through the proxy.
-	out, err := exec.Command("docker", "exec", sut, "wget", "-T", "3", "-qO-", "http://fake-upstream:80/").CombinedOutput()
+	proxy, err := findContainer(proxyContainerName, proxyName)
 	if err != nil {
-		t.Errorf("SUT could not reach the classified host through the proxy: %v: %s", err, out)
-	} else if !strings.Contains(string(out), "nginx") && !strings.Contains(string(out), "html") {
-		t.Errorf("unexpected response reaching the classified host: %q", out)
+		t.Fatalf("find proxy container: %v", err)
 	}
 
-	// An arbitrary external address — nothing classifies or proxies it —
-	// must be unreachable: the internal:true network has no route out at
-	// all (Docker's own enforcement, not a policy check this package could
-	// get wrong).
-	out, err = exec.Command("docker", "exec", sut, "wget", "-T", "3", "-qO-", "http://1.1.1.1/").CombinedOutput()
-	if err == nil {
-		t.Errorf("SUT reached an arbitrary external host — the internal SUT network is not actually isolated: %s", out)
-	}
-
-	_ = proxyContainer // documents the compose container-naming shape; not asserted on directly
+	return dc2Stack{sut: sut, proxy: proxy, sutNet: sutNet, egressNet: egressNet}
 }
 
 func containerIP(name, network string) (string, error) {
