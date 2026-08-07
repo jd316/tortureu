@@ -479,6 +479,18 @@ output — until the topology overlay is applied by an executable run path and p
 Until then the parts exist but the guarantee does not, and claiming it would be the most damaging
 possible misstatement for a tool whose positioning is that it cannot reach the internet.
 
+**SATISFIED** — `internal/run/dc2_enforcement_test.go`. A real compose stack is brought up through
+`ComposeTopologyApplier.Apply`; `docker exec` inside the running SUT proves it reaches a classified
+host through the proxy and **cannot** reach an arbitrary external address. A committed negative
+control flips only the `internal` flag on the same stack and asserts the external address *becomes*
+reachable — so the positive test is measuring isolation rather than an unrelated routing accident,
+and a refactor that stops applying isolation fails CI.
+
+The claim held back through three review rounds that each found it unearned: topology generated but
+never applied; `docker compose config` tested while `up` never ran, with proxies created lazily so
+nothing was on the path; and enforcement proven but its regression path untested. **A guarantee
+whose regression path has no automated test is asserted, not proven.**
+
 **R-EXE-15** — Fault verbs are **owned by layers**, and a layer **MUST** pass over verbs it does not
 own rather than rejecting them. Rejection is only correct for a verb no layer owns.
 
