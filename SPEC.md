@@ -559,7 +559,17 @@ registry entry is permanently unevaluable:
 | `platform:k8s` | Kubernetes manifests or a Helm chart exist | file presence |
 | `platform:aws` / `azure` | provider SDK in a manifest, or provider config present | manifest |
 | `lacks:otel` | no OpenTelemetry client in any manifest, no collector in compose | manifest + compose |
-| `has:traffic-capture` | a capture artefact is configured | config |
+
+`platform:aws` / `platform:azure` are **manifest-only**. An earlier draft also said "or provider
+config present", but no spec-named config filename exists to check — satisfying it would require
+either an invented filename heuristic or parsing Terraform/HCL, and the latter is the general source
+analysis R-DET-1 forbids. Manifest SDK presence is the bounded, honest signal. *(Task 1 escalation)*
+
+**R-COV-7** — `has:traffic-capture` is **not** a detection fact. It derives from `torture.yaml`,
+which is not an R-DET-1 input, so detection **MUST NOT** attempt it. The predicate evaluator
+**MUST** source it from configuration instead. Facts have owners: detection reports what the repo
+*is*, configuration reports what the user *asked for*, and merging the two inside detection would
+quietly widen R-DET-1's bound. *(Task 1 escalation)*
 
 All are file- or manifest-presence checks and therefore inside R-DET-1. Before this requirement,
 29 of 151 registry entries (19%) could never match, so `suggest` was silent for a fifth of the
