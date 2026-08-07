@@ -14,7 +14,6 @@ import (
 // doing nothing or pretending to succeed.
 var stubVerbs = map[string]bool{
 	"smoke":   true,
-	"mcp":     true,
 	"check":   true,
 	"emit":    true,
 	"capture": true,
@@ -41,6 +40,8 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		return runRun(rest, stdout, stderr)
 	case verb == "doctor":
 		return runDoctor(rest, stdout, stderr)
+	case verb == "mcp":
+		return runMcp(rest, stdout, stderr)
 	case stubVerbs[verb]:
 		fmt.Fprintf(stderr, "tortureu %s: not implemented in v0\n", verb)
 		return 2
