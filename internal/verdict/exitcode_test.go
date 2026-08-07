@@ -55,3 +55,16 @@ func TestExitCode_AllAmbiguousFindingsIsInconclusiveNotSuccess(t *testing.T) {
 		t.Fatalf("mixed confidence: ExitCode = %d, want 1 (fail)", got)
 	}
 }
+
+// spec: R-VER-8
+// SPEC.md now states the trigger as an algorithm: exit 4 requires status=fail
+// AND every finding ambiguous. A run with NO findings is explicitly not
+// inconclusive — it's a pass (0). This guards against "all findings are
+// ambiguous" being (wrongly) computed as vacuously true over an empty slice,
+// which would make a plain pass exit 4 instead of 0.
+func TestExitCode_NoFindingsIsPassNeverInconclusive(t *testing.T) {
+	v := Verdict{Status: StatusPass}
+	if got := ExitCode(v); got != 0 {
+		t.Fatalf("zero findings: ExitCode = %d, want 0 (pass), not 4", got)
+	}
+}

@@ -2,6 +2,7 @@ package verdict
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -108,11 +109,7 @@ func TestRender_IsDerivedFromSameDocumentAsJSON(t *testing.T) {
 	// The exit code shown to the human MUST match ExitCode(v) computed from
 	// the very same document, per R-VER-7/8.
 	wantExit := ExitCode(v)
-	if !strings.Contains(human, "exit "+itoa(wantExit)) {
+	if !strings.Contains(human, "exit "+strconv.Itoa(wantExit)) {
 		t.Errorf("Render(v) does not show the exit code %d derived from the document", wantExit)
 	}
-}
-
-func itoa(n int) string {
-	return string(rune('0' + n))
 }
