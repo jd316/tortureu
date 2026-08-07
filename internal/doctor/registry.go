@@ -131,22 +131,38 @@ func EvalPredicate(pred string, sys *detect.System) (matched, evaluated bool) {
 }
 
 // coverageFacts maps a full "namespace:value" term to the R-COV-5 fact on
-// detect.System.Coverage that answers it. These are the six facts R-COV-5
-// requires detection to expose; all are plain bools because detect can
-// always determine them (file/manifest presence, never "unknown").
-var coverageFacts = map[string]func(detect.Coverage) bool{
-	"spec:openapi":   func(c detect.Coverage) bool { return c.OpenAPI },
-	"spec:proto":     func(c detect.Coverage) bool { return c.Proto },
-	"platform:k8s":   func(c detect.Coverage) bool { return c.K8s },
-	"platform:aws":   func(c detect.Coverage) bool { return c.AWS },
-	"platform:azure": func(c detect.Coverage) bool { return c.Azure },
-	"lacks:otel":     func(c detect.Coverage) bool { return c.LacksOtel },
+// detect.System.Coverage that answers it. OpenAPI/Proto/K8s are plain bools
+// (pure file-presence checks, always determinable); AWS/Azure/LacksOtel are
+// detect.Fact, tri-state so an unsupported/absent manifest reports
+// FactUnknown rather than a guessed FactFalse (R-COV-6) — factToBool
+// carries that unknown through as evaluated=false.
+var coverageFacts = map[string]func(detect.Coverage) (matched, evaluated bool){
+	"spec:openapi":   func(c detect.Coverage) (bool, bool) { return c.OpenAPI, true },
+	"spec:proto":     func(c detect.Coverage) (bool, bool) { return c.Proto, true },
+	"platform:k8s":   func(c detect.Coverage) (bool, bool) { return c.K8s, true },
+	"platform:aws":   func(c detect.Coverage) (bool, bool) { return factToBool(c.AWS) },
+	"platform:azure": func(c detect.Coverage) (bool, bool) { return factToBool(c.Azure) },
+	"lacks:otel":     func(c detect.Coverage) (bool, bool) { return factToBool(c.LacksOtel) },
+}
+
+// factToBool translates a detect.Fact (R-COV-6 tri-state) into
+// EvalPredicate's (matched, evaluated) pair: FactUnknown is never guessed
+// as a match.
+func factToBool(f detect.Fact) (matched, evaluated bool) {
+	switch f {
+	case detect.FactTrue:
+		return true, true
+	case detect.FactFalse:
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 // evalTerm evaluates a single "namespace:value" predicate term.
 func evalTerm(term string, sys *detect.System) (matched, evaluated bool) {
 	if fact, ok := coverageFacts[term]; ok {
-		return fact(sys.Coverage), true
+		return fact(sys.Coverage)
 	}
 
 	ns, val, ok := strings.Cut(term, ":")

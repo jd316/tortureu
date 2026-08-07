@@ -4,6 +4,15 @@
 // hints derived from internal/detect's compose+manifest view of a system
 // (R-DET-1), pointing at what a run could prove — not proof itself
 // (R-AUD-3).
+//
+// Precision limit (source inspection, R-AUD-5/6): once a construction site
+// is attributed to a dependency, inspection scans that whole file for
+// timeout/retry signals, not just the constructor call's own arguments. A
+// signal placed elsewhere in the same file (e.g. an unrelated
+// context.WithTimeout) can therefore count as evidence. This is a
+// deliberate, bounded (single known file, known library) heuristic, not a
+// per-argument guarantee — treat a "confirmed" finding as strong evidence,
+// still worth the experiment named in R-AUD-4, not as certainty.
 package doctor
 
 import (

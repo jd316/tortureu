@@ -223,3 +223,46 @@ func TestAuditReportsNotDeterminedWhenConstructionSiteNotFound(t *testing.T) {
 		t.Fatalf("an undetermined finding must never assert presence, got %+v", f)
 	}
 }
+
+// spec: R-AUD-6
+func TestAuditNeverAttributesASharedConstructorToTheWrongDriver(t *testing.T) {
+	// sql.Open is database/sql's driver-generic entry point. A file that
+	// only imports the mysql driver and calls sql.Open must never be read
+	// as postgres's construction site — that would ground a confident
+	// finding in the wrong dependency's code, which is worse than an
+	// honest "not determined" (review finding, fix round 1).
+	dir := writeGoFile(t, `
+package main
+
+import (
+	"database/sql"
+
+	_ "github.com/go-sql-driver/mysql"
+)
+
+func connect() {
+	sql.Open("mysql", "user:pass@/dbname")
+}
+`)
+	sys := &detect.System{
+		Deps: []detect.Dep{
+			{Name: "pg", Type: "postgresql", Clients: []string{"github.com/lib/pq"}},
+			{Name: "db", Type: "mysql", Clients: []string{"github.com/go-sql-driver/mysql"}},
+		},
+	}
+
+	findings := doctor.Audit(dir, sys)
+
+	pg := findFinding(t, findings, doctor.CheckTimeout, "postgresql")
+	if pg.Determined {
+		t.Fatalf("postgresql has no driver import in this file — must be not-determined, got %+v", pg)
+	}
+	if pg.Present {
+		t.Fatalf("an undetermined finding must never assert presence, got %+v", pg)
+	}
+
+	my := findFinding(t, findings, doctor.CheckTimeout, "mysql")
+	if !my.Determined {
+		t.Fatalf("mysql has driver corroboration in this file — should be determined, got %+v", my)
+	}
+}

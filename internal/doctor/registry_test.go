@@ -58,7 +58,7 @@ func TestEvalPredicateOrAlternativesRepeatPrefix(t *testing.T) {
 // spec: R-COV-5
 func TestEvalPredicateUsesDetectCoverageFacts(t *testing.T) {
 	sys := &detect.System{
-		Coverage: detect.Coverage{K8s: true, OpenAPI: false, LacksOtel: true},
+		Coverage: detect.Coverage{K8s: true, OpenAPI: false, LacksOtel: detect.FactTrue},
 	}
 
 	if m, e := doctor.EvalPredicate("platform:k8s", sys); !e || !m {
@@ -69,6 +69,24 @@ func TestEvalPredicateUsesDetectCoverageFacts(t *testing.T) {
 	}
 	if m, e := doctor.EvalPredicate("lacks:otel", sys); !e || !m {
 		t.Fatalf("lacks:otel: matched=%v evaluated=%v, want true/true", m, e)
+	}
+}
+
+// spec: R-COV-6
+func TestEvalPredicateReportsFactUnknownAsUnevaluable(t *testing.T) {
+	// AWS/Azure/LacksOtel are detect.Fact (tri-state): FactUnknown happens
+	// when the only manifest present is one R-DET-14 doesn't support.
+	// EvalPredicate must surface that as unevaluable, never as a guessed
+	// false match.
+	sys := &detect.System{
+		Coverage: detect.Coverage{AWS: detect.FactUnknown},
+	}
+	matched, evaluated := doctor.EvalPredicate("platform:aws", sys)
+	if evaluated {
+		t.Fatalf("expected platform:aws to be unevaluable when detect reports FactUnknown, got matched=%v evaluated=%v", matched, evaluated)
+	}
+	if matched {
+		t.Fatal("an unevaluable predicate must never report a match")
 	}
 }
 

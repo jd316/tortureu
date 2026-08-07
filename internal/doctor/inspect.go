@@ -16,9 +16,19 @@ import (
 type sourceSite struct {
 	depType string
 
-	// constructors identifies the call that builds the client (bounded
-	// "construction site" per R-AUD-5).
+	// constructors identifies a call that unambiguously builds this
+	// depType's client (bounded "construction site" per R-AUD-5) — the
+	// function name alone names the driver, e.g. "pgxpool.New".
 	constructors []string
+
+	// sharedConstructors identifies a call that builds a client through a
+	// driver-generic API (e.g. "sql.Open", which database/sql exposes for
+	// every SQL driver). A shared constructor is only attributed to
+	// depType when the same file also contains one of driverSigs —
+	// without that corroboration, which dependency the call belongs to is
+	// not knowable, and R-AUD-6 requires "not determined" over a guess.
+	sharedConstructors []string
+	driverSigs         []string
 
 	// timeoutSigs, if found anywhere in the file containing a constructor
 	// call, are evidence a timeout is configured.
@@ -38,13 +48,15 @@ type sourceSite struct {
 // arbitrary control flow.
 var goSourceSites = []sourceSite{
 	{
-		depType:      "postgresql",
-		constructors: []string{"pgxpool.New", "pgxpool.NewWithConfig", "pgx.Connect", "sql.Open"},
-		timeoutSigs:  []string{"ConnectTimeout", "context.WithTimeout", "context.WithDeadline", "StatementTimeout"},
-		retrySigs:    []string{"Retry", "retry", "Backoff", "backoff"},
-		capSigs:      []string{"MaxRetries", "MaxTries", "MaxElapsedTime"},
-		backoffSigs:  []string{"Backoff", "backoff"},
-		jitterSigs:   []string{"Jitter", "jitter"},
+		depType:            "postgresql",
+		constructors:       []string{"pgxpool.New", "pgxpool.NewWithConfig", "pgx.Connect"},
+		sharedConstructors: []string{"sql.Open"},
+		driverSigs:         []string{"github.com/lib/pq", "github.com/jackc/pgx"},
+		timeoutSigs:        []string{"ConnectTimeout", "context.WithTimeout", "context.WithDeadline", "StatementTimeout"},
+		retrySigs:          []string{"Retry", "retry", "Backoff", "backoff"},
+		capSigs:            []string{"MaxRetries", "MaxTries", "MaxElapsedTime"},
+		backoffSigs:        []string{"Backoff", "backoff"},
+		jitterSigs:         []string{"Jitter", "jitter"},
 	},
 	{
 		depType:      "redis",
@@ -56,13 +68,14 @@ var goSourceSites = []sourceSite{
 		jitterSigs:   []string{"Jitter", "jitter"},
 	},
 	{
-		depType:      "mysql",
-		constructors: []string{"sql.Open"},
-		timeoutSigs:  []string{"Timeout", "ReadTimeout", "WriteTimeout", "context.WithTimeout"},
-		retrySigs:    []string{"Retry", "retry", "Backoff", "backoff"},
-		capSigs:      []string{"MaxRetries", "MaxTries"},
-		backoffSigs:  []string{"Backoff", "backoff"},
-		jitterSigs:   []string{"Jitter", "jitter"},
+		depType:            "mysql",
+		sharedConstructors: []string{"sql.Open"},
+		driverSigs:         []string{"github.com/go-sql-driver/mysql"},
+		timeoutSigs:        []string{"Timeout", "ReadTimeout", "WriteTimeout", "context.WithTimeout"},
+		retrySigs:          []string{"Retry", "retry", "Backoff", "backoff"},
+		capSigs:            []string{"MaxRetries", "MaxTries"},
+		backoffSigs:        []string{"Backoff", "backoff"},
+		jitterSigs:         []string{"Jitter", "jitter"},
 	},
 }
 
@@ -121,17 +134,24 @@ func locate(dir, depType string) (site sourceSite, text string, ok bool, reason 
 	if !known {
 		return sourceSite{}, "", false, "no known construction site in doctor's table for dependency type " + depType
 	}
-	text, found := findConstructionSite(dir, site.constructors)
+	text, found := findConstructionSite(dir, site)
 	if !found {
 		return sourceSite{}, "", false, "construction call for " + depType + " not found in source"
 	}
 	return site, text, true, ""
 }
 
-// findConstructionSite walks dir's Go source for a file that calls one of
-// constructors, and returns that file's content — the bounded inspection
-// window (R-AUD-5: the construction site, not the whole program).
-func findConstructionSite(dir string, constructors []string) (string, bool) {
+// findConstructionSite walks dir's Go source for a file attributable to
+// site, and returns that file's content — the bounded inspection window
+// (R-AUD-5: the construction site, not the whole program).
+//
+// A file matches on an unambiguous constructor alone. A shared,
+// driver-generic constructor (e.g. "sql.Open") only matches when the same
+// file also contains one of site's driverSigs — otherwise which dependency
+// the call belongs to is not knowable, and this reports no match so the
+// caller falls back to "not determined" (R-AUD-6) rather than attributing
+// the file to the wrong dependency.
+func findConstructionSite(dir string, site sourceSite) (string, bool) {
 	if dir == "" {
 		return "", false
 	}
@@ -154,8 +174,11 @@ func findConstructionSite(dir string, constructors []string) (string, bool) {
 		if err != nil {
 			return nil
 		}
-		if containsAny(string(raw), constructors) {
-			text = string(raw)
+		content := string(raw)
+		attributable := containsAny(content, site.constructors) ||
+			(containsAny(content, site.sharedConstructors) && containsAny(content, site.driverSigs))
+		if attributable {
+			text = content
 			found = true
 		}
 		return nil
