@@ -35,6 +35,21 @@ target: { compose: ./docker-compose.yml }
 	}
 }
 
+// spec: R-CFG-3
+func TestTargetRequiresCompose(t *testing.T) {
+	src := `
+version: 0
+target: { service: api }
+`
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for missing target.compose, got nil")
+	}
+	if !strings.Contains(err.Error(), "target.compose") {
+		t.Fatalf("expected error to name target.compose, got: %v", err)
+	}
+}
+
 // spec: R-CFG-4
 func TestEgressDefaultMustBeDeny(t *testing.T) {
 	src := `
@@ -164,6 +179,28 @@ assert:
 	}
 }
 
+// spec: R-CFG-8
+func TestLoadStageMustHaveAtLeastOneOfToOrHold(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml, service: api }
+load:
+  model: arrival_rate
+  stages:
+    - phase: peak
+      for: 60s
+assert:
+  - http_req_duration: ["p(95)<500"]
+`
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for stage with neither to: nor hold:, got nil")
+	}
+	if !strings.Contains(err.Error(), "peak") {
+		t.Fatalf("expected error to name the offending stage, got: %v", err)
+	}
+}
+
 // spec: R-CFG-9
 func TestScenarioFlowEntriesMustBeMappings(t *testing.T) {
 	src := `
@@ -189,6 +226,34 @@ assert:
 	}
 	if !strings.Contains(err.Error(), "flow") {
 		t.Fatalf("expected error to mention flow, got: %v", err)
+	}
+}
+
+// spec: R-CFG-9
+func TestScenarioFlowEntryRequiresMethodAndPath(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml, service: api }
+load:
+  model: arrival_rate
+  stages:
+    - phase: peak
+      hold: 500rps
+      for: 60s
+  scenarios:
+    - name: checkout
+      weight: 100
+      flow:
+        - { capture: order_id }
+assert:
+  - http_req_duration: ["p(95)<500"]
+`
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for flow entry missing method/path, got nil")
+	}
+	if !strings.Contains(err.Error(), "method") || !strings.Contains(err.Error(), "path") {
+		t.Fatalf("expected error to mention method and path, got: %v", err)
 	}
 }
 
@@ -313,6 +378,47 @@ faults:
 	}
 	if !strings.Contains(err.Error(), "f1") {
 		t.Fatalf("expected error to name fault f1, got: %v", err)
+	}
+}
+
+// spec: R-CFG-14
+func TestFaultInjectModifierMustBelongToVerb(t *testing.T) {
+	cases := []struct {
+		name   string
+		inject string
+	}{
+		{"jitter without latency", "{ down: true, jitter: 50ms }"},
+		{"workers on down", "{ down: true, workers: 4 }"},
+		{"status on latency", "{ latency: 300ms, status: 503 }"},
+	}
+	for _, c := range cases {
+		src := baseWithLoadAndAssert(`
+faults:
+  - name: f1
+    at: peak
+    target: postgres:5432
+    inject: ` + c.inject + `
+`)
+		_, err := config.Parse([]byte(src))
+		if err == nil {
+			t.Errorf("%s: expected error for modifier not owned by verb, got nil", c.name)
+		} else if !strings.Contains(err.Error(), "f1") {
+			t.Errorf("%s: expected error to name fault f1, got: %v", c.name, err)
+		}
+	}
+}
+
+// spec: R-CFG-14
+func TestFaultInjectModifierAllowedForOwningVerb(t *testing.T) {
+	src := baseWithLoadAndAssert(`
+faults:
+  - name: f1
+    at: peak
+    target: postgres:5432
+    inject: { latency: 300ms, jitter: 50ms }
+`)
+	if _, err := config.Parse([]byte(src)); err != nil {
+		t.Fatalf("expected jitter to be a legal modifier of latency, got error: %v", err)
 	}
 }
 

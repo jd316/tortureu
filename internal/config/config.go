@@ -78,13 +78,26 @@ type rawLoad struct {
 	Scenarios []rawScenario `yaml:"scenarios"`
 }
 
-// faultVerbs are the v0 inject verbs (R-CFG-14).
-var faultVerbs = map[string]bool{
-	"latency": true, "down": true, "bandwidth": true, "slicer": true,
-	"error_rate": true, "cpu": true, "mem": true, "io": true, "fd": true,
-	"cpu_limit": true, "mem_limit": true,
-	"pause": true, "kill": true, "graceful": true,
-	"poison_pill": true, "duplicate": true,
+// faultVerbModifiers are the v0 inject verbs and the modifiers each one
+// owns, per the SPEC.md §4.4 table (R-CFG-14). An empty set means the verb
+// takes no modifiers.
+var faultVerbModifiers = map[string]map[string]bool{
+	"latency":     {"jitter": true},
+	"down":        {},
+	"bandwidth":   {},
+	"slicer":      {"delay": true},
+	"error_rate":  {"status": true},
+	"cpu":         {"workers": true},
+	"mem":         {"workers": true},
+	"io":          {"workers": true},
+	"fd":          {"workers": true},
+	"cpu_limit":   {},
+	"mem_limit":   {},
+	"pause":       {},
+	"kill":        {},
+	"graceful":    {},
+	"poison_pill": {"count": true},
+	"duplicate":   {},
 }
 
 // atGrammar matches R-CFG-11: <phase>, <phase>+<duration>, or t=<duration>.
@@ -244,6 +257,9 @@ func Parse(raw []byte) (*Config, error) {
 				if err := node.Decode(&fs); err != nil {
 					return nil, fmt.Errorf("torture.yaml: load.scenarios[%q].flow[%d]: %w", rs.Name, i, err)
 				}
+				if fs.Method == "" || fs.Path == "" {
+					return nil, fmt.Errorf("torture.yaml: load.scenarios[%q].flow[%d]: must specify both method and path", rs.Name, i)
+				}
 				flow = append(flow, fs)
 			}
 			scenarios = append(scenarios, Scenario{Name: rs.Name, Weight: rs.Weight, Flow: flow})
@@ -288,7 +304,7 @@ func Parse(raw []byte) (*Config, error) {
 
 			var verb string
 			for k := range rf.Inject {
-				if faultVerbs[k] {
+				if _, isVerb := faultVerbModifiers[k]; isVerb {
 					if verb != "" {
 						return nil, fmt.Errorf("torture.yaml: faults[%q]: inject: must contain exactly one verb, found %q and %q", rf.Name, verb, k)
 					}
@@ -297,6 +313,16 @@ func Parse(raw []byte) (*Config, error) {
 			}
 			if verb == "" {
 				return nil, fmt.Errorf("torture.yaml: faults[%q]: inject: contains no recognized verb", rf.Name)
+			}
+
+			allowedModifiers := faultVerbModifiers[verb]
+			for k := range rf.Inject {
+				if k == verb {
+					continue
+				}
+				if !allowedModifiers[k] {
+					return nil, fmt.Errorf("torture.yaml: faults[%q]: inject: modifier %q is not valid for verb %q", rf.Name, k, verb)
+				}
 			}
 
 			cfg.Faults = append(cfg.Faults, Fault{
