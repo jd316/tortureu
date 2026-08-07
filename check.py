@@ -7,7 +7,7 @@ Exists because a hand-maintained count in RESEARCH.md was wrong by 14 tools and 
 YAML example didn't parse. registry.yaml is the source of truth; everything else
 is checked against it.
 """
-import json, re, sys, yaml
+import json, os, re, sys, yaml
 
 reg = yaml.safe_load(open('registry.yaml'))
 res, ver = open('RESEARCH.md').read(), open('VERDICT.md').read()
@@ -147,6 +147,27 @@ untested = sorted(reqs - set(cited))
 print(f"     untested ({len(untested)}): {', '.join(untested[:8])}"
       + (" ..." if len(untested) > 8 else ""))
 
+
+# ── R-LIC-1 is a PROJECT-WIDE licence boundary, not a per-package one. k6 is AGPL-3 and this
+# project is MIT: we generate k6 script text and shell out, and must never import or link k6.
+# internal/k6 guards itself, but a `go.k6.io` import added in any other package would relicense
+# the project with nothing to catch it. Surfaced by the Task 4 review.
+agpl = []
+for root, _dirs, files in os.walk('.'):
+    if '/.git' in root or '/.superpowers' in root or '/.private' in root:
+        continue
+    for f in files:
+        if f.endswith('.go'):
+            p = os.path.join(root, f)
+            # Match real import lines only. A substring occurrence is not a violation:
+            # internal/k6's own guard test contains "go.k6.io" precisely because it greps for it.
+            if re.search(r'^\s*(?:[\w.]+\s+)?"go\.k6\.io[^"]*"\s*$', open(p).read(), re.M):
+                agpl.append(p)
+ok(not agpl, "R-LIC-1: no AGPL k6 import anywhere in the tree" + (f" — found in {agpl}" if agpl else ""))
+
+gomod = open('go.mod').read()
+ok('go.k6.io' not in gomod and 'k6' not in gomod.split('require')[-1].replace('tortureu', ''),
+   "R-LIC-1: go.mod declares no k6 dependency")
 
 print(f"\n{len(fails)} failure(s)" if fails else "\nall checks passed")
 sys.exit(1 if fails else 0)
