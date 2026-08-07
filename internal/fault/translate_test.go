@@ -2,6 +2,7 @@ package fault
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jdb316/tortureu/internal/config"
@@ -25,6 +26,79 @@ func TestTranslate_RejectsModifierNotOwnedByVerb(t *testing.T) {
 	_, err := Translate(f)
 	if err == nil {
 		t.Fatal("Translate: want error for jitter modifier on down verb, got nil")
+	}
+}
+
+// spec: R-CFG-23
+// workers is the modifier this package owns (cpu/mem/io/fd). R-CFG-23
+// requires it be an integer >= 1, checked independently of config.Parse
+// (R-DC2-6 defense in depth: a Fault built directly, bypassing Parse, must
+// still be caught here). workers: 0 is the dangerous case, not just an
+// invalid one: a stress-ng run with zero workers does nothing, the fault
+// silently never fires, and the run's "passed" verdict is a lie about what
+// was actually tested. The error must name the fault, the modifier, and the
+// legal range so a human editing torture.yaml can fix it without guessing.
+func TestTranslate_RejectsWorkersBelowRange(t *testing.T) {
+	cases := []int{0, -1}
+	for _, workers := range cases {
+		f := config.Fault{
+			Name: "cpu_squeeze", Target: "checkout-api", Verb: "cpu",
+			Inject: map[string]any{"cpu": "90%", "workers": workers},
+		}
+		_, err := Translate(f)
+		if err == nil {
+			t.Fatalf("Translate: workers=%d: want error, got nil", workers)
+		}
+		msg := err.Error()
+		for _, want := range []string{"cpu_squeeze", "workers", "1"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("Translate: workers=%d: error %q does not mention %q (fault name/modifier/legal range required)", workers, msg, want)
+			}
+		}
+	}
+}
+
+// spec: R-CFG-23
+// workers: 1 is the boundary value the range is anchored on and MUST be
+// legal — a range check that is off by one here would reject the smallest
+// real stress-ng run.
+func TestTranslate_AllowsWorkersAtLowerBoundary(t *testing.T) {
+	f := config.Fault{
+		Name: "cpu_squeeze", Target: "checkout-api", Verb: "cpu",
+		Inject: map[string]any{"cpu": "90%", "workers": 1},
+	}
+	if _, err := Translate(f); err != nil {
+		t.Fatalf("Translate: workers=1 must be legal, got error: %v", err)
+	}
+}
+
+// spec: R-CFG-23
+// The project's own reference config declares workers: 4 (torture.example.
+// yaml's cpu_squeeze fault). Rejecting it would be the same class of defect
+// R-EXE-15 called out for error_rate: a check that breaks the reference
+// document it is supposed to validate.
+func TestTranslate_ExampleConfigWorkersValueIsLegal(t *testing.T) {
+	raw, err := os.ReadFile("../../torture.example.yaml")
+	if err != nil {
+		t.Fatalf("reading torture.example.yaml: %v", err)
+	}
+	cfg, err := config.Parse(raw)
+	if err != nil {
+		t.Fatalf("config.Parse(torture.example.yaml): %v", err)
+	}
+
+	found := false
+	for _, f := range cfg.Faults {
+		if _, ok := f.Inject["workers"]; !ok {
+			continue
+		}
+		found = true
+		if _, err := Translate(f); err != nil {
+			t.Errorf("Translate(%s): workers value from the reference config was rejected: %v", f.Name, err)
+		}
+	}
+	if !found {
+		t.Fatal("torture.example.yaml has no fault with a workers modifier; test can't prove anything")
 	}
 }
 

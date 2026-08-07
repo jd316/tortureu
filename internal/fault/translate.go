@@ -13,6 +13,7 @@ package fault
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/jdb316/tortureu/internal/config"
 )
@@ -149,6 +150,18 @@ func Translate(f config.Fault) (Action, error) {
 		return Action{Fault: f, Kind: KindPassed, Owner: owner}, nil
 	}
 
+	// R-CFG-23: workers is the numeric modifier this package owns (cpu/mem/
+	// io/fd). Re-checked here independently of config.Parse (R-DC2-6
+	// defense in depth) because a Fault can be built without going through
+	// Parse. workers: 0 is the dangerous case, not just invalid: a
+	// stress-ng run with zero workers silently does nothing, so the fault
+	// never fires and the run's verdict lies about what was tested.
+	if workers, ok := f.Inject["workers"]; ok {
+		if err := validateWorkers(f.Name, workers); err != nil {
+			return Action{}, err
+		}
+	}
+
 	if f.Target == "" {
 		return Action{}, fmt.Errorf("fault %q: target is required", f.Name)
 	}
@@ -160,6 +173,36 @@ func Translate(f config.Fault) (Action, error) {
 		return translateDocker(f)
 	default:
 		return Action{}, fmt.Errorf("fault %q: %q is not a supported inject verb", f.Name, f.Verb)
+	}
+}
+
+// validateWorkers enforces R-CFG-23: workers MUST be an integer >= 1. The
+// error names the fault, the modifier, and the legal range, per R-CFG-23's
+// own requirement for the error shape.
+func validateWorkers(faultName string, v any) error {
+	n, isInt := asInt(v)
+	if !isInt || n < 1 {
+		return fmt.Errorf("fault %q: modifier \"workers\" = %v is invalid; must be an integer >= 1", faultName, v)
+	}
+	return nil
+}
+
+// asInt reports whether v is a whole number, accepting both the int Go's
+// yaml decoder produces for bare integers and the float64 it can produce
+// for numbers parsed generically.
+func asInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		if n != math.Trunc(n) {
+			return 0, false
+		}
+		return int(n), true
+	default:
+		return 0, false
 	}
 }
 
