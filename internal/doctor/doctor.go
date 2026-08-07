@@ -35,12 +35,21 @@ const (
 // Finding is one static resilience-audit result (R-AUD-1/2). It is always a
 // hint (R-AUD-3, Level) and names the experiment that would turn the static
 // hint into a run-proven result (R-AUD-4).
+//
+// Determined and Present together carry R-AUD-6's three-way outcome:
+// Determined=false means the audit could not tell (Present is meaningless
+// and always false); Determined=true, Present=false means the knob was
+// confirmed absent by bounded source inspection; Determined=true,
+// Present=true means it was confirmed present. "Not determined" and "not
+// configured" must never be conflated.
 type Finding struct {
 	DepName    string // detect.Dep.Name this finding is about
 	DepType    string // detect.Dep.Type (R-DET-9 vocabulary)
 	Library    string // the client library import that triggered this finding (R-AUD-5)
 	Check      Check
 	Level      Level
+	Determined bool
+	Present    bool
 	Hint       string
 	Experiment string
 }
@@ -53,14 +62,18 @@ var faultForCheck = map[Check]string{
 	CheckRetry:   "down",
 }
 
-// Audit runs the static resilience checks (R-AUD-1, R-AUD-2) over sys.
+// Audit runs the static resilience checks (R-AUD-1, R-AUD-2) over sys,
+// rooted at dir.
 //
 // It only looks at dependencies where detect already identified a client
-// library from a manifest (R-DET-5) — a "known library's known
-// construction site" per R-AUD-5 — never at dependencies known only from a
-// compose image, and never at application source. Findings are always
-// hints (R-AUD-3): this is a static check; only a run proves anything.
-func Audit(sys *detect.System) []Finding {
+// library from a manifest (R-DET-5), and only at the bounded construction
+// site doctor's own table knows for that library's type (R-AUD-5) — never
+// at dependencies known only from a compose image, never at arbitrary
+// control flow, and never at a library outside the table. Findings are
+// always hints (R-AUD-3): this is a static check; only a run proves
+// anything. Where inspection cannot determine a setting, the finding says
+// so explicitly rather than asserting absence (R-AUD-6).
+func Audit(dir string, sys *detect.System) []Finding {
 	var findings []Finding
 	if sys == nil {
 		return findings
@@ -71,33 +84,42 @@ func Audit(sys *detect.System) []Finding {
 		}
 		library := dep.Clients[0]
 
-		findings = append(findings, Finding{
-			DepName: dep.Name,
-			DepType: dep.Type,
-			Library: library,
-			Check:   CheckTimeout,
-			Level:   LevelHint,
-			Hint: fmt.Sprintf(
-				"no timeout configuration could be confirmed for %s client %s from static detection — "+
-					"an unset timeout leaves retries and circuit breakers inert",
-				dep.Type, library),
-			Experiment: experimentFor(CheckTimeout, dep),
-		})
-
-		findings = append(findings, Finding{
-			DepName: dep.Name,
-			DepType: dep.Type,
-			Library: library,
-			Check:   CheckRetry,
-			Level:   LevelHint,
-			Hint: fmt.Sprintf(
-				"retry configuration for %s client %s could not be confirmed to have a cap, backoff, and jitter from static detection — "+
-					"an uncapped retry is an overload source, not a mitigation",
-				dep.Type, library),
-			Experiment: experimentFor(CheckRetry, dep),
-		})
+		findings = append(findings, buildFinding(dep, library, CheckTimeout, inspectTimeout(dir, dep.Type)))
+		findings = append(findings, buildFinding(dep, library, CheckRetry, inspectRetry(dir, dep.Type)))
 	}
 	return findings
+}
+
+// buildFinding renders an inspectResult into a Finding, wording the hint
+// according to R-AUD-6's three-way outcome.
+func buildFinding(dep detect.Dep, library string, check Check, res inspectResult) Finding {
+	f := Finding{
+		DepName:    dep.Name,
+		DepType:    dep.Type,
+		Library:    library,
+		Check:      check,
+		Level:      LevelHint,
+		Determined: res.determined,
+		Present:    res.determined && res.present,
+		Experiment: experimentFor(check, dep),
+	}
+
+	noun := "a timeout"
+	if check == CheckRetry {
+		noun = "a capped, backed-off, jittered retry"
+	}
+
+	switch {
+	case !res.determined:
+		f.Hint = fmt.Sprintf(
+			"not determined whether %s is configured for %s client %s: %s",
+			noun, dep.Type, library, res.reason)
+	case res.present:
+		f.Hint = fmt.Sprintf("%s confirmed configured for %s client %s", noun, dep.Type, library)
+	default:
+		f.Hint = fmt.Sprintf("%s not configured for %s client %s", noun, dep.Type, library)
+	}
+	return f
 }
 
 // experimentFor names the fault (R-AUD-4) that would prove or disprove the

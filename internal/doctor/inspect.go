@@ -1,0 +1,173 @@
+package doctor
+
+import (
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// sourceSite is a known client library's known construction call — the
+// bounded surface R-AUD-5 permits the audit to read. Adding a library here
+// is a deliberate, reviewed decision, mirroring internal/detect's own
+// client-pattern tables (SPEC.md §3.1). A dependency type absent from this
+// table is never source-inspected; Audit reports "not determined" for it
+// instead (R-AUD-6).
+type sourceSite struct {
+	depType string
+
+	// constructors identifies the call that builds the client (bounded
+	// "construction site" per R-AUD-5).
+	constructors []string
+
+	// timeoutSigs, if found anywhere in the file containing a constructor
+	// call, are evidence a timeout is configured.
+	timeoutSigs []string
+
+	// retrySigs, capSigs, backoffSigs, jitterSigs are evidence of a retry
+	// mechanism, and of its cap/backoff/jitter respectively (R-AUD-2).
+	retrySigs   []string
+	capSigs     []string
+	backoffSigs []string
+	jitterSigs  []string
+}
+
+// goSourceSites covers the Go client libraries internal/detect already
+// recognizes (lockfile.go's goClientPatterns) for which a timeout/retry
+// signal is knowable from the constructor's own file without following
+// arbitrary control flow.
+var goSourceSites = []sourceSite{
+	{
+		depType:      "postgresql",
+		constructors: []string{"pgxpool.New", "pgxpool.NewWithConfig", "pgx.Connect", "sql.Open"},
+		timeoutSigs:  []string{"ConnectTimeout", "context.WithTimeout", "context.WithDeadline", "StatementTimeout"},
+		retrySigs:    []string{"Retry", "retry", "Backoff", "backoff"},
+		capSigs:      []string{"MaxRetries", "MaxTries", "MaxElapsedTime"},
+		backoffSigs:  []string{"Backoff", "backoff"},
+		jitterSigs:   []string{"Jitter", "jitter"},
+	},
+	{
+		depType:      "redis",
+		constructors: []string{"redis.NewClient"},
+		timeoutSigs:  []string{"DialTimeout", "ReadTimeout", "WriteTimeout", "context.WithTimeout"},
+		retrySigs:    []string{"Retry", "retry", "Backoff", "backoff"},
+		capSigs:      []string{"MaxRetries"},
+		backoffSigs:  []string{"MinRetryBackoff", "MaxRetryBackoff"},
+		jitterSigs:   []string{"Jitter", "jitter"},
+	},
+	{
+		depType:      "mysql",
+		constructors: []string{"sql.Open"},
+		timeoutSigs:  []string{"Timeout", "ReadTimeout", "WriteTimeout", "context.WithTimeout"},
+		retrySigs:    []string{"Retry", "retry", "Backoff", "backoff"},
+		capSigs:      []string{"MaxRetries", "MaxTries"},
+		backoffSigs:  []string{"Backoff", "backoff"},
+		jitterSigs:   []string{"Jitter", "jitter"},
+	},
+}
+
+func siteFor(depType string) (sourceSite, bool) {
+	for _, s := range goSourceSites {
+		if s.depType == depType {
+			return s, true
+		}
+	}
+	return sourceSite{}, false
+}
+
+// inspectResult is what bounded source inspection could determine about
+// one resilience knob (R-AUD-6: "not determined" and "not configured" are
+// different outcomes).
+type inspectResult struct {
+	determined bool
+	present    bool
+	reason     string // populated when !determined
+}
+
+// inspectTimeout performs bounded, table-driven inspection (R-AUD-5) of
+// depType's known construction site under dir, and reports whether a
+// timeout could be confirmed configured (R-AUD-1).
+func inspectTimeout(dir, depType string) inspectResult {
+	site, text, ok, reason := locate(dir, depType)
+	if !ok {
+		return inspectResult{reason: reason}
+	}
+	return inspectResult{determined: true, present: containsAny(text, site.timeoutSigs)}
+}
+
+// inspectRetry performs bounded, table-driven inspection (R-AUD-5) of
+// depType's known construction site under dir, and reports whether retry
+// is configured with a cap, backoff, and jitter (R-AUD-2). A file that
+// shows no retry mechanism at all is a determined "not configured", since
+// it was actually read — not a guess.
+func inspectRetry(dir, depType string) inspectResult {
+	site, text, ok, reason := locate(dir, depType)
+	if !ok {
+		return inspectResult{reason: reason}
+	}
+	if !containsAny(text, site.retrySigs) {
+		return inspectResult{determined: true, present: false}
+	}
+	complete := containsAny(text, site.capSigs) &&
+		containsAny(text, site.backoffSigs) &&
+		containsAny(text, site.jitterSigs)
+	return inspectResult{determined: true, present: complete}
+}
+
+// locate finds depType's construction-site table entry and the file (if
+// any, under dir) where its constructor is actually called.
+func locate(dir, depType string) (site sourceSite, text string, ok bool, reason string) {
+	site, known := siteFor(depType)
+	if !known {
+		return sourceSite{}, "", false, "no known construction site in doctor's table for dependency type " + depType
+	}
+	text, found := findConstructionSite(dir, site.constructors)
+	if !found {
+		return sourceSite{}, "", false, "construction call for " + depType + " not found in source"
+	}
+	return site, text, true, ""
+}
+
+// findConstructionSite walks dir's Go source for a file that calls one of
+// constructors, and returns that file's content — the bounded inspection
+// window (R-AUD-5: the construction site, not the whole program).
+func findConstructionSite(dir string, constructors []string) (string, bool) {
+	if dir == "" {
+		return "", false
+	}
+	var text string
+	var found bool
+	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || found {
+			return nil
+		}
+		if d.IsDir() {
+			if d.Name() == "vendor" || d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		if containsAny(string(raw), constructors) {
+			text = string(raw)
+			found = true
+		}
+		return nil
+	})
+	return text, found
+}
+
+func containsAny(text string, subs []string) bool {
+	for _, s := range subs {
+		if strings.Contains(text, s) {
+			return true
+		}
+	}
+	return false
+}

@@ -105,8 +105,11 @@ func Evaluate(reg *Registry, sys *detect.System) []CoverageEntry {
 // Grammar (registry.yaml header, R-COV-3): `always`, `never`, or one or
 // more `namespace:value` terms joined by `|` (OR), each repeating its own
 // prefix. Every predicate must be derivable from R-DET-1 inputs alone
-// (R-COV-4): evaluated is false, and matched is always false, for any
-// namespace detect.System cannot represent — this function never guesses.
+// (R-COV-4). R-COV-5 lists the facts detection must expose for
+// spec:/platform:/lacks:, which detect.System.Coverage now carries; where a
+// fact still has no source (has:traffic-capture needs torture.yaml, not an
+// R-DET-1 input), evaluated is false and matched is always false — this
+// function never guesses a match for what it cannot evaluate (R-COV-6).
 func EvalPredicate(pred string, sys *detect.System) (matched, evaluated bool) {
 	switch pred {
 	case "always":
@@ -127,8 +130,25 @@ func EvalPredicate(pred string, sys *detect.System) (matched, evaluated bool) {
 	return false, true
 }
 
+// coverageFacts maps a full "namespace:value" term to the R-COV-5 fact on
+// detect.System.Coverage that answers it. These are the six facts R-COV-5
+// requires detection to expose; all are plain bools because detect can
+// always determine them (file/manifest presence, never "unknown").
+var coverageFacts = map[string]func(detect.Coverage) bool{
+	"spec:openapi":   func(c detect.Coverage) bool { return c.OpenAPI },
+	"spec:proto":     func(c detect.Coverage) bool { return c.Proto },
+	"platform:k8s":   func(c detect.Coverage) bool { return c.K8s },
+	"platform:aws":   func(c detect.Coverage) bool { return c.AWS },
+	"platform:azure": func(c detect.Coverage) bool { return c.Azure },
+	"lacks:otel":     func(c detect.Coverage) bool { return c.LacksOtel },
+}
+
 // evalTerm evaluates a single "namespace:value" predicate term.
 func evalTerm(term string, sys *detect.System) (matched, evaluated bool) {
+	if fact, ok := coverageFacts[term]; ok {
+		return fact(sys.Coverage), true
+	}
+
 	ns, val, ok := strings.Cut(term, ":")
 	if !ok {
 		return false, false
@@ -144,10 +164,10 @@ func evalTerm(term string, sys *detect.System) (matched, evaluated bool) {
 	case "lang":
 		return sys.Lang == val, true
 	default:
-		// spec:, platform:, has:, lacks: are not derivable from
-		// detect.System as it exists today (R-DET-1 covers compose +
-		// manifests, not OpenAPI specs or deployment platform). Report
-		// the gap rather than fabricate a match.
+		// has:traffic-capture (a config fact, not an R-DET-1 input) and
+		// anything else outside R-COV-5's table are not derivable from
+		// detect.System. Report the gap rather than fabricate a match
+		// (R-COV-6).
 		return false, false
 	}
 }

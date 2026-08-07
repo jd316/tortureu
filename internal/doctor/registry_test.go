@@ -55,15 +55,35 @@ func TestEvalPredicateOrAlternativesRepeatPrefix(t *testing.T) {
 	}
 }
 
+// spec: R-COV-5
+func TestEvalPredicateUsesDetectCoverageFacts(t *testing.T) {
+	sys := &detect.System{
+		Coverage: detect.Coverage{K8s: true, OpenAPI: false, LacksOtel: true},
+	}
+
+	if m, e := doctor.EvalPredicate("platform:k8s", sys); !e || !m {
+		t.Fatalf("platform:k8s: matched=%v evaluated=%v, want true/true", m, e)
+	}
+	if m, e := doctor.EvalPredicate("spec:openapi", sys); !e || m {
+		t.Fatalf("spec:openapi: matched=%v evaluated=%v, want false/true", m, e)
+	}
+	if m, e := doctor.EvalPredicate("lacks:otel", sys); !e || !m {
+		t.Fatalf("lacks:otel: matched=%v evaluated=%v, want true/true", m, e)
+	}
+}
+
 // spec: R-COV-4
+// spec: R-COV-6
 func TestEvalPredicateNeverGuessesUndetectableNamespace(t *testing.T) {
 	sys := &detect.System{}
-	// platform:/spec:/has:/lacks: are not derivable from detect.System as it
-	// exists today (R-DET-1 gives us compose + manifests, not platform or
-	// spec info). EvalPredicate must say so rather than fabricate an answer.
-	matched, evaluated := doctor.EvalPredicate("platform:k8s", sys)
+	// has:traffic-capture depends on torture.yaml config, not an R-DET-1
+	// input, so detect.System can never answer it (per its own Coverage
+	// doc comment). EvalPredicate must say so rather than fabricate an
+	// answer — a predicate the system genuinely cannot evaluate must be
+	// reported as unevaluable, never silently treated as false (R-COV-6).
+	matched, evaluated := doctor.EvalPredicate("has:traffic-capture", sys)
 	if evaluated {
-		t.Fatalf("expected platform: predicate to be unevaluable from detect.System, got matched=%v evaluated=%v", matched, evaluated)
+		t.Fatalf("expected has:traffic-capture to be unevaluable from detect.System, got matched=%v evaluated=%v", matched, evaluated)
 	}
 	if matched {
 		t.Fatal("an unevaluable predicate must never report a match")
