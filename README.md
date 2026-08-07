@@ -52,7 +52,7 @@ whoever (or whatever) reads this. `tortureu mcp` hands the same structure to a c
 
 | Document | What it is |
 |---|---|
-| [`SPEC.md`](SPEC.md) | normative. 106 numbered requirements. Build against this. |
+| [`SPEC.md`](SPEC.md) | normative. 108 numbered requirements. Build against this. |
 | [`RESEARCH.md`](RESEARCH.md) | the survey: 151 tools across 19 domains, and why each is driven, delegated or merely named |
 | [`VERDICT.md`](VERDICT.md) | verdict schema, exit codes, MCP surface |
 | [`BENCHMARKS.md`](BENCHMARKS.md) | how this gets evaluated, and what we refuse to claim |

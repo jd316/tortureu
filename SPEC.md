@@ -421,6 +421,19 @@ it is a presentation format with no stability guarantee.
 
 **R-CLI-2** — Every verb **MUST** be listed in `registry.yaml` as the `how:` of at least one tool.
 
+**R-CLI-4** — `init` **MUST** write a `torture.yaml` that `run` accepts, including a minimal
+starter `load:` and `assert:` clearly marked as a starting point to edit.
+
+Detection cannot infer scenarios (R-DET-1 forbids reading source), so the starter is deliberately
+generic — a low-rate ramp against the detected SUT with a conservative latency and error-rate
+assert. It **MUST NOT** fabricate specifics it cannot know, such as endpoint paths beyond `/`, and
+**MUST** carry a comment saying so.
+
+The alternative — emitting a file that `run` rejects — makes the first experience an error
+message. For a tool whose adoption barrier is fear (RESEARCH.md: 62% cite fear of causing
+disruption), a first run that fails to start is the worst possible introduction. *(found by
+running `tortureu init` on a synthetic repo)*
+
 **R-CLI-3** — `doctor` **MUST** report uncovered domains and `know`-tier suggestions with their
 trigger condition, labelled by tier per **R-SCOPE-4**.
 
@@ -616,6 +629,13 @@ quietly widen R-DET-1's bound. *(Task 1 escalation)*
 All are file- or manifest-presence checks and therefore inside R-DET-1. Before this requirement,
 29 of 151 registry entries (19%) could never match, so `suggest` was silent for a fifth of the
 catalogue — which defeats R-SCOPE-3.
+
+**R-COV-8** — `registry.yaml` **MUST** be embedded in the binary (`go:embed`), not read from the
+working directory. `doctor` and `suggest` are the front door to the `delegate` and `know` tiers, so
+a registry loaded from disk means they work only inside TortureU's own repo and fail everywhere a
+user would actually run them — which is the entire point of shipping a single static binary (D-6).
+*(found by running the built CLI against a synthetic repo: `doctor: read registry: open
+registry.yaml: no such file or directory`)*
 
 **R-COV-6** — A predicate the system genuinely cannot evaluate **MUST** be reported as unevaluable,
 never silently treated as false. A tool that fails to suggest is indistinguishable from a tool with
