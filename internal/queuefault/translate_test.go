@@ -1,6 +1,7 @@
 package queuefault
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jdb316/tortureu/internal/config"
@@ -124,6 +125,101 @@ func TestTranslate_DuplicateCarriesTargetAndRate(t *testing.T) {
 	}
 	if act.Duplicate.Rate != 0.05 {
 		t.Fatalf("Rate = %v, want 0.05", act.Duplicate.Rate)
+	}
+}
+
+// spec: R-CFG-23
+// duplicate is a proportion of messages, not a multiplier: duplicate: 5
+// (read as a rate, 500%) is the motivating case R-CFG-23 names. Translate
+// MUST reject it and name the fault, the modifier, and the legal range
+// rather than passing a nonsensical redelivery fraction to a real Applier.
+// This package re-checks independently of internal/config (R-DC2-6-style
+// defence-in-depth) since a Fault can be built directly, bypassing Parse.
+func TestTranslate_RejectsDuplicateAboveRange(t *testing.T) {
+	f := config.Fault{
+		Name: "dup_message", Target: "orders_queue", Verb: "duplicate",
+		Inject: map[string]any{"duplicate": 5.0},
+	}
+	_, err := Translate(f)
+	if err == nil {
+		t.Fatal("Translate: want error for duplicate rate above 1.0, got nil")
+	}
+	for _, want := range []string{"dup_message", "duplicate", "0.0", "1.0"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Translate error %q: want it to mention %q (fault, modifier, and legal range)", err.Error(), want)
+		}
+	}
+}
+
+// spec: R-CFG-23
+// The symmetric below-range case: a negative proportion is as meaningless
+// as one above 1.0.
+func TestTranslate_RejectsDuplicateBelowRange(t *testing.T) {
+	f := config.Fault{
+		Name: "dup_message", Target: "orders_queue", Verb: "duplicate",
+		Inject: map[string]any{"duplicate": -1.0},
+	}
+	if _, err := Translate(f); err == nil {
+		t.Fatal("Translate: want error for duplicate rate below 0.0, got nil")
+	}
+}
+
+// spec: R-CFG-23
+// 0.0 and 1.0 are the inclusive boundaries of duplicate's legal range
+// ("0.0 … 1.0"). Off-by-one range checks fail exactly at boundaries, so
+// both MUST be accepted, not just values strictly between them.
+func TestTranslate_AcceptsDuplicateAtRangeBoundaries(t *testing.T) {
+	for _, rate := range []float64{0.0, 1.0} {
+		f := config.Fault{
+			Name: "dup_message", Target: "orders_queue", Verb: "duplicate",
+			Inject: map[string]any{"duplicate": rate},
+		}
+		act, err := Translate(f)
+		if err != nil {
+			t.Fatalf("Translate(duplicate: %v): unexpected error: %v", rate, err)
+		}
+		if act.Duplicate.Rate != rate {
+			t.Fatalf("Rate = %v, want %v", act.Duplicate.Rate, rate)
+		}
+	}
+}
+
+// spec: R-CFG-23
+// count (poison_pill's modifier) must be an integer >= 1: zero or negative
+// messages is not a poison pill. Translate MUST reject it and name the
+// fault, the modifier, and the legal range.
+func TestTranslate_RejectsCountBelowOne(t *testing.T) {
+	for _, count := range []any{0, -1} {
+		f := config.Fault{
+			Name: "bad_message", Target: "orders_queue", Verb: "poison_pill",
+			Inject: map[string]any{"poison_pill": true, "count": count},
+		}
+		_, err := Translate(f)
+		if err == nil {
+			t.Fatalf("Translate(count: %v): want error, got nil", count)
+		}
+		for _, want := range []string{"bad_message", "count", "1"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("Translate(count: %v) error %q: want it to mention %q (fault, modifier, and legal range)", count, err.Error(), want)
+			}
+		}
+	}
+}
+
+// spec: R-CFG-23
+// 1 is count's inclusive lower boundary ("integer >= 1") and MUST be
+// accepted, not just values strictly above it.
+func TestTranslate_AcceptsCountAtLowerBoundary(t *testing.T) {
+	f := config.Fault{
+		Name: "bad_message", Target: "orders_queue", Verb: "poison_pill",
+		Inject: map[string]any{"poison_pill": true, "count": 1},
+	}
+	act, err := Translate(f)
+	if err != nil {
+		t.Fatalf("Translate: unexpected error: %v", err)
+	}
+	if act.PoisonPill.Count != 1 {
+		t.Fatalf("Count = %d, want 1", act.PoisonPill.Count)
 	}
 }
 

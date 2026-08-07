@@ -110,6 +110,9 @@ func Translate(f config.Fault) (Action, error) {
 			}
 			count = n
 		}
+		if count < 1 {
+			return Action{}, fmt.Errorf("fault %q: count: %d is out of range, legal range is integer >= 1 (R-CFG-23)", f.Name, count)
+		}
 		return Action{Fault: f, Kind: KindPoisonPill, PoisonPill: &PoisonPill{Topic: f.Target, Count: count}}, nil
 	case "duplicate":
 		raw, ok := f.Inject["duplicate"]
@@ -119,6 +122,9 @@ func Translate(f config.Fault) (Action, error) {
 		rate, err := toFloat(raw)
 		if err != nil {
 			return Action{}, fmt.Errorf("fault %q: duplicate: %w", f.Name, err)
+		}
+		if rate < 0.0 || rate > 1.0 {
+			return Action{}, fmt.Errorf("fault %q: duplicate: %v is out of range, legal range is 0.0 … 1.0 (R-CFG-23; a proportion, not a multiplier)", f.Name, rate)
 		}
 		return Action{Fault: f, Kind: KindDuplicate, Duplicate: &Duplicate{Topic: f.Target, Rate: rate}}, nil
 	default:
