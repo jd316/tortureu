@@ -683,6 +683,10 @@ nothing to suggest, and only the second is honest.
   Currently `""`. Candidates: `"correlated"` (we still schedule the faults, so time-window
   attribution holds — see D-4), or a distinct `"none"`. Raised by the Task 1 implementer.
 - **TBD-7** — `Gemfile` and `pom.xml` manifest support (deferred from R-DET-14).
+- **TBD-9** — `Finding.Chain` (the fault -> symptom hop list in `VERDICT.md` §1) stays empty: no
+  trace-ingestion pipeline exists in v0, and fabricating hops would be worse than omitting them.
+  Binding once OpenTelemetry ingestion ships, which is also what raises confidence from
+  `correlated` to `caused` (D-4). Raised by Task 7.
 - **TBD-8** — **R-DC2-5** (secret-scrub captured traffic on write) has no capture/replay pipeline
   to attach to in v0, so there is no write path to scrub. It becomes binding the moment `capture`
   ships and **MUST** be implemented in the same change, never after: scrubbing retrofitted onto an
