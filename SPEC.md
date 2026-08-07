@@ -509,6 +509,19 @@ delivered or consumed. Unlike a network toxic, a published message is durable �
 NOT** imply reversibility it cannot deliver, in the same posture as **R-EXE-16**'s SIGKILL caveat.
 *(Task 5b escalation)*
 
+**R-EXE-19** — A verb passed over under **R-EXE-15** **MUST** be routed to its owning layer. Silently
+skipping it is forbidden, and if no owning layer is wired the run **MUST** fail rather than proceed.
+
+Pass-over means *"not mine, give it to the owner"* — never *"nothing to do"*. A declared fault that
+never fires is the worst failure this tool can produce: the run completes, the verdict reads
+`pass`, and the user concludes their system withstood a fault that was never applied. Unlike a
+crash, nothing signals that the result is meaningless.
+
+This is the mirror of **R-EXE-15**: that requirement stops a layer erroring on a verb it does not
+own; this one stops the same verb vanishing. *(raised by the R-CFG-23 re-review, which found
+`error_rate` validated but never invoked — `internal/run`'s scheduler skipped every passed-over
+fault)*
+
 **R-EXE-16** — Teardown (**R-EXE-5**) **MUST** cover in-process panic and **SHOULD** cover SIGINT and
 SIGTERM. `SIGKILL` cannot be trapped; the tool **MUST** document that limit rather than implying
 protection it cannot provide, and **SHOULD** make faults recoverable on next start so a `SIGKILL`ed
