@@ -587,6 +587,20 @@ escalated)*
 
 **R-MCP-4** — `propose_experiments` **MUST** return `torture.yaml` fragments, not prose.
 
+**R-MCP-6** — `describe_system()` **MUST** include registry coverage and tier-labelled suggestions
+for the detected system, so an agent reaches the `delegate` and `know` tiers through the MCP
+surface, not only a human through `doctor`.
+
+Without this, "all in one place" holds for humans and fails for agents: the five MCP tools reach
+only the 28 `drive`-tier tools, leaving the other 123 visible exclusively at the CLI. Since agents
+are half this project's audience (DC-1), that is half the claim missing.
+
+It goes in `describe_system` rather than a sixth tool because **R-MCP-1** fixes the surface at five,
+and because coverage is a fact *about the system* — the same noun `describe_system` already owns
+(it reports observability coverage for exactly this reason). Suggestions **MUST** carry their tier
+(**R-SCOPE-4**): an agent must never be told we execute something we only name. *(raised by the
+Task 9b review's R-SCOPE-4 note)*
+
 **R-MCP-5** — Tool names **MUST** satisfy **R-DC1-1**.
 
 ---
