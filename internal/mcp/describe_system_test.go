@@ -46,3 +46,48 @@ func TestDescribeSystem_NoGapsIsAnEmptySliceNotNil(t *testing.T) {
 		t.Error("Gaps is nil when there are none — silence about \"no gaps\" must still be an explicit empty list, not the zero value of an absent field (R-DET-7)")
 	}
 }
+
+// spec: R-MCP-6
+func TestDescribeSystem_IncludesRegistrySuggestionsForDetectedSystem(t *testing.T) {
+	sys := &detect.System{
+		SUT:  "checkout-api",
+		Deps: []detect.Dep{{Name: "postgres", Type: "postgresql", Address: "postgres:5432"}},
+	}
+
+	out := DescribeSystem(sys)
+
+	found := false
+	for _, s := range out.Suggestions {
+		// hammerdb (registry.yaml, tier: know, when: dep:postgresql|...) is
+		// the delegate/know-tier reach R-MCP-6 exists to give an agent:
+		// nothing in the five MCP tools alone would ever surface it.
+		if s.ID == "hammerdb" {
+			found = true
+			if s.Tier != "know" {
+				t.Errorf("hammerdb suggestion Tier = %q, want %q", s.Tier, "know")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("Suggestions = %+v, want a hammerdb entry — a postgresql dependency must surface registry coverage beyond the drive-tier MCP tools (R-MCP-6)", out.Suggestions)
+	}
+}
+
+// spec: R-SCOPE-4
+func TestDescribeSystem_EverySuggestionCarriesItsTier(t *testing.T) {
+	sys := &detect.System{
+		SUT:  "checkout-api",
+		Deps: []detect.Dep{{Name: "postgres", Type: "postgresql", Address: "postgres:5432"}},
+	}
+
+	out := DescribeSystem(sys)
+
+	if len(out.Suggestions) == 0 {
+		t.Fatal("Suggestions is empty; this test needs at least one to check for a tier label")
+	}
+	for _, s := range out.Suggestions {
+		if s.Tier == "" {
+			t.Errorf("suggestion %q has no Tier — an agent must never be told we execute something we only name (R-SCOPE-4)", s.ID)
+		}
+	}
+}

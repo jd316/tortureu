@@ -1,6 +1,9 @@
 package mcp
 
-import "github.com/jdb316/tortureu/internal/detect"
+import (
+	"github.com/jdb316/tortureu/internal/detect"
+	"github.com/jdb316/tortureu/internal/doctor"
+)
 
 // DepInfo is one detected dependency, mirrored from detect.Dep for the
 // describe_system tool's output shape.
@@ -29,15 +32,29 @@ type ObsInfo struct {
 	MaxConfidence string `json:"max_confidence,omitempty"`
 }
 
+// Suggestion is one registry.yaml tool applicable to the detected system
+// (R-MCP-6): the delegate/know-tier reach the five MCP tools alone don't
+// have. Tier is always carried (R-SCOPE-4) — an agent reading Suggestions
+// must never mistake a `know`-tier name for something this surface can
+// execute; only `run_experiment` executes anything (R-MCP-2).
+type Suggestion struct {
+	Domain string `json:"domain"`
+	ID     string `json:"id"`
+	Tier   string `json:"tier"`
+	How    string `json:"how"`
+	Note   string `json:"note,omitempty"`
+}
+
 // DescribeSystemResult is the describe_system tool's output: services,
-// deps, external egress, and observability coverage, plus the gaps
-// detection could not classify (R-DET-7).
+// deps, external egress, observability coverage, registry suggestions
+// (R-MCP-6), plus the gaps detection could not classify (R-DET-7).
 type DescribeSystemResult struct {
-	SUT           string     `json:"sut"`
-	Deps          []DepInfo  `json:"deps"`
-	Egress        EgressInfo `json:"egress"`
-	Observability ObsInfo    `json:"observability"`
-	Gaps          []string   `json:"gaps"`
+	SUT           string       `json:"sut"`
+	Deps          []DepInfo    `json:"deps"`
+	Egress        EgressInfo   `json:"egress"`
+	Observability ObsInfo      `json:"observability"`
+	Suggestions   []Suggestion `json:"suggestions"`
+	Gaps          []string     `json:"gaps"`
 }
 
 // DescribeSystem reports what internal/detect knows about sys, including
@@ -45,8 +62,9 @@ type DescribeSystemResult struct {
 // gaps" and "gaps not reported" are never the same JSON shape.
 func DescribeSystem(sys *detect.System) DescribeSystemResult {
 	out := DescribeSystemResult{
-		Egress: EgressInfo{Classified: []string{}, Unclassified: []string{}},
-		Gaps:   []string{},
+		Egress:      EgressInfo{Classified: []string{}, Unclassified: []string{}},
+		Suggestions: []Suggestion{},
+		Gaps:        []string{},
 	}
 	if sys == nil {
 		return out
@@ -79,6 +97,36 @@ func DescribeSystem(sys *detect.System) DescribeSystemResult {
 
 	if sys.Gaps != nil {
 		out.Gaps = append(out.Gaps, sys.Gaps...)
+	}
+
+	out.Suggestions = suggestionsFor(sys)
+	return out
+}
+
+// suggestionsFor evaluates the embedded registry.yaml against sys (R-MCP-6),
+// reusing internal/doctor's own evaluator rather than reimplementing
+// predicate matching. Only entries doctor could actually evaluate and that
+// matched are surfaced — an unevaluable predicate is a gap doctor already
+// declines to guess at (R-COV-6), not a suggestion. A registry load failure
+// (never expected against the embedded copy) degrades to no suggestions
+// rather than a panic or a fabricated one.
+func suggestionsFor(sys *detect.System) []Suggestion {
+	reg, err := doctor.LoadEmbeddedRegistry()
+	if err != nil {
+		return []Suggestion{}
+	}
+	out := []Suggestion{}
+	for _, entry := range doctor.Evaluate(reg, sys) {
+		if !entry.Evaluated || !entry.Applies {
+			continue
+		}
+		out = append(out, Suggestion{
+			Domain: entry.Domain,
+			ID:     entry.Tool.ID,
+			Tier:   entry.Tool.Tier,
+			How:    entry.Tool.How,
+			Note:   entry.Tool.Note,
+		})
 	}
 	return out
 }
