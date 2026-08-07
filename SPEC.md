@@ -480,6 +480,24 @@ A rejection here is a defect, not caution: `torture.example.yaml` declares `erro
 that errors on an unowned verb makes the project's own reference document unrunnable. This mirrors
 R-CFG-16/17, where `internal/k6` passes over `promql:` asserts it does not own.
 
+**R-CFG-23** — Numeric modifier values **MUST** be range-checked at parse time, and the error
+**MUST** name the fault, the modifier, and the legal range:
+
+| Modifier | Legal range |
+|---|---|
+| `duplicate` | `0.0 … 1.0` — a **proportion** of messages, not a multiplier |
+| `error_rate` | `0.0 … 1.0` |
+| `count` (`poison_pill`) | integer ≥ 1 |
+| `workers` | integer ≥ 1 |
+
+`duplicate: 5` is the motivating case: read as a rate it means 500%, which is meaningless, and
+nothing rejected it. A fault whose magnitude is nonsense produces a run whose verdict is nonsense,
+and the user has no way to tell that is what happened.
+
+Owning layers **MUST** re-check independently rather than trusting the parser — the same
+defence-in-depth rule as **R-DC2-6**. Config validation fails fast with a good message; the owning
+layer's check is what holds when a caller bypasses the parser. *(Task 5b review)*
+
 **R-EXE-17** — `poison_pill`'s `count` modifier defaults to **1** when omitted. One malformed
 message is sufficient to block a partition indefinitely (RESEARCH.md §18), so the smallest
 injection is both the realistic default and the least destructive one. Defaults that inject more
