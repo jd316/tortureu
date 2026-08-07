@@ -93,6 +93,37 @@ var goModRequireRe = regexp.MustCompile(`(\S+)\s+v\d+\.\d+\.\d+\S*`)
 // [tool.poetry.dependencies] table.
 var pyprojectKeyRe = regexp.MustCompile(`(?m)^\s*([A-Za-z0-9_.-]+)\s*=`)
 
+// pep621DepsArrayRe finds the contents of any "dependencies = [...]" array —
+// PEP 621's standardized, tool-agnostic dependency list (used by default by
+// Hatch and PDM, and supported by Poetry too). R-DET-14 targets pyproject.toml
+// at the ecosystem level, so both dialects must be recognized.
+var pep621DepsArrayRe = regexp.MustCompile(`(?s)dependencies\s*=\s*\[(.*?)\]`)
+
+// pep621ItemRe finds quoted requirement strings inside a dependencies array.
+var pep621ItemRe = regexp.MustCompile(`"([^"]+)"|'([^']+)'`)
+
+// pep621NameRe extracts the bare package name from a PEP 508 requirement
+// string (e.g. "psycopg2>=2.9.9" or "boto3[s3]==1.34" -> "psycopg2"/"boto3").
+var pep621NameRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+`)
+
+// pep621PackageNames extracts every package name from a "dependencies = [...]"
+// array in raw pyproject.toml content.
+func pep621PackageNames(raw string) []string {
+	var names []string
+	for _, arr := range pep621DepsArrayRe.FindAllStringSubmatch(raw, -1) {
+		for _, item := range pep621ItemRe.FindAllStringSubmatch(arr[1], -1) {
+			req := item[1]
+			if req == "" {
+				req = item[2]
+			}
+			if name := pep621NameRe.FindString(req); name != "" {
+				names = append(names, name)
+			}
+		}
+	}
+	return names
+}
+
 // detectLockfiles reads language manifests (R-DET-1, capped to the R-DET-14
 // v0 set: go.mod, package.json, pyproject.toml), sets sys.Lang, and attaches
 // client libraries to dependencies (R-DET-5).
@@ -136,6 +167,9 @@ func detectLockfiles(dir string, sys *System) error {
 		sys.Lang = "python"
 		for _, m := range pyprojectKeyRe.FindAllStringSubmatch(string(raw), -1) {
 			matchClient(sys, pyClientPatterns, m[1])
+		}
+		for _, name := range pep621PackageNames(string(raw)) {
+			matchClient(sys, pyClientPatterns, name)
 		}
 	}
 
