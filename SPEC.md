@@ -480,6 +480,17 @@ A rejection here is a defect, not caution: `torture.example.yaml` declares `erro
 that errors on an unowned verb makes the project's own reference document unrunnable. This mirrors
 R-CFG-16/17, where `internal/k6` passes over `promql:` asserts it does not own.
 
+**R-EXE-17** — `poison_pill`'s `count` modifier defaults to **1** when omitted. One malformed
+message is sufficient to block a partition indefinitely (RESEARCH.md §18), so the smallest
+injection is both the realistic default and the least destructive one. Defaults that inject more
+than the minimum make a fault harder to reason about and slower to clean up.
+
+**R-EXE-18** — Queue-fault teardown **MUST** state that it can only stop further injection. It
+cannot un-publish a poison pill already in the topic's log, nor retract a duplicate already
+delivered or consumed. Unlike a network toxic, a published message is durable — the tool **MUST
+NOT** imply reversibility it cannot deliver, in the same posture as **R-EXE-16**'s SIGKILL caveat.
+*(Task 5b escalation)*
+
 **R-EXE-16** — Teardown (**R-EXE-5**) **MUST** cover in-process panic and **SHOULD** cover SIGINT and
 SIGTERM. `SIGKILL` cannot be trapped; the tool **MUST** document that limit rather than implying
 protection it cannot provide, and **SHOULD** make faults recoverable on next start so a `SIGKILL`ed
