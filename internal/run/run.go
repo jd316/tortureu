@@ -20,7 +20,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
+	"os/signal"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/jdb316/tortureu/internal/config"
@@ -84,9 +89,11 @@ type LoadRunner interface {
 // TopologyApplier applies the R-DC2-3 egress overlay against the SUT's
 // compose stack so enforcement is structural (Docker's network stack), not
 // a policy check TortureU could get wrong. Apply MUST return before the
-// first request is generated (R-EXE-3).
+// first request is generated (R-EXE-3). externalHosts are the classified
+// mock/real "host:port" egress keys that need a DNS path to the proxy (see
+// ComposeTopologyApplier.Apply's doc comment).
 type TopologyApplier interface {
-	Apply(composePath string, top egress.Topology) error
+	Apply(composePath string, top egress.Topology, externalHosts []string) error
 }
 
 // PromQuerier evaluates one promql: expression over the run window
@@ -159,7 +166,7 @@ func newVerdict(now time.Time, scenario string) *verdict.Verdict {
 //
 // Run never itself calls os.Exit; the caller derives the process exit code
 // from verdict.ExitCode(*Run(...)) per R-VER-7.
-func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) *verdict.Verdict {
+func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVerdict *verdict.Verdict) {
 	now := deps.Now
 	if now == nil {
 		now = time.Now
@@ -173,24 +180,79 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) *verdic
 	}
 
 	manager := &fault.Manager{}
-	caught, stopSignals := manager.WatchSignals() // R-EXE-16
-	defer stopSignals()
 
-	// teardownExpiring is reassigned once scheduleFaults starts (it tracks
-	// the for:-duration faults applied outside fault.Manager, see
-	// scheduler.go); the panic-recover below closes over the variable, not
-	// its zero value, so it still reaches those faults if the panic happens
-	// after scheduling begins.
+	// teardownExpiring is reassigned once scheduleFaults starts (it tears
+	// down the for:-duration faults applied outside fault.Manager, see
+	// scheduler.go). It starts as a no-op (nothing to tear down yet) and is
+	// read/written through a mutex because both the signal watcher below and
+	// Run's own main flow can reach it concurrently, from a point in the
+	// run's lifetime that isn't known in advance.
+	var teMu sync.Mutex
 	teardownExpiring := func() {}
+	setTeardownExpiring := func(f func()) {
+		teMu.Lock()
+		teardownExpiring = f
+		teMu.Unlock()
+	}
+	teardownAll := func() {
+		manager.Teardown() // R-EXE-5
+		teMu.Lock()
+		f := teardownExpiring
+		teMu.Unlock()
+		f()
+	}
+
+	// R-EXE-16: a signal must tear everything down no matter when it
+	// arrives — before load starts, mid-load, or in the window between the
+	// load finishing and the scheduler's own goroutines draining. A
+	// previous version only checked for a caught signal inside the one
+	// select guarding handle.Done(), so a signal in any other window ran
+	// fault.Manager's own teardown (which manager.WatchSignals triggers
+	// internally, unconditionally) but never reached teardownExpiring,
+	// silently leaving for:-duration faults applied. This watcher runs for
+	// Run's entire body instead, so there is no such window.
+	var aborted atomic.Bool
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	quit := make(chan struct{})
+	caught := make(chan os.Signal, 1)
+	go func() {
+		select {
+		case sig := <-sigCh:
+			teardownAll()
+			aborted.Store(true)
+			caught <- sig
+		case <-quit:
+		}
+	}()
+	defer func() {
+		signal.Stop(sigCh)
+		close(quit)
+	}()
 
 	defer func() {
 		if r := recover(); r != nil {
-			manager.Teardown() // R-EXE-5: teardown on panic
-			teardownExpiring()
+			// A panic unwinds past every `return finish(...)` call site, so
+			// without a named return value this would hand the caller nil
+			// instead of a verdict — Run has one (result) specifically so
+			// this assignment actually reaches the caller.
+			teardownAll() // R-EXE-5: teardown on panic
 			v.Status = verdict.StatusError
 			v.DurationS = int(now().Sub(started).Seconds())
+			runVerdict = v
 		}
 	}()
+
+	// abortedEarly returns the aborted verdict if the signal watcher already
+	// fired (and already tore everything down) by the time a synchronous
+	// step below finishes; called after every step through which a signal
+	// might have arrived while this goroutine was blocked elsewhere.
+	abortedEarly := func() (*verdict.Verdict, bool) {
+		if aborted.Load() {
+			return finish(verdict.StatusAborted), true
+		}
+		return nil, false
+	}
 
 	// 1. Reset (R-CFG-20/21, R-EXE-2), unless --no-reset.
 	if opts.NoReset {
@@ -198,6 +260,9 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) *verdic
 	} else if err := deps.Reset.Reset(cfg.Reset.Command); err != nil {
 		v.Reset = "failed"
 		return finish(verdict.StatusAborted)
+	}
+	if av, ok := abortedEarly(); ok {
+		return av
 	}
 
 	// 2. Classify egress; abort before any load starts (R-DC2-2).
@@ -209,17 +274,37 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) *verdic
 	if err := egress.CheckMultiplier(classes, opts.multiplier(), opts.AllowRealTraffic); err != nil {
 		return finish(verdict.StatusAborted)
 	}
+	if av, ok := abortedEarly(); ok {
+		return av
+	}
 
 	// 3. Apply the topology overlay so egress is enforced (R-DC2-3, R-EXE-3)
-	// before load starts generating requests.
+	// before load starts generating requests. externalHosts (class: mock or
+	// real) need a proxy reachable *before* any fault ever targets them —
+	// a host with no fault at all must still never be reachable directly
+	// (R-DC2-2's guarantee holds for the whole run, not just fault windows).
 	top := egress.BuildTopology(sutNetworkName, egressNetworkName, proxyServiceName)
-	if err := deps.Topology.Apply(cfg.Target.Compose, top); err != nil {
+	var externalHosts []string
+	for host, class := range classes {
+		if class == egress.ClassReal || class == egress.ClassMock {
+			externalHosts = append(externalHosts, host)
+		}
+	}
+	if err := deps.Topology.Apply(cfg.Target.Compose, top, externalHosts); err != nil {
 		return finish(verdict.StatusError)
+	}
+	if preparer, ok := deps.Applier.(interface{ EnsureProxies([]string) error }); ok {
+		if err := preparer.EnsureProxies(externalHosts); err != nil {
+			return finish(verdict.StatusError)
+		}
 	}
 
 	script, err := k6.Compile(cfg)
 	if err != nil {
 		return finish(verdict.StatusError)
+	}
+	if av, ok := abortedEarly(); ok {
+		return av
 	}
 
 	// 4. Start load; schedule faults against k6's phase markers (R-EXE-8).
@@ -227,29 +312,31 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) *verdic
 	if err != nil {
 		return finish(verdict.StatusError)
 	}
-	var schedDone <-chan []error
-	schedDone, teardownExpiring = scheduleFaults(cfg.Faults, handle.Markers(), started, manager, deps.Applier, deps.QueueApplier)
-	teardownAll := func() {
-		manager.Teardown()
-		teardownExpiring()
-	}
+	schedDone, expiringTeardown := scheduleFaults(cfg.Faults, handle.Markers(), started, manager, deps.Applier, deps.QueueApplier)
+	setTeardownExpiring(expiringTeardown)
 
 	var result LoadResult
 	select {
 	case result = <-handle.Done():
 	case <-caught:
-		teardownAll()
+		// teardownAll already ran inside the signal watcher goroutine.
 		return finish(verdict.StatusAborted)
 	case loadErr := <-handle.Err():
 		_ = loadErr
 		teardownAll()
 		return finish(verdict.StatusError)
 	}
+	if av, ok := abortedEarly(); ok {
+		return av
+	}
 	// R-EXE-19: a fault that couldn't be routed to a wired owner fails the
 	// run instead of silently proceeding as if it had been applied.
 	if schedErrs := <-schedDone; len(schedErrs) > 0 {
 		teardownAll()
 		return finish(verdict.StatusError)
+	}
+	if av, ok := abortedEarly(); ok {
+		return av
 	}
 
 	metrics, err := k6.IngestSummary(result.SummaryJSON)

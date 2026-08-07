@@ -22,7 +22,7 @@ func TestScheduleFaults_WaitsForPhaseMarkerNotWallClock(t *testing.T) {
 	// Give the scheduler time to (wrongly) fire on a wall-clock timer if it
 	// had one; it must not, since "peak" has not started yet on k6's clock.
 	time.Sleep(50 * time.Millisecond)
-	if applier.applyCalls != 0 {
+	if applier.applyCalls.Load() != 0 {
 		t.Fatal("fault applied before its phase marker arrived — R-EXE-1/R-EXE-8 require anchoring to k6's own clock, not a wall-clock guess")
 	}
 
@@ -36,7 +36,7 @@ func TestScheduleFaults_WaitsForPhaseMarkerNotWallClock(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("scheduleFaults never completed after the marker arrived")
 	}
-	if applier.applyCalls != 1 {
-		t.Errorf("applyCalls = %d, want 1 after the peak marker arrived", applier.applyCalls)
+	if applier.applyCalls.Load() != 1 {
+		t.Errorf("applyCalls = %d, want 1 after the peak marker arrived", applier.applyCalls.Load())
 	}
 }

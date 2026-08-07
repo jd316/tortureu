@@ -2,6 +2,7 @@ package run
 
 import (
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,7 +30,7 @@ type fakeTopology struct {
 	err    error
 }
 
-func (f *fakeTopology) Apply(composePath string, top egress.Topology) error {
+func (f *fakeTopology) Apply(composePath string, top egress.Topology, externalHosts []string) error {
 	f.called = true
 	return f.err
 }
@@ -57,7 +58,7 @@ func (h *fakeLoadHandle) Err() <-chan error           { return h.errCh }
 // fakeLoadRunner records whether Start was called.
 type fakeLoadRunner struct {
 	called bool
-	handle *fakeLoadHandle
+	handle LoadHandle
 	err    error
 }
 
@@ -192,7 +193,7 @@ func TestRun_AppliesTopologyBeforeStartingLoad(t *testing.T) {
 
 type orderRecordingTopology struct{ order *[]string }
 
-func (o *orderRecordingTopology) Apply(composePath string, top egress.Topology) error {
+func (o *orderRecordingTopology) Apply(composePath string, top egress.Topology, externalHosts []string) error {
 	*o.order = append(*o.order, "topology")
 	return nil
 }
@@ -230,17 +231,22 @@ func TestRun_TearsDownFaultsBeforeVerdictOnNormalCompletion(t *testing.T) {
 		Applier:  applier,
 	}, Options{})
 
-	if applier.applyCalls == 0 {
+	if applier.applyCalls.Load() == 0 {
 		t.Fatal("fault was never applied — test setup is broken")
 	}
-	if applier.undoCalls == 0 {
+	if applier.undoCalls.Load() == 0 {
 		t.Error("fault was never torn down — R-EXE-5 requires every applied fault to be removed before the run ends")
 	}
 }
 
+// trackingApplier's counters are plain ints read from the test goroutine
+// while scheduleFaults's own goroutines write them concurrently (some tests
+// poll applyCalls before the synchronizing schedDone channel receive that
+// would otherwise happen-before a safe read) — atomic keeps that race-free
+// without changing what the counts mean.
 type trackingApplier struct {
-	applyCalls int
-	undoCalls  int
+	applyCalls atomic.Int64
+	undoCalls  atomic.Int64
 }
 
 func (a *trackingApplier) ApplyToxic(name string, t fault.Toxic) (func() error, error) {
@@ -248,9 +254,9 @@ func (a *trackingApplier) ApplyToxic(name string, t fault.Toxic) (func() error, 
 }
 
 func (a *trackingApplier) ApplyDocker(name string, d fault.DockerAction) (func() error, error) {
-	a.applyCalls++
+	a.applyCalls.Add(1)
 	return func() error {
-		a.undoCalls++
+		a.undoCalls.Add(1)
 		return nil
 	}, nil
 }

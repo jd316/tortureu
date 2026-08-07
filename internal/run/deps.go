@@ -3,8 +3,11 @@ package run
 // NewRealDeps wires the concrete Docker/Toxiproxy/k6/Prometheus
 // implementations built in this package into one Deps for production use.
 // toxiproxyURL and promURL are the control-plane addresses; pass "" for
-// promURL when no Prometheus endpoint is configured (promql: asserts are
-// then skipped, not silently passed — see evaluatePromqlAsserts).
+// toxiproxyURL to default to "http://localhost:<ProxyControlPort>" (the
+// fixed host port ComposeTopologyApplier's overlay publishes — see
+// ProxyControlPort's doc comment), and "" for promURL when no Prometheus
+// endpoint is configured (promql: asserts are then skipped, not silently
+// passed — see evaluatePromqlAsserts).
 //
 // QueueApplier is left nil: no broker client (Kafka or otherwise) is a
 // go.mod dependency of this project, and building one is outside this
@@ -13,6 +16,9 @@ package run
 // silently skipping the fault — escalated in the Task 7 report as needing a
 // broker-client decision from whoever owns that choice.
 func NewRealDeps(toxiproxyURL, promURL string) Deps {
+	if toxiproxyURL == "" {
+		toxiproxyURL = "http://localhost:" + ProxyControlPort
+	}
 	applier := CombinedApplier{
 		Docker:    DockerApplier{},
 		Toxiproxy: &ToxiproxyApplier{BaseURL: toxiproxyURL},

@@ -24,7 +24,7 @@ func TestComposeTopologyApplier_MergesInternalNetworkOntoSUTService(t *testing.T
 
 	top := egress.BuildTopology("tortureu_sut", "tortureu_egress", "tortureu-proxy")
 	applier := ComposeTopologyApplier{Up: []string{"config"}}
-	if err := applier.Apply(composePath, top); err != nil {
+	if err := applier.Apply(composePath, top, []string{"api.stripe.com:443"}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -56,5 +56,10 @@ func TestComposeTopologyApplier_MergesInternalNetworkOntoSUTService(t *testing.T
 	}
 	if !strings.Contains(section, "tortureu_sut") {
 		t.Errorf("checkout-api's merged block = %q, want it to mention tortureu_sut — otherwise it keeps its default route out and R-DC2-3 is decorative", section)
+	}
+
+	// spec: R-DC2-3
+	if !strings.Contains(merged, "api.stripe.com") {
+		t.Error("merged config does not alias the classified external host to the proxy — without it, nothing tells the SUT to dial the proxy instead of nowhere")
 	}
 }

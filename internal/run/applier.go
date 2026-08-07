@@ -26,3 +26,13 @@ func (c CombinedApplier) ApplyDocker(name string, d fault.DockerAction) (func() 
 func (c CombinedApplier) RegisterTarget(faultName, target string) {
 	registerToxicTarget(c.Toxiproxy, faultName, target)
 }
+
+// EnsureProxies forwards to c.Toxiproxy if it supports eager proxy creation
+// (ToxiproxyApplier does; see its EnsureProxies doc comment on why Run calls
+// this before load starts, not only lazily per fault).
+func (c CombinedApplier) EnsureProxies(targets []string) error {
+	if p, ok := c.Toxiproxy.(interface{ EnsureProxies([]string) error }); ok {
+		return p.EnsureProxies(targets)
+	}
+	return nil
+}

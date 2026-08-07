@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sync"
 
@@ -53,13 +54,11 @@ func (a *ToxiproxyApplier) RegisterTarget(faultName, target string) {
 	a.targets[faultName] = target
 }
 
-func (a *ToxiproxyApplier) targetFor(faultName string) string {
+func (a *ToxiproxyApplier) targetFor(faultName string) (string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if t, ok := a.targets[faultName]; ok {
-		return t
-	}
-	return faultName // unregistered: best effort, matches earlier behavior
+	t, ok := a.targets[faultName]
+	return t, ok
 }
 
 func (a *ToxiproxyApplier) client() *http.Client {
@@ -95,12 +94,23 @@ func (a *ToxiproxyApplier) do(method, path string, body any) ([]byte, int, error
 }
 
 // ensureProxy creates a Toxiproxy proxy named after target if one does not
-// already exist, so ApplyToxic has somewhere to attach a toxic.
+// already exist, so ApplyToxic has somewhere to attach a toxic. It binds the
+// SAME port target declares, not an ephemeral one: this proxy is reached by
+// a DNS alias pointed at the proxy container on the SUT-side network (see
+// topology.go's overlayService doc comment), and the SUT still dials the
+// port it always dialed — an ephemeral listen port would mean nothing ever
+// actually connects to it (R-DC2-3's enforcement finding: a proxy that
+// exists in Toxiproxy's control plane but isn't on the SUT's actual
+// connection path is decorative).
 func (a *ToxiproxyApplier) ensureProxy(target string) error {
+	listen := "0.0.0.0:0"
+	if _, port, err := net.SplitHostPort(target); err == nil && port != "" {
+		listen = "0.0.0.0:" + port
+	}
 	body, status, err := a.do(http.MethodPost, "/proxies", map[string]any{
 		"name":     target,
-		"listen":   "0.0.0.0:0",
-		"upstream": target,
+		"listen":   listen,
+		"upstream": resolveUpstream(target),
 	})
 	if err != nil {
 		return err
@@ -111,12 +121,62 @@ func (a *ToxiproxyApplier) ensureProxy(target string) error {
 	return fmt.Errorf("run: toxiproxy: create proxy %s: status %d: %s", target, status, body)
 }
 
+// resolveUpstream returns the address Toxiproxy should actually forward to.
+// target is usually a classified hostname (e.g. "api.stripe.com:443") that
+// topology.go also aliases, on the SUT-side network, to the proxy container
+// itself (so the SUT dials the proxy instead of nowhere — see
+// overlayService's doc comment). The proxy container is *itself* a member
+// of that network, so if it resolved target's hostname the same way — via
+// Docker's embedded DNS — it would resolve to itself: a self-loop, not the
+// real destination. Resolving here instead, in this process (the
+// orchestrator, running on the developer's host or wherever `tortureu run`
+// executes — never inside the sandboxed SUT-side network), uses this
+// process's own normal DNS resolution, which has no such alias and reaches
+// the real host. If target's host is already an IP literal, or resolution
+// fails, it is passed through unchanged (Toxiproxy then reports its own
+// clear error rather than this package guessing).
+func resolveUpstream(target string) string {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return target
+	}
+	if net.ParseIP(host) != nil {
+		return target
+	}
+	addrs, err := net.LookupHost(host)
+	if err != nil || len(addrs) == 0 {
+		return target
+	}
+	return net.JoinHostPort(addrs[0], port)
+}
+
+// EnsureProxies creates a Toxiproxy proxy for every host in targets
+// (host:port strings) up front, before load starts — not lazily, only when
+// a fault happens to target one. A classified host with no fault at all
+// must still never be reachable directly (R-DC2-2/R-DC2-3): if nothing
+// creates its proxy until a fault fires, the window before that fault (or
+// the entire run, for a host no fault ever targets) has no interception at
+// all despite the DNS alias pointing there.
+func (a *ToxiproxyApplier) EnsureProxies(targets []string) error {
+	for _, target := range targets {
+		if err := a.ensureProxy(target); err != nil {
+			return fmt.Errorf("run: toxiproxy: EnsureProxies(%s): %w", target, err)
+		}
+	}
+	return nil
+}
+
 // ApplyToxic implements fault.Applier: it ensures a proxy exists for the
 // fault's target, then either disables the proxy (t.Disable, R-CFG-14's
 // down: verb — connection refused) or adds t as a named toxic, returning an
 // undo that reverses whichever it did.
 func (a *ToxiproxyApplier) ApplyToxic(name string, t fault.Toxic) (func() error, error) {
-	target := a.targetFor(name)
+	target, ok := a.targetFor(name)
+	if !ok {
+		// Falling back to name (the fault's own name, not a real host) would
+		// silently proxy the wrong thing — the review finding this closes.
+		return nil, fmt.Errorf("run: toxiproxy: fault %q has no registered target (RegisterTarget was never called for it)", name)
+	}
 	if err := a.ensureProxy(target); err != nil {
 		return nil, err
 	}
