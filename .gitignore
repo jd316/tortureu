@@ -1,0 +1,11 @@
+# private strategy — never commit
+GROWTH.md
+
+# build
+/tortureu
+/dist/
+benchmarks/results/
+
+# go
+*.test
+*.out
