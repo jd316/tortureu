@@ -107,6 +107,15 @@ non-compliant.
 (`go.mod`, `package.json`, `pyproject.toml`, `Gemfile`, `pom.xml`). It **MUST NOT** perform
 general source analysis. *(D-3)*
 
+This requirement is an **upper bound on what may be read**, not an obligation to support every
+listed manifest. The v0 obligation is R-DET-14.
+
+**R-DET-14** — v0 **MUST** support `go.mod`, `package.json`, and `pyproject.toml` — the three
+ecosystems the registry's `lang:` predicates most depend on. `Gemfile` and `pom.xml` are
+**TBD-7**. An unsupported manifest that is present **MUST** be reported as a gap (R-DET-7), never
+silently ignored: a repo whose clients we cannot see yields weaker verdict candidates (D-9), and
+the user has to know that.
+
 **R-DET-2** — A compose service with an `image:` and no `build:` **MUST** be classified as a
 dependency.
 
@@ -374,6 +383,13 @@ unclassified hosts. *(DC-2 evidence)*
 **R-VER-8** — Code `4` **MUST NOT** be treated as success. A green that means "we couldn't tell" is
 how a harness silently stops finding anything.
 
+The trigger is stated as an algorithm so two implementers derive the same behaviour: exit `4`
+when `status` is `fail` **and** every finding carries confidence `ambiguous`. A run with **no**
+findings is not inconclusive — it is a pass (`0`). `inconclusive` is deliberately not a `status`
+value: the run genuinely failed its assertions, and only the *attribution* is unusable, so the
+distinction belongs in the exit code rather than in the document's status. *(closes the gap the
+Task 3 review flagged)*
+
 **R-VER-9** — Human output **MUST** be rendered from the same verdict document as machine output.
 No second code path.
 
@@ -493,6 +509,10 @@ are derived and **MUST** be checked against it.
 - **TBD-2** — Whether `emit` writes files or prints to stdout by default.
 - **TBD-5** — Whether to adopt the `grafana/k6-summary` JSON Schema once it leaves
   work-in-progress, replacing our own `handleSummary()` shape.
+- **TBD-6** — `Obs.MaxConfidence` when a repo has **no** observability infrastructure at all.
+  Currently `""`. Candidates: `"correlated"` (we still schedule the faults, so time-window
+  attribution holds — see D-4), or a distinct `"none"`. Raised by the Task 1 implementer.
+- **TBD-7** — `Gemfile` and `pom.xml` manifest support (deferred from R-DET-14).
 
 ---
 

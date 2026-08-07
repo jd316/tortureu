@@ -2,11 +2,479 @@
 package config_test
 
 import (
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/jdb316/tortureu/internal/config"
 )
+
+// spec: R-CFG-1
+func TestExampleConfigParsesAndValidatesClean(t *testing.T) {
+	raw, err := os.ReadFile("../../torture.example.yaml")
+	if err != nil {
+		t.Fatalf("reading torture.example.yaml: %v", err)
+	}
+	if _, err := config.Parse(raw); err != nil {
+		t.Fatalf("torture.example.yaml must parse and validate clean, got: %v", err)
+	}
+}
+
+// spec: R-CFG-3
+func TestTargetRequiresComposeAndService(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml }
+`
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for missing target.service, got nil")
+	}
+	if !strings.Contains(err.Error(), "target.service") {
+		t.Fatalf("expected error to name target.service, got: %v", err)
+	}
+}
+
+// spec: R-CFG-4
+func TestEgressDefaultMustBeDeny(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml, service: api }
+egress:
+  default: allow
+  hosts: {}
+`
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for egress.default != deny, got nil")
+	}
+	if !strings.Contains(err.Error(), "egress.default") {
+		t.Fatalf("expected error to name egress.default, got: %v", err)
+	}
+}
+
+// spec: R-CFG-5
+func TestEgressMockClassRequiresFrom(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml, service: api }
+egress:
+  default: deny
+  hosts:
+    api.stripe.com: { class: mock }
+`
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for mock class missing from:, got nil")
+	}
+	if !strings.Contains(err.Error(), "api.stripe.com") || !strings.Contains(err.Error(), "from") {
+		t.Fatalf("expected error to name host and 'from', got: %v", err)
+	}
+}
+
+// spec: R-CFG-5
+func TestEgressRealClassRequiresMaxRPS(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml, service: api }
+egress:
+  default: deny
+  hosts:
+    sandbox.partner.com: { class: real }
+`
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for real class missing max_rps, got nil")
+	}
+	if !strings.Contains(err.Error(), "sandbox.partner.com") || !strings.Contains(err.Error(), "max_rps") {
+		t.Fatalf("expected error to name host and 'max_rps', got: %v", err)
+	}
+}
+
+// spec: R-CFG-6
+func TestLoadModelMustBeArrivalRate(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml, service: api }
+load:
+  model: closed
+  stages:
+    - phase: peak
+      hold: 500rps
+      for: 60s
+assert:
+  - http_req_duration: ["p(95)<500"]
+`
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for closed load model, got nil")
+	}
+	if !strings.Contains(err.Error(), "load.model") {
+		t.Fatalf("expected error to name load.model, got: %v", err)
+	}
+}
+
+// spec: R-CFG-7
+func TestLoadStagePhaseMustBeUnique(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml, service: api }
+load:
+  model: arrival_rate
+  stages:
+    - phase: peak
+      hold: 500rps
+      for: 60s
+    - phase: peak
+      to: 100rps
+      over: 10s
+assert:
+  - http_req_duration: ["p(95)<500"]
+`
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for duplicate phase name, got nil")
+	}
+	if !strings.Contains(err.Error(), "peak") {
+		t.Fatalf("expected error to name the duplicate phase, got: %v", err)
+	}
+}
+
+// spec: R-CFG-8
+func TestLoadStageMustHaveExactlyOneOfToOrHold(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml, service: api }
+load:
+  model: arrival_rate
+  stages:
+    - phase: peak
+      to: 500rps
+      hold: 500rps
+      for: 60s
+assert:
+  - http_req_duration: ["p(95)<500"]
+`
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for stage with both to: and hold:, got nil")
+	}
+	if !strings.Contains(err.Error(), "peak") {
+		t.Fatalf("expected error to name the offending stage, got: %v", err)
+	}
+}
+
+// spec: R-CFG-9
+func TestScenarioFlowEntriesMustBeMappings(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml, service: api }
+load:
+  model: arrival_rate
+  stages:
+    - phase: peak
+      hold: 500rps
+      for: 60s
+  scenarios:
+    - name: browse
+      weight: 100
+      flow:
+        - "GET /products"
+assert:
+  - http_req_duration: ["p(95)<500"]
+`
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for bare string flow entry, got nil")
+	}
+	if !strings.Contains(err.Error(), "flow") {
+		t.Fatalf("expected error to mention flow, got: %v", err)
+	}
+}
+
+func baseWithLoadAndAssert(faultsBlock string) string {
+	return `
+version: 0
+target: { compose: ./docker-compose.yml, service: checkout-api }
+egress:
+  default: deny
+  hosts:
+    postgres:5432: { class: internal }
+load:
+  model: arrival_rate
+  stages:
+    - phase: peak
+      hold: 500rps
+      for: 60s
+    - phase: spike
+      to: 5000rps
+      over: 10s
+` + faultsBlock + `
+assert:
+  - http_req_duration: ["p(95)<500"]
+`
+}
+
+// spec: R-CFG-10
+func TestFaultRequiresAtTargetInject(t *testing.T) {
+	src := baseWithLoadAndAssert(`
+faults:
+  - name: pg_slow
+    target: postgres:5432
+    inject: { latency: 300ms }
+`)
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for fault missing at:, got nil")
+	}
+	if !strings.Contains(err.Error(), "pg_slow") || !strings.Contains(err.Error(), "at") {
+		t.Fatalf("expected error to name fault pg_slow and 'at', got: %v", err)
+	}
+}
+
+// spec: R-CFG-11
+func TestFaultAtGrammar(t *testing.T) {
+	cases := []struct {
+		name string
+		at   string
+		ok   bool
+	}{
+		{"bare phase", "peak", true},
+		{"phase plus offset", "peak+30s", true},
+		{"absolute", "t=90s", true},
+		{"garbage", "whenever", false},
+	}
+	for _, c := range cases {
+		src := baseWithLoadAndAssert(`
+faults:
+  - name: f1
+    at: ` + c.at + `
+    target: postgres:5432
+    inject: { latency: 300ms }
+`)
+		_, err := config.Parse([]byte(src))
+		if c.ok && err != nil {
+			t.Errorf("%s: at: %q expected to parse, got error: %v", c.name, c.at, err)
+		}
+		if !c.ok && err == nil {
+			t.Errorf("%s: at: %q expected error, got nil", c.name, c.at)
+		}
+	}
+}
+
+// spec: R-CFG-12
+func TestFaultAtUndeclaredPhaseIsError(t *testing.T) {
+	src := baseWithLoadAndAssert(`
+faults:
+  - name: f1
+    at: ghost_phase
+    target: postgres:5432
+    inject: { latency: 300ms }
+`)
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for undeclared phase, got nil")
+	}
+	if !strings.Contains(err.Error(), "ghost_phase") {
+		t.Fatalf("expected error to name the undeclared phase, got: %v", err)
+	}
+}
+
+// spec: R-CFG-13
+func TestFaultTargetMustBeKnown(t *testing.T) {
+	src := baseWithLoadAndAssert(`
+faults:
+  - name: f1
+    at: peak
+    target: unknown-host:1234
+    inject: { latency: 300ms }
+`)
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for unknown fault target, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown-host:1234") {
+		t.Fatalf("expected error to name the unknown target, got: %v", err)
+	}
+}
+
+// spec: R-CFG-14
+func TestFaultInjectExactlyOneVerb(t *testing.T) {
+	src := baseWithLoadAndAssert(`
+faults:
+  - name: f1
+    at: peak
+    target: postgres:5432
+    inject: { latency: 300ms, down: true }
+`)
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for two verbs in one inject, got nil")
+	}
+	if !strings.Contains(err.Error(), "f1") {
+		t.Fatalf("expected error to name fault f1, got: %v", err)
+	}
+}
+
+// spec: R-CFG-15
+func TestFaultPauseKillGracefulAreDistinctVerbs(t *testing.T) {
+	src := baseWithLoadAndAssert(`
+faults:
+  - name: f1
+    at: peak
+    target: checkout-api
+    inject: { pause: true }
+  - name: f2
+    at: peak
+    target: checkout-api
+    inject: { kill: true }
+`)
+	cfg, err := config.Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("expected pause and kill to be accepted as distinct verbs, got error: %v", err)
+	}
+	if cfg.Faults[0].Verb != "pause" || cfg.Faults[1].Verb != "kill" {
+		t.Fatalf("expected distinct verbs pause/kill, got %q/%q", cfg.Faults[0].Verb, cfg.Faults[1].Verb)
+	}
+}
+
+// spec: R-CFG-19
+func TestAssertAbsentIsError(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml, service: api }
+`
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for absent assert:, got nil")
+	}
+	if !strings.Contains(err.Error(), "assert") {
+		t.Fatalf("expected error to mention assert, got: %v", err)
+	}
+}
+
+// spec: R-CFG-19
+func TestAssertEmptyIsError(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml, service: api }
+assert: []
+`
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error for empty assert:, got nil")
+	}
+	if !strings.Contains(err.Error(), "assert") {
+		t.Fatalf("expected error to mention assert, got: %v", err)
+	}
+}
+
+// spec: R-CFG-16
+func TestAssertK6ThresholdVerbatim(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml, service: api }
+assert:
+  - http_req_duration: ["p(95)<500", "p(99)<1500"]
+`
+	cfg, err := config.Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got, ok := cfg.Assert[0]["http_req_duration"].([]any)
+	if !ok || got[0] != "p(95)<500" || got[1] != "p(99)<1500" {
+		t.Fatalf("expected verbatim threshold expressions preserved, got: %#v", cfg.Assert[0])
+	}
+}
+
+// spec: R-CFG-17
+func TestAssertPromqlEntryAccepted(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml, service: api }
+assert:
+  - promql: 'sum(rate(app_retries_total[30s])) < 100'
+`
+	cfg, err := config.Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Assert[0]["promql"] != "sum(rate(app_retries_total[30s])) < 100" {
+		t.Fatalf("expected promql entry preserved, got: %#v", cfg.Assert[0])
+	}
+}
+
+// spec: R-CFG-18
+func TestAssertSQLEntryAccepted(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml, service: api }
+assert:
+  - sql: 'SELECT count(*) FROM orders WHERE status IS NULL'
+`
+	cfg, err := config.Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Assert[0]["sql"] != "SELECT count(*) FROM orders WHERE status IS NULL" {
+		t.Fatalf("expected sql entry preserved, got: %#v", cfg.Assert[0])
+	}
+}
+
+// spec: R-CFG-21
+func TestResetCommandDefaultsWhenAbsent(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml, service: api }
+assert:
+  - http_req_duration: ["p(95)<500"]
+`
+	cfg, err := config.Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "docker compose down -v && docker compose up -d --wait"
+	if cfg.Reset.Command != want {
+		t.Fatalf("expected default reset command %q, got %q", want, cfg.Reset.Command)
+	}
+}
+
+// spec: R-CFG-21
+func TestResetCommandUserSuppliedOverridesDefault(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml, service: api }
+reset:
+  command: ./scripts/custom-reset.sh
+assert:
+  - http_req_duration: ["p(95)<500"]
+`
+	cfg, err := config.Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Reset.Command != "./scripts/custom-reset.sh" {
+		t.Fatalf("expected user-supplied reset command preserved, got %q", cfg.Reset.Command)
+	}
+}
+
+// spec: R-CFG-1
+func TestNoIncludeMechanism(t *testing.T) {
+	src := `
+version: 0
+target: { compose: ./docker-compose.yml, service: api }
+include: ./other.yaml
+assert:
+  - http_req_duration: ["p(95)<500"]
+`
+	_, err := config.Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected error: torture.yaml is a single flat file with no include mechanism")
+	}
+	if !strings.Contains(err.Error(), "include") {
+		t.Fatalf("expected error to name the offending key, got: %v", err)
+	}
+}
 
 // spec: R-CFG-2
 func TestUnknownTopLevelKeyIsError(t *testing.T) {
