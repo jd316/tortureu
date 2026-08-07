@@ -147,5 +147,6 @@ untested = sorted(reqs - set(cited))
 print(f"     untested ({len(untested)}): {', '.join(untested[:8])}"
       + (" ..." if len(untested) > 8 else ""))
 
+
 print(f"\n{len(fails)} failure(s)" if fails else "\nall checks passed")
 sys.exit(1 if fails else 0)
