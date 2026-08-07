@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -40,6 +43,34 @@ func TestDoctorLabelsKnowTierSuggestionsWithTierAndTrigger(t *testing.T) {
 	}
 	if !strings.Contains(report, "trigger: platform:k8s") {
 		t.Errorf("suggestion missing trigger condition (R-CLI-3):\n%s", report)
+	}
+}
+
+// spec: R-COV-8
+//
+// The exact case that shipped broken: `doctor` run from a directory with no
+// registry.yaml (i.e. any directory but this repo's root) must still
+// succeed, because the default registry source is the one embedded in the
+// binary, not a file read relative to the working directory.
+func TestDoctorWorksOutsideRepoWithNoRegistryFileOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	composePath := filepath.Join(dir, "docker-compose.yml")
+	if err := os.WriteFile(composePath, []byte("services:\n  app:\n    build: .\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "registry.yaml")); err == nil {
+		t.Fatal("test setup: registry.yaml unexpectedly present")
+	}
+
+	t.Chdir(dir)
+
+	var out, errb bytes.Buffer
+	code := runDoctor([]string{"-compose", composePath}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("doctor failed outside the repo (exit %d): %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "REGISTRY COVERAGE") {
+		t.Errorf("doctor output missing coverage section:\n%s", out.String())
 	}
 }
 

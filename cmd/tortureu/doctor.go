@@ -12,6 +12,17 @@ import (
 	"github.com/jdb316/tortureu/internal/doctor"
 )
 
+// loadRegistry resolves the registry doctor evaluates against (R-COV-8): an
+// explicit path is an opt-in override for testing a modified catalogue;
+// otherwise the registry embedded in the binary is used, so `doctor` works
+// from any working directory, not only inside this repo.
+func loadRegistry(path string) (*doctor.Registry, error) {
+	if path != "" {
+		return doctor.LoadRegistry(path)
+	}
+	return doctor.LoadEmbeddedRegistry()
+}
+
 // buildDoctorReport renders the resilience audit and registry coverage
 // (R-CLI-3) as one human-readable report.
 //
@@ -96,7 +107,11 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	compose := fs.String("compose", "docker-compose.yml", "path to the compose file to detect")
-	registryPath := fs.String("registry", "registry.yaml", "path to registry.yaml")
+	// registryPath default is "" (not "registry.yaml"): the normal path is
+	// the registry embedded in the binary (R-COV-8), independent of the
+	// working directory, so `doctor` also works everywhere but this repo.
+	// A non-empty override is opt-in, for testing a modified catalogue.
+	registryPath := fs.String("registry", "", "path to a registry.yaml override; defaults to the registry embedded in the binary")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -106,7 +121,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "tortureu doctor: detect: %v\n", err)
 		return 2
 	}
-	reg, err := doctor.LoadRegistry(*registryPath)
+	reg, err := loadRegistry(*registryPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "tortureu doctor: %v\n", err)
 		return 2
