@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	realapplier "github.com/jdb316/tortureu/internal/applier"
 	"github.com/jdb316/tortureu/internal/config"
 	"github.com/jdb316/tortureu/internal/egress"
 	"github.com/jdb316/tortureu/internal/fault"
@@ -47,7 +48,7 @@ import (
 // below). scheduleFaults is the production entry point and always threads
 // deps.QueueApplier through; the split exists so tests can call this name
 // directly without also constructing every other scheduleFaults argument.
-func scheduleFaultsWithQueue(faults []config.Fault, markers <-chan PhaseMarker, runStart time.Time, manager *fault.Manager, applier fault.Applier, queueApplier queuefault.Applier) (done <-chan []error, teardownExpiring func()) {
+func scheduleFaultsWithQueue(faults []config.Fault, markers <-chan PhaseMarker, runStart time.Time, manager *fault.Manager, applier fault.Applier, queueApplier queuefault.Applier, mockApplier MockApplier, classes map[string]egress.Class) (done <-chan []error, teardownExpiring func()) {
 	doneCh := make(chan []error, 1)
 	expiring := &expireTracker{}
 	queueManager := &queuefault.Manager{}
@@ -96,7 +97,7 @@ func scheduleFaultsWithQueue(faults []config.Fault, markers <-chan PhaseMarker, 
 					// owning layer, never silently dropped. If that layer
 					// isn't actually wired to apply the effect, the run
 					// MUST fail rather than proceed as if it had.
-					if err := routePassedOver(act, queueApplier, queueManager); err != nil {
+					if err := routePassedOver(act, mockApplier, classes, expiring, queueApplier, queueManager); err != nil {
 						addErr(err)
 					}
 					return
@@ -177,32 +178,53 @@ func scheduleFaultsWithQueue(faults []config.Fault, markers <-chan PhaseMarker, 
 }
 
 // scheduleFaults is the production entry point: it always routes through
-// scheduleFaultsWithQueue, threading Deps.Applier's queue counterpart
-// (queueApplier) through so error_rate/poison_pill/duplicate faults are
+// scheduleFaultsWithQueue, threading Deps.Applier's queue and mock
+// counterparts through so error_rate/poison_pill/duplicate faults are
 // routed to their owner rather than silently skipped (R-EXE-19).
-func scheduleFaults(faults []config.Fault, markers <-chan PhaseMarker, runStart time.Time, manager *fault.Manager, applier fault.Applier, queueApplier queuefault.Applier) (done <-chan []error, teardownExpiring func()) {
-	return scheduleFaultsWithQueue(faults, markers, runStart, manager, applier, queueApplier)
+func scheduleFaults(faults []config.Fault, markers <-chan PhaseMarker, runStart time.Time, manager *fault.Manager, applier fault.Applier, queueApplier queuefault.Applier, mockApplier MockApplier, classes map[string]egress.Class) (done <-chan []error, teardownExpiring func()) {
+	return scheduleFaultsWithQueue(faults, markers, runStart, manager, applier, queueApplier, mockApplier, classes)
 }
 
 // routePassedOver sends a KindPassed action to its owning layer (R-EXE-15's
 // table, mirrored in fault.Translate's otherLayerOwner) and returns an error
 // if that layer either rejects the fault or has no apply capability wired
 // (R-EXE-19: a run that cannot apply a declared fault must not proceed as if
-// it had).
-func routePassedOver(act fault.Action, queueApplier queuefault.Applier, queueManager *queuefault.Manager) error {
+// it had). expiring tracks the undo for owners with no Manager of their own
+// (WireMockApplier — a real, reversible undo per R-EXE-18), the same tracker
+// applyDirect uses for for:-duration Toxiproxy/Docker faults, so it is
+// covered by the same panic/signal/final teardown paths.
+func routePassedOver(act fault.Action, mockApplier MockApplier, classes map[string]egress.Class, expiring *expireTracker, queueApplier queuefault.Applier, queueManager *queuefault.Manager) error {
 	f := act.Fault
 	switch act.Owner {
 	case "internal/egress":
 		if err := egress.ValidateErrorRate(f.Name, f.Inject); err != nil {
 			return fmt.Errorf("fault %q: %w", f.Name, err)
 		}
-		// internal/egress owns error_rate (R-EXE-15) but exposes only
-		// validation (ValidateErrorRate) — no package in this codebase
-		// applies it against a running WireMock mock (escalated in the
-		// Task 7 report: no mock-provider client exists to wire here).
-		// R-EXE-19 requires the run to fail rather than report a pass that
-		// never actually injected the fault.
-		return fmt.Errorf("fault %q: error_rate is validated by internal/egress but no mock-provider apply capability is wired in this build — failing rather than silently skipping (R-EXE-19)", f.Name)
+		// R-EXE-19 applies per target class, not just per verb: error_rate
+		// is only legal against a host actually classified class: mock
+		// (R-EXE-15) — a wired mock applier does not make it legal against
+		// anything else.
+		if classes[f.Target] != egress.ClassMock {
+			return fmt.Errorf("fault %q: error_rate targets %q, which is not classified class: mock — failing rather than silently skipping (R-EXE-19)", f.Name, f.Target)
+		}
+		if mockApplier == nil {
+			return fmt.Errorf("fault %q: error_rate is validated by internal/egress but no mock-provider client is wired — failing rather than silently skipping (R-EXE-19)", f.Name)
+		}
+		er, err := realapplier.TranslateErrorRate(f)
+		if err != nil {
+			return fmt.Errorf("fault %q: %w", f.Name, err)
+		}
+		// _ discards ErrorRateApplied (R-EXE-22: whether r.Rate had to be
+		// rounded to WireMock's cycle resolution). Surfacing that into the
+		// verdict is a verdict-assembly concern outside this round's
+		// wiring scope — escalated in the Task 7 report rather than
+		// silently dropped without comment.
+		undo, _, err := mockApplier.ApplyErrorRate(f.Name, er)
+		if err != nil {
+			return fmt.Errorf("fault %q: %w", f.Name, err)
+		}
+		expiring.add(onceUndo(undo))
+		return nil
 
 	case "internal/queuefault":
 		if queueApplier == nil {

@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	realapplier "github.com/jdb316/tortureu/internal/applier"
 	"github.com/jdb316/tortureu/internal/config"
 	"github.com/jdb316/tortureu/internal/detect"
 	"github.com/jdb316/tortureu/internal/egress"
@@ -109,6 +110,13 @@ type PromQuerier interface {
 	Query(expr string) (holds bool, observed string, err error)
 }
 
+// MockApplier is the mock-provider owner R-EXE-15 names for error_rate:
+// internal/applier.WireMockApplier's ApplyErrorRate, narrowed to an
+// interface so tests can fake it without a live WireMock instance.
+type MockApplier interface {
+	ApplyErrorRate(faultName string, r realapplier.ErrorRate) (func() error, realapplier.ErrorRateApplied, error)
+}
+
 // Deps is every external seam Run needs. Production callers get one from
 // NewRealDeps (docker_applier.go, toxiproxy_applier.go, promql.go, load.go,
 // topology.go, reset.go); tests substitute fakes for some or all fields.
@@ -117,12 +125,18 @@ type Deps struct {
 	Topology TopologyApplier
 	Load     LoadRunner
 	Applier  fault.Applier
-	// QueueApplier is internal/queuefault's real broker client, the owner
-	// R-EXE-15 names for poison_pill/duplicate. nil means none is wired: a
-	// run declaring either verb then fails per R-EXE-19 rather than
-	// silently skipping the fault.
+	// QueueApplier is internal/queuefault's real broker client
+	// (internal/applier.BrokerApplier), the owner R-EXE-15 names for
+	// poison_pill/duplicate. nil means none is wired: a run declaring
+	// either verb then fails per R-EXE-19 rather than silently skipping
+	// the fault.
 	QueueApplier queuefault.Applier
-	Prom         PromQuerier
+	// MockApplier is internal/applier.WireMockApplier, the owner R-EXE-15
+	// names for error_rate. nil means none is wired: a run declaring
+	// error_rate against a class: mock host then fails per R-EXE-19 rather
+	// than silently skipping the fault.
+	MockApplier MockApplier
+	Prom        PromQuerier
 	// Now is the wall clock used only for verdict timestamps/duration —
 	// never for fault scheduling (R-EXE-8: that clock is k6's). Defaults to
 	// time.Now.
@@ -328,7 +342,7 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 	if err != nil {
 		return finish(verdict.StatusError)
 	}
-	schedDone, expiringTeardown := scheduleFaults(cfg.Faults, handle.Markers(), started, manager, deps.Applier, deps.QueueApplier)
+	schedDone, expiringTeardown := scheduleFaults(cfg.Faults, handle.Markers(), started, manager, deps.Applier, deps.QueueApplier, deps.MockApplier, classes)
 	setTeardownExpiring(expiringTeardown)
 
 	var result LoadResult

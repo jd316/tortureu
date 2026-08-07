@@ -16,7 +16,7 @@ func TestScheduleFaults_WaitsForPhaseMarkerNotWallClock(t *testing.T) {
 	applier := &trackingApplier{}
 	manager := &fault.Manager{}
 
-	done, teardown := scheduleFaults([]config.Fault{f}, markers, time.Now(), manager, applier, nil)
+	done, teardown := scheduleFaults([]config.Fault{f}, markers, time.Now(), manager, applier, nil, nil, nil)
 	defer teardown()
 
 	// Give the scheduler time to (wrongly) fire on a wall-clock timer if it

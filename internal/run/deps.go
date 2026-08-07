@@ -1,5 +1,10 @@
 package run
 
+import (
+	realapplier "github.com/jdb316/tortureu/internal/applier"
+	"github.com/jdb316/tortureu/internal/queuefault"
+)
+
 // NewRealDeps wires the concrete Docker/Toxiproxy/k6/Prometheus
 // implementations built in this package into one Deps for production use.
 // toxiproxyURL and promURL are the control-plane addresses; pass "" for
@@ -9,13 +14,33 @@ package run
 // endpoint is configured (promql: asserts are then skipped, not silently
 // passed — see evaluatePromqlAsserts).
 //
-// QueueApplier is left nil: no broker client (Kafka or otherwise) is a
-// go.mod dependency of this project, and building one is outside this
-// task's touch-only-internal/run scope. Per R-EXE-19, any run declaring
-// poison_pill or duplicate against this Deps value fails loudly rather than
-// silently skipping the fault — escalated in the Task 7 report as needing a
-// broker-client decision from whoever owns that choice.
+// This is the original two-argument constructor, kept so existing callers
+// (cmd/tortureu/run.go) keep compiling unchanged; it leaves QueueApplier
+// and MockApplier nil, same as before internal/applier existed. Use
+// NewRealDepsFull to also wire error_rate/poison_pill/duplicate against a
+// real WireMock/broker endpoint — cmd/tortureu adopting it (new
+// --mock-url/--broker-url flags) is a follow-up outside this task's
+// touch-only-internal/run scope, flagged in the Task 7 report.
 func NewRealDeps(toxiproxyURL, promURL string) Deps {
+	return NewRealDepsFull(toxiproxyURL, promURL, "", "")
+}
+
+// NewRealDepsFull is NewRealDeps plus internal/applier's real owners for
+// R-EXE-19's remaining two rows (Task 10): mockURL wires WireMockApplier
+// for error_rate against a class: mock host, and brokerURL wires
+// BrokerApplier for poison_pill/duplicate. Neither address is hardcoded —
+// both are read from wherever the caller resolved them (e.g. CLI flags or
+// torture.yaml), same as toxiproxyURL/promURL. "" leaves the corresponding
+// Deps field nil: a run that then declares the verb fails loudly (R-EXE-19)
+// rather than silently skipping it.
+//
+// v0 limitation, not fixed here: MockApplier is a single WireMockApplier,
+// but internal/applier's own doc comment notes "one WireMock instance per
+// mocked host" is the natural shape — a torture.yaml with more than one
+// class: mock host would need one address per host, not one shared BaseURL.
+// Scoped out for this task; flagged for whoever wires multi-host mock
+// support.
+func NewRealDepsFull(toxiproxyURL, promURL, mockURL, brokerURL string) Deps {
 	if toxiproxyURL == "" {
 		toxiproxyURL = "http://localhost:" + ProxyControlPort
 	}
@@ -27,11 +52,21 @@ func NewRealDeps(toxiproxyURL, promURL string) Deps {
 	if promURL != "" {
 		prom = HTTPPromQuerier{BaseURL: promURL}
 	}
+	var mock MockApplier
+	if mockURL != "" {
+		mock = &realapplier.WireMockApplier{BaseURL: mockURL}
+	}
+	var queue queuefault.Applier
+	if brokerURL != "" {
+		queue = &realapplier.BrokerApplier{BaseURL: brokerURL}
+	}
 	return Deps{
-		Reset:    ShellResetter{},
-		Topology: ComposeTopologyApplier{},
-		Load:     K6Runner{},
-		Applier:  applier,
-		Prom:     prom,
+		Reset:        ShellResetter{},
+		Topology:     ComposeTopologyApplier{},
+		Load:         K6Runner{},
+		Applier:      applier,
+		QueueApplier: queue,
+		MockApplier:  mock,
+		Prom:         prom,
 	}
 }
