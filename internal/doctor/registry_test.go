@@ -26,6 +26,27 @@ func TestLoadRegistryCountsMatchSourceOfTruth(t *testing.T) {
 	}
 }
 
+// spec: R-COV-8
+func TestLoadEmbeddedRegistryWorksFromAnyWorkingDirectory(t *testing.T) {
+	// The bug this guards against: doctor.LoadRegistry("registry.yaml")
+	// only works when the process happens to be run from the repo root.
+	// A static binary that depends on a file it doesn't ship is not one
+	// (R-COV-8) — the embedded loader must work no matter where the
+	// binary is invoked from.
+	t.Chdir(t.TempDir())
+
+	reg, err := doctor.LoadEmbeddedRegistry()
+	if err != nil {
+		t.Fatalf("LoadEmbeddedRegistry: %v", err)
+	}
+	if got := reg.DomainCount(); got != 19 {
+		t.Fatalf("DomainCount() = %d, want 19", got)
+	}
+	if got := reg.ToolCount(); got != 151 {
+		t.Fatalf("ToolCount() = %d, want 151", got)
+	}
+}
+
 // spec: R-COV-2
 func TestLoadRegistryEveryToolHasTierWhenHow(t *testing.T) {
 	reg, err := doctor.LoadRegistry(registryPath)

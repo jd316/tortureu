@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	tortureu "github.com/jdb316/tortureu"
 	"github.com/jdb316/tortureu/internal/detect"
 	"gopkg.in/yaml.v3"
 )
@@ -33,12 +34,29 @@ type Registry struct {
 	Domains []Domain `yaml:"domains"`
 }
 
-// LoadRegistry reads and parses the registry.yaml at path.
+// LoadRegistry reads and parses the registry.yaml at path. Prefer
+// LoadEmbeddedRegistry outside tests: this depends on path being reachable
+// from the process's current working directory, which is exactly the
+// R-COV-8 packaging bug (a binary run from anywhere but the repo root
+// couldn't find it).
 func LoadRegistry(path string) (*Registry, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("doctor: read registry: %w", err)
 	}
+	return parseRegistry(raw)
+}
+
+// LoadEmbeddedRegistry parses the registry.yaml embedded into the binary
+// at build time (R-COV-8), independent of the process's working directory.
+// The embedded bytes (registry_embed.go, repo root) come from the same
+// registry.yaml file LoadRegistry reads from disk — not a copy — so there
+// is nothing for the two to drift against.
+func LoadEmbeddedRegistry() (*Registry, error) {
+	return parseRegistry(tortureu.RegistryYAML)
+}
+
+func parseRegistry(raw []byte) (*Registry, error) {
 	var reg Registry
 	if err := yaml.Unmarshal(raw, &reg); err != nil {
 		return nil, fmt.Errorf("doctor: parse registry: %w", err)
