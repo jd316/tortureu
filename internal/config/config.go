@@ -103,6 +103,37 @@ var faultVerbModifiers = map[string]map[string]bool{
 // atGrammar matches R-CFG-11: <phase>, <phase>+<duration>, or t=<duration>.
 var atGrammar = regexp.MustCompile(`^(t=[0-9]+[a-z]+|[A-Za-z0-9_-]+(\+[0-9]+[a-z]+)?)$`)
 
+// asFloat extracts a numeric value decoded by yaml.v3 (int or float64).
+func asFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	default:
+		return 0, false
+	}
+}
+
+// checkFraction enforces R-CFG-23: duplicate and error_rate are proportions
+// in 0.0..1.0, not multipliers — the "duplicate: 5" (500%) motivating case.
+func checkFraction(faultName, modifier string, v any) error {
+	f, ok := asFloat(v)
+	if !ok || f < 0.0 || f > 1.0 {
+		return fmt.Errorf("torture.yaml: faults[%q]: inject: %s: %v is out of range, must be 0.0..1.0", faultName, modifier, v)
+	}
+	return nil
+}
+
+// checkPositiveInt enforces R-CFG-23: count and workers are integers >= 1.
+func checkPositiveInt(faultName, modifier string, v any) error {
+	f, ok := asFloat(v)
+	if !ok || f != float64(int(f)) || int(f) < 1 {
+		return fmt.Errorf("torture.yaml: faults[%q]: inject: %s: %v is out of range, must be an integer >= 1", faultName, modifier, v)
+	}
+	return nil
+}
+
 // Fault is one injected fault, anchored to a load phase (R-CFG-10..15).
 type Fault struct {
 	Name   string
@@ -322,6 +353,27 @@ func Parse(raw []byte) (*Config, error) {
 				}
 				if !allowedModifiers[k] {
 					return nil, fmt.Errorf("torture.yaml: faults[%q]: inject: modifier %q is not valid for verb %q", rf.Name, k, verb)
+				}
+			}
+
+			if v, ok := rf.Inject["duplicate"]; ok {
+				if err := checkFraction(rf.Name, "duplicate", v); err != nil {
+					return nil, err
+				}
+			}
+			if v, ok := rf.Inject["error_rate"]; ok {
+				if err := checkFraction(rf.Name, "error_rate", v); err != nil {
+					return nil, err
+				}
+			}
+			if v, ok := rf.Inject["count"]; ok {
+				if err := checkPositiveInt(rf.Name, "count", v); err != nil {
+					return nil, err
+				}
+			}
+			if v, ok := rf.Inject["workers"]; ok {
+				if err := checkPositiveInt(rf.Name, "workers", v); err != nil {
+					return nil, err
 				}
 			}
 

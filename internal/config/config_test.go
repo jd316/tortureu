@@ -422,6 +422,141 @@ faults:
 	}
 }
 
+// spec: R-CFG-23
+func TestFaultDuplicateRangeChecked(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		ok    bool
+	}{
+		{"above range — the motivating 500% case", "5", false},
+		{"below range", "-0.1", false},
+		{"lower boundary 0.0 is legal", "0.0", true},
+		{"upper boundary 1.0 is legal", "1.0", true},
+	}
+	for _, c := range cases {
+		src := baseWithLoadAndAssert(`
+faults:
+  - name: f1
+    at: peak
+    target: postgres:5432
+    inject: { duplicate: ` + c.value + ` }
+`)
+		_, err := config.Parse([]byte(src))
+		if c.ok && err != nil {
+			t.Errorf("%s: duplicate: %s expected to validate, got error: %v", c.name, c.value, err)
+		}
+		if !c.ok {
+			if err == nil {
+				t.Errorf("%s: duplicate: %s expected error, got nil", c.name, c.value)
+			} else if !strings.Contains(err.Error(), "f1") || !strings.Contains(err.Error(), "duplicate") || !strings.Contains(err.Error(), "0") || !strings.Contains(err.Error(), "1") {
+				t.Errorf("%s: expected error to name fault, modifier, and range, got: %v", c.name, err)
+			}
+		}
+	}
+}
+
+// spec: R-CFG-23
+func TestFaultErrorRateRangeChecked(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		ok    bool
+	}{
+		{"above range", "1.5", false},
+		{"below range", "-0.01", false},
+		{"lower boundary 0.0 is legal", "0.0", true},
+		{"upper boundary 1.0 is legal", "1.0", true},
+	}
+	for _, c := range cases {
+		src := baseWithLoadAndAssert(`
+faults:
+  - name: f1
+    at: spike
+    target: api.stripe.com
+    inject: { error_rate: ` + c.value + ` }
+`)
+		src = strings.Replace(src, "postgres:5432: { class: internal }", "postgres:5432: { class: internal }\n    api.stripe.com: { class: mock, from: capture }", 1)
+		_, err := config.Parse([]byte(src))
+		if c.ok && err != nil {
+			t.Errorf("%s: error_rate: %s expected to validate, got error: %v", c.name, c.value, err)
+		}
+		if !c.ok {
+			if err == nil {
+				t.Errorf("%s: error_rate: %s expected error, got nil", c.name, c.value)
+			} else if !strings.Contains(err.Error(), "f1") || !strings.Contains(err.Error(), "error_rate") {
+				t.Errorf("%s: expected error to name fault and modifier, got: %v", c.name, err)
+			}
+		}
+	}
+}
+
+// spec: R-CFG-23
+func TestFaultPoisonPillCountMustBePositiveInteger(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		ok    bool
+	}{
+		{"zero is illegal", "0", false},
+		{"negative is illegal", "-1", false},
+		{"one is the legal boundary", "1", true},
+	}
+	for _, c := range cases {
+		src := baseWithLoadAndAssert(`
+faults:
+  - name: f1
+    at: peak
+    target: postgres:5432
+    inject: { poison_pill: true, count: ` + c.value + ` }
+`)
+		_, err := config.Parse([]byte(src))
+		if c.ok && err != nil {
+			t.Errorf("%s: count: %s expected to validate, got error: %v", c.name, c.value, err)
+		}
+		if !c.ok {
+			if err == nil {
+				t.Errorf("%s: count: %s expected error, got nil", c.name, c.value)
+			} else if !strings.Contains(err.Error(), "f1") || !strings.Contains(err.Error(), "count") {
+				t.Errorf("%s: expected error to name fault and modifier, got: %v", c.name, err)
+			}
+		}
+	}
+}
+
+// spec: R-CFG-23
+func TestFaultWorkersMustBePositiveInteger(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		ok    bool
+	}{
+		{"zero is illegal", "0", false},
+		{"negative is illegal", "-4", false},
+		{"one is the legal boundary", "1", true},
+	}
+	for _, c := range cases {
+		src := baseWithLoadAndAssert(`
+faults:
+  - name: f1
+    at: peak
+    target: checkout-api
+    inject: { cpu: 90%, workers: ` + c.value + ` }
+`)
+		_, err := config.Parse([]byte(src))
+		if c.ok && err != nil {
+			t.Errorf("%s: workers: %s expected to validate, got error: %v", c.name, c.value, err)
+		}
+		if !c.ok {
+			if err == nil {
+				t.Errorf("%s: workers: %s expected error, got nil", c.name, c.value)
+			} else if !strings.Contains(err.Error(), "f1") || !strings.Contains(err.Error(), "workers") {
+				t.Errorf("%s: expected error to name fault and modifier, got: %v", c.name, err)
+			}
+		}
+	}
+}
+
 // spec: R-CFG-15
 func TestFaultPauseKillGracefulAreDistinctVerbs(t *testing.T) {
 	src := baseWithLoadAndAssert(`
