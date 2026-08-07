@@ -151,9 +151,20 @@ func Detect(composePath string) (*System, error) {
 		}
 
 		dep := Dep{Name: name, Type: t}
-		if port, ok := defaultPorts[t]; ok {
+		// R-DET-4: prefer the compose-declared container port over the
+		// well-known-port table — a service running its dependency on a
+		// non-default port would otherwise get a wrong address.
+		if len(svc.Ports) > 0 && svc.Ports[0].Target != 0 {
+			dep.Address = fmt.Sprintf("%s:%d", name, svc.Ports[0].Target)
+		} else if port, ok := defaultPorts[t]; ok {
 			dep.Address = name + ":" + port
+		}
+		if dep.Address != "" {
 			sys.Egress = append(sys.Egress, dep.Address)
+			if sys.EgressClass == nil {
+				sys.EgressClass = map[string]string{}
+			}
+			sys.EgressClass[dep.Address] = "internal"
 		}
 		sys.Deps = append(sys.Deps, dep)
 	}

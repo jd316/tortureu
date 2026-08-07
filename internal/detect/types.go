@@ -18,10 +18,11 @@ type Obs struct {
 
 // System is what detection knows about a repo.
 type System struct {
-	SUT    string // compose service name of the system under test (R-DET-8)
-	Deps   []Dep
-	Egress []string // external hosts found (R-DET-4)
-	Obs    Obs
-	Gaps   []string // things we could not classify; reported, never guessed (R-DET-3, R-DET-7)
-	Lang   string   // detected from manifest
+	SUT         string // compose service name of the system under test (R-DET-8)
+	Deps        []Dep
+	Egress      []string          // external hosts found (R-DET-4)
+	EgressClass map[string]string // Egress entry -> "internal" (in-compose) or "unclassified" (R-DET-4)
+	Obs         Obs
+	Gaps        []string // things we could not classify; reported, never guessed (R-DET-3, R-DET-7)
+	Lang        string   // detected from manifest
 }

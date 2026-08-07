@@ -232,6 +232,55 @@ services:
 	}
 }
 
+// spec: R-DET-4
+func TestDependencyAddressUsesDeclaredPortNotDefaultTable(t *testing.T) {
+	dir := t.TempDir()
+	// redis's well-known port is 6379; this service publishes a container
+	// port of 7000. A static well-known-port table would derive the wrong
+	// address, which would then poison the egress entry.
+	compose := writeFile(t, dir, "docker-compose.yml", `
+services:
+  api:
+    build: .
+  cache:
+    image: redis:7
+    ports:
+      - "7000:7000"
+`)
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if len(sys.Deps) != 1 {
+		t.Fatalf("got %d deps, want 1: %+v", len(sys.Deps), sys.Deps)
+	}
+	if got, want := sys.Deps[0].Address, "cache:7000"; got != want {
+		t.Errorf("address = %q, want %q (declared port, not the 6379 default)", got, want)
+	}
+}
+
+// spec: R-DET-4
+func TestInComposeDependencyEgressIsClassInternal(t *testing.T) {
+	dir := t.TempDir()
+	compose := writeFile(t, dir, "docker-compose.yml", `
+services:
+  api:
+    build: .
+  db:
+    image: postgres:16
+`)
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	addr := sys.Deps[0].Address
+	if got, want := sys.EgressClass[addr], "internal"; got != want {
+		t.Errorf("EgressClass[%q] = %q, want %q (in-compose dependency)", addr, got, want)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (func() bool {
 		for i := 0; i+len(substr) <= len(s); i++ {

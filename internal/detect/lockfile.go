@@ -1,6 +1,8 @@
 package detect
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -48,34 +50,118 @@ var goClientPatterns = []clientPattern{
 	{"ldap", []string{"github.com/go-ldap/ldap"}},
 }
 
+// nodeClientPatterns maps an npm package name to its R-DET-9 type.
+var nodeClientPatterns = []clientPattern{
+	{"postgresql", []string{"pg"}},
+	{"mysql", []string{"mysql2"}},
+	{"redis", []string{"ioredis"}},
+	{"mongodb", []string{"mongoose"}},
+	{"kafka", []string{"kafkajs"}},
+	{"rabbitmq", []string{"amqplib"}},
+	{"nats", []string{"nats"}},
+	{"s3", []string{"@aws-sdk/client-s3"}},
+	{"sqs", []string{"@aws-sdk/client-sqs"}},
+	{"dynamodb", []string{"@aws-sdk/client-dynamodb"}},
+	{"websocket", []string{"ws"}},
+	{"smtp", []string{"nodemailer"}},
+	{"ldap", []string{"ldapjs"}},
+}
+
+// pyClientPatterns maps a PyPI package name to its R-DET-9 type.
+var pyClientPatterns = []clientPattern{
+	{"postgresql", []string{"psycopg2", "psycopg", "asyncpg"}},
+	{"mysql", []string{"pymysql"}},
+	{"redis", []string{"redis"}},
+	{"mongodb", []string{"pymongo"}},
+	{"kafka", []string{"confluent-kafka", "kafka-python"}},
+	{"rabbitmq", []string{"pika"}},
+	{"mqtt", []string{"paho-mqtt"}},
+	{"websocket", []string{"websockets"}},
+	{"ldap", []string{"ldap3"}},
+}
+
+// unsupportedManifests are R-DET-1 manifests deferred past v0 (TBD-7). A
+// present-but-unsupported manifest MUST be reported as a gap (R-DET-14),
+// never silently ignored.
+var unsupportedManifests = []string{"Gemfile", "pom.xml"}
+
 // goModRequireRe finds "<module path> vX.Y.Z" pairs, matching both the
 // single-line and block forms of a require directive.
 var goModRequireRe = regexp.MustCompile(`(\S+)\s+v\d+\.\d+\.\d+\S*`)
 
-// detectLockfiles reads language manifests (R-DET-1) in dir, sets sys.Lang,
-// and attaches client libraries to dependencies (R-DET-5).
-func detectLockfiles(dir string, sys *System) error {
-	goModPath := filepath.Join(dir, "go.mod")
-	raw, err := os.ReadFile(goModPath)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	sys.Lang = "go"
+// pyprojectKeyRe finds "name = ..." assignments in a poetry-style
+// [tool.poetry.dependencies] table.
+var pyprojectKeyRe = regexp.MustCompile(`(?m)^\s*([A-Za-z0-9_.-]+)\s*=`)
 
-	imports := goModRequireRe.FindAllStringSubmatch(string(raw), -1)
-	for _, m := range imports {
-		imp := m[1]
-		for _, cp := range goClientPatterns {
-			if !hasImportPrefix(imp, cp.imports) {
-				continue
-			}
+// detectLockfiles reads language manifests (R-DET-1, capped to the R-DET-14
+// v0 set: go.mod, package.json, pyproject.toml), sets sys.Lang, and attaches
+// client libraries to dependencies (R-DET-5).
+func detectLockfiles(dir string, sys *System) error {
+	switch {
+	case fileExists(dir, "go.mod"):
+		raw, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+		if err != nil {
+			return err
+		}
+		sys.Lang = "go"
+		for _, m := range goModRequireRe.FindAllStringSubmatch(string(raw), -1) {
+			matchClient(sys, goClientPatterns, m[1])
+		}
+
+	case fileExists(dir, "package.json"):
+		raw, err := os.ReadFile(filepath.Join(dir, "package.json"))
+		if err != nil {
+			return err
+		}
+		var pkg struct {
+			Dependencies    map[string]string `json:"dependencies"`
+			DevDependencies map[string]string `json:"devDependencies"`
+		}
+		if err := json.Unmarshal(raw, &pkg); err != nil {
+			return err
+		}
+		sys.Lang = "node"
+		for name := range pkg.Dependencies {
+			matchClient(sys, nodeClientPatterns, name)
+		}
+		for name := range pkg.DevDependencies {
+			matchClient(sys, nodeClientPatterns, name)
+		}
+
+	case fileExists(dir, "pyproject.toml"):
+		raw, err := os.ReadFile(filepath.Join(dir, "pyproject.toml"))
+		if err != nil {
+			return err
+		}
+		sys.Lang = "python"
+		for _, m := range pyprojectKeyRe.FindAllStringSubmatch(string(raw), -1) {
+			matchClient(sys, pyClientPatterns, m[1])
+		}
+	}
+
+	for _, name := range unsupportedManifests {
+		if fileExists(dir, name) {
+			sys.Gaps = append(sys.Gaps, fmt.Sprintf(
+				"unsupported manifest %s present — client libraries not detected (R-DET-14)", name))
+		}
+	}
+
+	return nil
+}
+
+func fileExists(dir, name string) bool {
+	_, err := os.Stat(filepath.Join(dir, name))
+	return err == nil
+}
+
+// matchClient attaches imp to a dependency if it matches any pattern in
+// table, per the client column of SPEC.md §3.1.
+func matchClient(sys *System, table []clientPattern, imp string) {
+	for _, cp := range table {
+		if hasImportPrefix(imp, cp.imports) {
 			attachClient(sys, cp.typ, imp)
 		}
 	}
-	return nil
 }
 
 func hasImportPrefix(imp string, prefixes []string) bool {
