@@ -1,0 +1,89 @@
+package run
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/jdb316/tortureu/internal/k6"
+)
+
+// fakeK6Script writes a shell script standing in for the k6 binary: it
+// prints two phase-marker lines (internal/k6's own format, so
+// k6.ParsePhaseMarker recognizes them exactly as it would for real k6
+// output) and writes a summary JSON file at the --summary-export path
+// before exiting 0. This exercises K6Runner's real subprocess plumbing
+// (piping stdout live, writing/reading a file, process lifecycle) without
+// needing the actual k6 binary, which is not available in this environment.
+func fakeK6Script(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "k6")
+	script := `#!/bin/sh
+# args: run --summary-export <file> <script>
+summary="$3"
+echo "` + k6.PhaseMarkerPrefix + ` ramp_up 0"
+echo "` + k6.PhaseMarkerPrefix + ` peak 1000"
+echo '{"metrics":{"http_reqs":{"values":{"rate":10}}}}' > "$summary"
+exit 0
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// spec: R-EXE-8
+func TestK6Runner_EmitsPhaseMarkersFromStdout(t *testing.T) {
+	dir := t.TempDir()
+	r := K6Runner{Bin: fakeK6Script(t), Dir: dir}
+
+	handle, err := r.Start("// script")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	var got []string
+	timeout := time.After(5 * time.Second)
+	for len(got) < 2 {
+		select {
+		case m, ok := <-handle.Markers():
+			if !ok {
+				t.Fatalf("markers channel closed early, got %v", got)
+			}
+			got = append(got, m.Phase)
+		case <-timeout:
+			t.Fatalf("timed out waiting for markers, got %v", got)
+		}
+	}
+	if got[0] != "ramp_up" || got[1] != "peak" {
+		t.Errorf("markers = %v, want [ramp_up peak]", got)
+	}
+}
+
+// spec: R-VER-10
+func TestK6Runner_DoneCarriesSummaryJSONForIngestSummary(t *testing.T) {
+	dir := t.TempDir()
+	r := K6Runner{Bin: fakeK6Script(t), Dir: dir}
+
+	handle, err := r.Start("// script")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	select {
+	case result := <-handle.Done():
+		metrics, err := k6.IngestSummary(result.SummaryJSON)
+		if err != nil {
+			t.Fatalf("IngestSummary: %v", err)
+		}
+		if _, ok := metrics["http_reqs"]; !ok {
+			t.Errorf("metrics = %v, want http_reqs", metrics)
+		}
+	case err := <-handle.Err():
+		t.Fatalf("Err() = %v, want a result on Done()", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Done()")
+	}
+}
