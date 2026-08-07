@@ -68,7 +68,7 @@ var obsPatterns = []obsPattern{
 	{"prom/prometheus*", false, true, false},
 	{"victoriametrics*", false, true, false},
 	{"grafana/loki*", false, false, true},
-	{"otel/opentelemetry-collector*", true, true, false},
+	{otelCollectorPattern, true, true, false},
 }
 
 // defaultPorts gives the well-known port for a dependency type, used to
@@ -140,6 +140,9 @@ func Detect(composePath string) (*System, error) {
 			sys.Obs.Traces = sys.Obs.Traces || ot.traces
 			sys.Obs.Metrics = sys.Obs.Metrics || ot.metrics
 			sys.Obs.Logs = sys.Obs.Logs || ot.logs
+			if isOtelCollector(svc.Image) {
+				sys.otelCollectorSeen = true
+			}
 			continue
 		}
 
@@ -179,6 +182,15 @@ func Detect(composePath string) (*System, error) {
 		return nil, err
 	}
 
+	if err := detectFileCoverage(workingDir, sys); err != nil {
+		return nil, err
+	}
+
+	// R-COV-5 lacks:otel: true only when neither an OTel client (manifest,
+	// checked by detectLockfiles) nor an OTel collector (compose, checked
+	// above) was seen.
+	sys.Coverage.LacksOtel = !sys.otelClientSeen && !sys.otelCollectorSeen
+
 	return sys, nil
 }
 
@@ -204,6 +216,16 @@ func matchObs(image string) (obsPattern, bool) {
 		}
 	}
 	return obsPattern{}, false
+}
+
+// otelCollectorPattern is the R-DET-12 image pattern for the OTel collector,
+// reused by R-COV-5's lacks:otel fact to distinguish "collector present"
+// from the other observability backends (jaeger, prometheus, loki, ...).
+const otelCollectorPattern = "otel/opentelemetry-collector*"
+
+// isOtelCollector reports whether image is specifically the OTel collector.
+func isOtelCollector(image string) bool {
+	return matchPattern(stripTag(image), otelCollectorPattern)
 }
 
 // stripTag removes a trailing ":tag" from an image reference, being careful

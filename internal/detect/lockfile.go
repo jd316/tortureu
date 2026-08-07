@@ -85,6 +85,30 @@ var pyClientPatterns = []clientPattern{
 // never silently ignored.
 var unsupportedManifests = []string{"Gemfile", "pom.xml"}
 
+// awsSDKImports and azureSDKImports recognize a cloud provider SDK in a
+// manifest, per R-COV-5's platform:aws / platform:azure fact. Keyed by the
+// same sys.Lang values ("go", "node", "python") detectLockfiles sets.
+var awsSDKImports = map[string][]string{
+	"go":     {"github.com/aws/aws-sdk-go"},
+	"node":   {"aws-sdk", "@aws-sdk/"},
+	"python": {"boto3", "botocore"},
+}
+
+var azureSDKImports = map[string][]string{
+	"go":     {"github.com/Azure/azure-sdk-for-go"},
+	"node":   {"@azure/"},
+	"python": {"azure-"},
+}
+
+// otelClientImports recognizes an OpenTelemetry client in a manifest, per
+// R-COV-5's lacks:otel fact (the other half is the compose-side collector
+// check in compose.go's isOtelCollector).
+var otelClientImports = map[string][]string{
+	"go":     {"go.opentelemetry.io/otel"},
+	"node":   {"@opentelemetry/"},
+	"python": {"opentelemetry-"},
+}
+
 // goModRequireRe finds "<module path> vX.Y.Z" pairs, matching both the
 // single-line and block forms of a require directive.
 var goModRequireRe = regexp.MustCompile(`(\S+)\s+v\d+\.\d+\.\d+\S*`)
@@ -128,6 +152,9 @@ func pep621PackageNames(raw string) []string {
 // v0 set: go.mod, package.json, pyproject.toml), sets sys.Lang, and attaches
 // client libraries to dependencies (R-DET-5).
 func detectLockfiles(dir string, sys *System) error {
+	var imports []string
+	var clientTable []clientPattern
+
 	switch {
 	case fileExists(dir, "go.mod"):
 		raw, err := os.ReadFile(filepath.Join(dir, "go.mod"))
@@ -135,8 +162,9 @@ func detectLockfiles(dir string, sys *System) error {
 			return err
 		}
 		sys.Lang = "go"
+		clientTable = goClientPatterns
 		for _, m := range goModRequireRe.FindAllStringSubmatch(string(raw), -1) {
-			matchClient(sys, goClientPatterns, m[1])
+			imports = append(imports, m[1])
 		}
 
 	case fileExists(dir, "package.json"):
@@ -152,11 +180,12 @@ func detectLockfiles(dir string, sys *System) error {
 			return err
 		}
 		sys.Lang = "node"
+		clientTable = nodeClientPatterns
 		for name := range pkg.Dependencies {
-			matchClient(sys, nodeClientPatterns, name)
+			imports = append(imports, name)
 		}
 		for name := range pkg.DevDependencies {
-			matchClient(sys, nodeClientPatterns, name)
+			imports = append(imports, name)
 		}
 
 	case fileExists(dir, "pyproject.toml"):
@@ -165,11 +194,23 @@ func detectLockfiles(dir string, sys *System) error {
 			return err
 		}
 		sys.Lang = "python"
+		clientTable = pyClientPatterns
 		for _, m := range pyprojectKeyRe.FindAllStringSubmatch(string(raw), -1) {
-			matchClient(sys, pyClientPatterns, m[1])
+			imports = append(imports, m[1])
 		}
-		for _, name := range pep621PackageNames(string(raw)) {
-			matchClient(sys, pyClientPatterns, name)
+		imports = append(imports, pep621PackageNames(string(raw))...)
+	}
+
+	for _, imp := range imports {
+		matchClient(sys, clientTable, imp)
+		if hasImportPrefix(imp, awsSDKImports[sys.Lang]) {
+			sys.Coverage.AWS = true
+		}
+		if hasImportPrefix(imp, azureSDKImports[sys.Lang]) {
+			sys.Coverage.Azure = true
+		}
+		if hasImportPrefix(imp, otelClientImports[sys.Lang]) {
+			sys.otelClientSeen = true
 		}
 	}
 
