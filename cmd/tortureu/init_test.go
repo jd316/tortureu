@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jdb316/tortureu/internal/config"
 	"github.com/jdb316/tortureu/internal/detect"
 )
 
@@ -61,6 +62,48 @@ func TestBuildInitSurfacesDetectionGaps(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("gaps = %v, want detect gap surfaced", out.Gaps)
+	}
+}
+
+// spec: R-CLI-4
+//
+// This is the round-trip that would have caught the gap the coordinator
+// found by hand: init succeeding while the file it wrote makes run refuse
+// to start. buildInit's output must parse clean through internal/config,
+// the same validation `tortureu run` applies, not just "look right".
+func TestBuildInitOutputIsAcceptedByConfigParse(t *testing.T) {
+	sys := &detect.System{
+		SUT:         "checkout-api",
+		EgressClass: map[string]string{"postgres:5432": "internal"},
+	}
+	out := buildInit(sys, "./docker-compose.yml")
+
+	cfg, err := config.Parse(out.YAML)
+	if err != nil {
+		t.Fatalf("config.Parse rejected init's output: %v\n\n%s", err, out.YAML)
+	}
+	if len(cfg.Load.Stages) == 0 {
+		t.Error("starter load: has no stages")
+	}
+	if len(cfg.Assert) == 0 {
+		t.Error("starter assert: is empty — R-CFG-19 forbids this, and it is exactly the failure this requirement exists to prevent")
+	}
+}
+
+// spec: R-CLI-4
+func TestBuildInitStarterDoesNotFabricateEndpoints(t *testing.T) {
+	sys := &detect.System{SUT: "checkout-api"}
+	out := buildInit(sys, "./docker-compose.yml")
+	cfg, err := config.Parse(out.YAML)
+	if err != nil {
+		t.Fatalf("config.Parse rejected init's output: %v", err)
+	}
+	for _, sc := range cfg.Load.Scenarios {
+		for _, step := range sc.Flow {
+			if step.Path != "/" {
+				t.Errorf("starter flow step invents an endpoint path %q; only \"/\" is permitted (R-CLI-4)", step.Path)
+			}
+		}
 	}
 }
 
