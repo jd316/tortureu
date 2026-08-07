@@ -106,7 +106,7 @@ func TestWireMockApplier_UndoDeletesExactlyTheCreatedMappings(t *testing.T) {
 	defer srv.Close()
 
 	a := &WireMockApplier{BaseURL: srv.URL}
-	undo, err := a.ApplyErrorRate("stripe_errors", ErrorRate{Target: "api.stripe.com", Rate: 0.5, Status: 503})
+	undo, _, err := a.ApplyErrorRate("stripe_errors", ErrorRate{Target: "api.stripe.com", Rate: 0.5, Status: 503})
 	if err != nil {
 		t.Fatalf("ApplyErrorRate: %v", err)
 	}
@@ -134,8 +134,59 @@ func TestWireMockApplier_ApplyErrorRateErrorsOnNon2xxFromWireMock(t *testing.T) 
 	defer srv.Close()
 
 	a := &WireMockApplier{BaseURL: srv.URL}
-	if _, err := a.ApplyErrorRate("f1", ErrorRate{Target: "api.stripe.com", Rate: 0.5, Status: 503}); err == nil {
+	if _, _, err := a.ApplyErrorRate("f1", ErrorRate{Target: "api.stripe.com", Rate: 0.5, Status: 503}); err == nil {
 		t.Fatal("ApplyErrorRate returned nil error when WireMock rejected the mapping, want an error — a fault that silently fails to apply must not report success (R-EXE-19)")
+	}
+}
+
+// spec: R-EXE-22
+func TestApplyErrorRate_ReportsApproximationForSubResolutionRate(t *testing.T) {
+	// 0.17 is not a multiple of the cycle's 5% resolution (1/20): it rounds
+	// to 0.17*20=3.4 -> 3 states -> 3/20 = 0.15. R-EXE-22 requires this be
+	// reported as an approximation, with both the requested and applied
+	// values visible, rather than silently rounded.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "id-1"})
+	}))
+	defer srv.Close()
+
+	a := &WireMockApplier{BaseURL: srv.URL}
+	_, result, err := a.ApplyErrorRate("f1", ErrorRate{Target: "api.stripe.com", Rate: 0.17, Status: 500})
+	if err != nil {
+		t.Fatalf("ApplyErrorRate: %v", err)
+	}
+	if !result.Approximated {
+		t.Error("Approximated = false for rate 0.17, want true — this rate is finer than the 5% cycle resolution")
+	}
+	if result.Requested != 0.17 {
+		t.Errorf("Requested = %v, want 0.17 (the value actually asked for, not the rounded one)", result.Requested)
+	}
+	if result.Applied != 0.15 {
+		t.Errorf("Applied = %v, want 0.15 (3/20 — what was actually wired into WireMock)", result.Applied)
+	}
+}
+
+// spec: R-EXE-22
+func TestApplyErrorRate_ExactResolutionRateNotReportedApproximated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "id-1"})
+	}))
+	defer srv.Close()
+
+	a := &WireMockApplier{BaseURL: srv.URL}
+	for _, rate := range []float64{0.15, 0.20} {
+		_, result, err := a.ApplyErrorRate("f1", ErrorRate{Target: "api.stripe.com", Rate: rate, Status: 500})
+		if err != nil {
+			t.Fatalf("ApplyErrorRate(%v): %v", rate, err)
+		}
+		if result.Approximated {
+			t.Errorf("Approximated = true for rate %v, want false — it is an exact multiple of the 5%% cycle resolution", rate)
+		}
+		if result.Applied != rate {
+			t.Errorf("Applied = %v, want %v (exact)", result.Applied, rate)
+		}
 	}
 }
 
@@ -209,9 +260,12 @@ func TestWireMockApplier_AppliesErrorRateAgainstRealWireMockThenUndoRestoresDefa
 		t.Fatalf("before ApplyErrorRate: %d/%d requests already returned 503, want 0 (bad test target)", before, errorRateCycleLen)
 	}
 
-	undo, err := a.ApplyErrorRate("stripe_errors", ErrorRate{Target: "api.stripe.com", Rate: rate, Status: 503})
+	undo, result, err := a.ApplyErrorRate("stripe_errors", ErrorRate{Target: "api.stripe.com", Rate: rate, Status: 503})
 	if err != nil {
 		t.Fatalf("ApplyErrorRate: %v", err)
+	}
+	if result.Approximated {
+		t.Errorf("rate %v is an exact multiple of the cycle resolution, want Approximated = false", rate)
 	}
 
 	got := hitAndCountFailures(t, baseURL, errorRateCycleLen, 503)

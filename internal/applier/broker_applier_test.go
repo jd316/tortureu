@@ -311,14 +311,23 @@ func TestBrokerApplier_DuplicateAgainstRealBrokerRedeliversAtRateOne(t *testing.
 	// never re-duplicates it again — strings.Contains, not ==, is what a
 	// real downstream consumer would see too: the same business payload,
 	// delivered a second time.
+	//
+	// spec: R-EXE-23
+	// The count MUST be exact, not a lower bound: R-EXE-23 exists because
+	// a loop that consumes and republishes on the same topic can consume
+	// its own republished copy and duplicate it again, compounding without
+	// bound. A ">= 2" assertion cannot distinguish "duplicated exactly
+	// once, as the guard requires" from "duplicated repeatedly because the
+	// guard was deleted" — both satisfy >= 2. Only "== 2" fails when the
+	// guard is missing.
 	occurrences := 0
 	for _, v := range consumeAll(t, restURL, topic) {
 		if strings.Contains(v, marker) {
 			occurrences++
 		}
 	}
-	if occurrences < 2 {
-		t.Fatalf("marker payload appears %d time(s) on the topic, want >= 2 (rate 1.0: every message re-delivered)", occurrences)
+	if occurrences != 2 {
+		t.Fatalf("marker payload appears %d time(s) on the topic, want exactly 2 (original + one re-delivery at rate 1.0; R-EXE-23's guard must stop it there, not let it compound)", occurrences)
 	}
 }
 

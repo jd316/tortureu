@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 )
 
@@ -60,6 +61,25 @@ func errorRateStateName(faultName string, i int) string {
 	return fmt.Sprintf("%s_s%d", faultName, i)
 }
 
+// errorRateApproximationEpsilon bounds float64 rounding noise (e.g.
+// 0.15*20 landing on 2.9999999999999996) so a rate that is exact for the
+// cycle's resolution is never misreported as approximated.
+const errorRateApproximationEpsilon = 1e-9
+
+// approximateErrorRate rounds rate to the nearest multiple of the cycle's
+// resolution (1/errorRateCycleLen) and reports whether that rounding
+// actually changed the value (R-EXE-22: "a rate finer than the resolution
+// MUST be reported as approximated rather than silently rounded"). It is
+// the single source of truth for the rounding decision — errorRateMappings
+// and ApplyErrorRate both call it, so the mappings actually built and the
+// Applied value reported can never disagree.
+func approximateErrorRate(rate float64) (errorCount int, applied float64, approximated bool) {
+	errorCount = int(rate*float64(errorRateCycleLen) + 0.5) // round half up
+	applied = float64(errorCount) / float64(errorRateCycleLen)
+	approximated = math.Abs(applied-rate) > errorRateApproximationEpsilon
+	return errorCount, applied, approximated
+}
+
 // errorRateMappings builds the errorRateCycleLen stub mappings that
 // implement r as a deterministic cycle: round(r.Rate * errorRateCycleLen)
 // of the states respond r.Status, the rest respond 200, and each state's
@@ -68,7 +88,7 @@ func errorRateStateName(faultName string, i int) string {
 // shaping — no network access — so it is tested without a WireMock daemon.
 func errorRateMappings(faultName string, r ErrorRate) []wireMockMapping {
 	scenario := errorRateScenarioName(faultName)
-	errorCount := int(r.Rate*float64(errorRateCycleLen) + 0.5) // round half up
+	errorCount, _, _ := approximateErrorRate(r.Rate)
 
 	mappings := make([]wireMockMapping, errorRateCycleLen)
 	for i := 0; i < errorRateCycleLen; i++ {
@@ -133,13 +153,33 @@ func (a *WireMockApplier) do(method, path string, body any) ([]byte, int, error)
 	return respBody, resp.StatusCode, err
 }
 
+// ErrorRateApplied reports what an ApplyErrorRate call actually configured,
+// as distinct from what was requested (R-EXE-22). Requested is r.Rate as
+// passed in; Applied is the nearest multiple of the cycle's resolution
+// (1/errorRateCycleLen) that was actually wired into WireMock; Approximated
+// is true when those two differ — i.e. the requested rate was finer than
+// this mechanism's resolution and got rounded. A caller that surfaces
+// faults in a verdict MUST report Approximated cases so a user tuning a
+// threshold at, say, 17% can see they actually got 15%, not silently draw
+// a conclusion from a rate that was never applied.
+type ErrorRateApplied struct {
+	Requested    float64
+	Applied      float64
+	Approximated bool
+}
+
 // ApplyErrorRate registers r as a cycle of WireMock stub mappings (see
 // errorRateMappings) and returns an undo that deletes exactly the mappings
-// this call created. Because a stub mapping is configuration, not a
-// durable log entry, this undo is a genuine reversal (R-EXE-18): after it
-// runs, the mock host's behaviour is exactly what it was before
-// ApplyErrorRate — its base capture/spec stub, never touched.
-func (a *WireMockApplier) ApplyErrorRate(faultName string, r ErrorRate) (func() error, error) {
+// this call created, plus an ErrorRateApplied reporting whether r.Rate had
+// to be rounded to this mechanism's resolution (R-EXE-22). Because a stub
+// mapping is configuration, not a durable log entry, this undo is a
+// genuine reversal (R-EXE-18): after it runs, the mock host's behaviour is
+// exactly what it was before ApplyErrorRate — its base capture/spec stub,
+// never touched.
+func (a *WireMockApplier) ApplyErrorRate(faultName string, r ErrorRate) (func() error, ErrorRateApplied, error) {
+	_, applied, approximated := approximateErrorRate(r.Rate)
+	result := ErrorRateApplied{Requested: r.Rate, Applied: applied, Approximated: approximated}
+
 	mappings := errorRateMappings(faultName, r)
 	ids := make([]string, 0, len(mappings))
 
@@ -153,23 +193,23 @@ func (a *WireMockApplier) ApplyErrorRate(faultName string, r ErrorRate) (func() 
 		body, status, err := a.do(http.MethodPost, "/__admin/mappings", m)
 		if err != nil {
 			rollback()
-			return nil, fmt.Errorf("applier: wiremock: fault %q: create mapping: %w", faultName, err)
+			return nil, result, fmt.Errorf("applier: wiremock: fault %q: create mapping: %w", faultName, err)
 		}
 		if status != http.StatusCreated && status != http.StatusOK {
 			rollback()
-			return nil, fmt.Errorf("applier: wiremock: fault %q: create mapping: status %d: %s", faultName, status, body)
+			return nil, result, fmt.Errorf("applier: wiremock: fault %q: create mapping: status %d: %s", faultName, status, body)
 		}
 		var created struct {
 			ID string `json:"id"`
 		}
 		if err := json.Unmarshal(body, &created); err != nil || created.ID == "" {
 			rollback()
-			return nil, fmt.Errorf("applier: wiremock: fault %q: create mapping: response had no id: %s", faultName, body)
+			return nil, result, fmt.Errorf("applier: wiremock: fault %q: create mapping: response had no id: %s", faultName, body)
 		}
 		ids = append(ids, created.ID)
 	}
 
-	return func() error {
+	undo := func() error {
 		var firstErr error
 		for _, id := range ids {
 			_, status, err := a.do(http.MethodDelete, "/__admin/mappings/"+id, nil)
@@ -180,5 +220,6 @@ func (a *WireMockApplier) ApplyErrorRate(faultName string, r ErrorRate) (func() 
 			}
 		}
 		return firstErr
-	}, nil
+	}
+	return undo, result, nil
 }
