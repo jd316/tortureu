@@ -534,6 +534,22 @@ delivered or consumed. Unlike a network toxic, a published message is durable �
 NOT** imply reversibility it cannot deliver, in the same posture as **R-EXE-16**'s SIGKILL caveat.
 *(Task 5b escalation)*
 
+**R-EXE-21** — `error_rate`'s injected status defaults to **500** when unstated. The verb models a
+dependency failing, and a server error is what a client's retry, timeout, and circuit-breaker paths
+are written against — a 4xx would exercise validation handling instead, which is a different test.
+
+**R-EXE-22** — Where a mock provider has no native probabilistic primitive, `error_rate` **MAY** be
+approximated by a deterministic cycle, and the implementation **MUST** state its resolution. A
+20-state cycle gives 5% resolution: `0.15` is exact (3 of 20), `0.17` is not. A rate finer than the
+resolution **MUST** be reported as approximated rather than silently rounded — a user who asked for
+17% and got 15% must be able to see that in the verdict, since they may be reading the result as
+evidence about a threshold.
+
+**R-EXE-23** — A `duplicate` implementation that consumes and republishes **MUST NOT** consume its
+own republished messages. Without a guard the loop compounds: every duplicate becomes a source of
+further duplicates, and the injected rate silently becomes unbounded amplification rather than the
+proportion the user asked for. *(all three raised by Task 10)*
+
 **R-EXE-20** — Faults targeting a `class: internal` dependency **MUST** be intercepted. Internal
 dependencies are the *primary* fault target, not an edge case: `torture.example.yaml`'s flagship
 faults (`pg_slow`, `redis_dies`) both target them, and the capability the whole product exists to
