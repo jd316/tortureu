@@ -438,8 +438,41 @@ only a run proves them.
 
 **R-AUD-4** — Each finding **SHOULD** name the experiment that would prove it.
 
-**R-AUD-5** — The audit **MUST** inspect only known libraries' known construction sites, staying
-within **R-DET-1**.
+**R-AUD-5** — The audit **MUST** inspect only known libraries' known construction sites.
+
+"Construction site" means bounded source inspection: the call sites where a *known* client library
+is constructed, and only those. **R-DET-1 bounds detection (`init`), not the audit.** The audit MAY
+read source; it MUST NOT perform general source analysis, follow arbitrary control flow, or inspect
+libraries absent from its table.
+
+This distinction is load-bearing. Without it R-AUD-1/2 are unanswerable — knowing a repo imports
+`pgx` says nothing about whether a timeout is set — and every finding degrades to "we did not check",
+which is noise, not signal. The audit's entire value (RESEARCH.md §19: no resilience linter exists)
+depends on actually reading the constructor.
+
+**R-EXE-15** — Fault verbs are **owned by layers**, and a layer **MUST** pass over verbs it does not
+own rather than rejecting them. Rejection is only correct for a verb no layer owns.
+
+| Verb | Owner |
+|---|---|
+| `latency` `jitter` `down` `bandwidth` `slicer` `timeout` `reset_peer` | Toxiproxy (`internal/fault`) |
+| `cpu` `mem` `io` `fd` `pause` `kill` `graceful` `cpu_limit` `mem_limit` | Docker/cgroup (`internal/fault`) |
+| `error_rate` | mock provider (`internal/egress`, WireMock) — only legal on a `class: mock` host |
+| `poison_pill` `duplicate` | broker producer (`internal/queuefault`) |
+
+A rejection here is a defect, not caution: `torture.example.yaml` declares `error_rate`, so a layer
+that errors on an unowned verb makes the project's own reference document unrunnable. This mirrors
+R-CFG-16/17, where `internal/k6` passes over `promql:` asserts it does not own.
+
+**R-EXE-16** — Teardown (**R-EXE-5**) **MUST** cover in-process panic and **SHOULD** cover SIGINT and
+SIGTERM. `SIGKILL` cannot be trapped; the tool **MUST** document that limit rather than implying
+protection it cannot provide, and **SHOULD** make faults recoverable on next start so a `SIGKILL`ed
+run does not leave latency wired into a dependency forever.
+
+**R-AUD-6** — Where the audit cannot determine a setting, it **MUST** say so explicitly and **MUST
+NOT** assert absence. "Not determined" and "not configured" are different findings; conflating them
+makes the audit cry wolf and users stop reading it. *(closes the gap the Task 9a implementer
+escalated)*
 
 ---
 
@@ -500,6 +533,26 @@ are derived and **MUST** be checked against it.
 
 **R-COV-4** — Every predicate **MUST** be derivable from **R-DET-1** inputs alone.
 
+**R-COV-5** — Detection **MUST** expose the facts every predicate namespace needs, so that no
+registry entry is permanently unevaluable:
+
+| Namespace | Fact | Derived from |
+|---|---|---|
+| `spec:openapi` | an OpenAPI/Swagger document exists | file presence |
+| `spec:proto` | `.proto` files exist | file presence |
+| `platform:k8s` | Kubernetes manifests or a Helm chart exist | file presence |
+| `platform:aws` / `azure` | provider SDK in a manifest, or provider config present | manifest |
+| `lacks:otel` | no OpenTelemetry client in any manifest, no collector in compose | manifest + compose |
+| `has:traffic-capture` | a capture artefact is configured | config |
+
+All are file- or manifest-presence checks and therefore inside R-DET-1. Before this requirement,
+29 of 151 registry entries (19%) could never match, so `suggest` was silent for a fifth of the
+catalogue — which defeats R-SCOPE-3.
+
+**R-COV-6** — A predicate the system genuinely cannot evaluate **MUST** be reported as unevaluable,
+never silently treated as false. A tool that fails to suggest is indistinguishable from a tool with
+nothing to suggest, and only the second is honest.
+
 ---
 
 ## 12. Open (TBD)
@@ -513,6 +566,10 @@ are derived and **MUST** be checked against it.
   Currently `""`. Candidates: `"correlated"` (we still schedule the faults, so time-window
   attribution holds — see D-4), or a distinct `"none"`. Raised by the Task 1 implementer.
 - **TBD-7** — `Gemfile` and `pom.xml` manifest support (deferred from R-DET-14).
+- **TBD-8** — **R-DC2-5** (secret-scrub captured traffic on write) has no capture/replay pipeline
+  to attach to in v0, so there is no write path to scrub. It becomes binding the moment `capture`
+  ships and **MUST** be implemented in the same change, never after: scrubbing retrofitted onto an
+  existing corpus means the unscrubbed cassettes already exist. Raised by the Task 6 implementer.
 
 ---
 
