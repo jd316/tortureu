@@ -18,7 +18,7 @@ type Obs struct {
 
 // System is what detection knows about a repo.
 type System struct {
-	SUT    string   // compose service name of the system under test (R-DET-8)
+	SUT    string // compose service name of the system under test (R-DET-8)
 	Deps   []Dep
 	Egress []string // external hosts found (R-DET-4)
 	Obs    Obs
