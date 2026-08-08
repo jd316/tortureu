@@ -58,18 +58,42 @@ func runLatencyJitter() (latency Result, jitter Result) {
 			latency.note("primary (human-authored) form FAILED: %v — translate.go passed the raw YAML string %q straight to Toxiproxy's numeric \"latency\" attribute with no unit conversion", aerr, "300ms")
 			jitter.note("primary (human-authored) form FAILED: %v — same root cause as the latency row: %q was never converted to milliseconds", aerr, "50ms")
 		} else {
-			// Translate/Apply unexpectedly accepted the string form — measure
-			// it as the primary result instead of assuming failure.
+			// internal/fault now parses the unit-suffixed strings, so this
+			// path is the normal one: measure BOTH rows from the same
+			// after-samples, since they came from one shared toxic
+			// (latency: 300ms, jitter: 50ms applied together, exactly as
+			// torture.example.yaml writes them). Earlier versions of this
+			// harness only filled in latency here and left jitter.Verdict
+			// empty, which the caller then defaulted to "miss" — reporting
+			// a confident wrong verdict for a row that was never actually
+			// measured. Compute both explicitly instead.
 			after, merr := s.pingSamples(pingIterations)
 			s.manager.Teardown()
 			if merr != nil {
 				latency.Verdict, jitter.Verdict = "unmeasured", "unmeasured"
+				latency.note("post-fault measurement failed: %v", merr)
+				jitter.note("post-fault measurement failed: %v", merr)
 			} else {
 				afterStats := computeStats(after)
 				delta := afterStats.P50 - baselineStats.P50
 				latency.Stats = &afterStats
 				latency.Measured = fmt.Sprintf("p50 delta = %.2fms", delta)
 				latency.Verdict = verdictAbs(delta, 300, 10)
+
+				deltas := make([]float64, len(after))
+				for i, v := range after {
+					deltas[i] = v - baselineStats.Mean
+				}
+				deltaStats := computeStats(deltas)
+				jitter.Stats = &afterStats
+				jitter.Measured = fmt.Sprintf("stddev of delta = %.2fms", deltaStats.Stddev)
+				jitterPct := math.Abs(deltaStats.Stddev-50) / 50 * 100
+				if jitterPct <= 15 {
+					jitter.Verdict = "pass"
+				} else {
+					jitter.Verdict = "miss"
+					jitter.note("Toxiproxy's own jitter implementation adds a UNIFORM random offset in [-jitter,+jitter] (a plain uniform(-50,50) alone would have stddev ~28.9ms, not 50ms), and any negative computed delay clamps to zero, skewing the distribution further and lowering the effective stddev even more — this is not a translate.go defect, it is what Toxiproxy itself delivers for \"jitter\" given correct numeric input. Measured stddev=%.2fms vs requested 50ms (%.1f%% off, tolerance ±15%%).", deltaStats.Stddev, jitterPct)
+				}
 			}
 		}
 
@@ -132,11 +156,19 @@ func runLatencyJitter() (latency Result, jitter Result) {
 		}
 		jitter.Secondary = &secJitter
 
+		// Defensive fallback only: every branch above sets both verdicts
+		// explicitly. "" must never default to "miss" — that asserts the
+		// fault is wrong when no number was actually measured, which is
+		// exactly the bug report this comment exists to prevent from
+		// recurring. If nothing set it, it truly means "no number", i.e.
+		// unmeasured.
 		if latency.Verdict == "" {
-			latency.Verdict = "miss" // primary failed, already noted above
+			latency.Verdict = "unmeasured"
+			latency.note("no measurement path set a verdict — unmeasured")
 		}
 		if jitter.Verdict == "" {
-			jitter.Verdict = "miss"
+			jitter.Verdict = "unmeasured"
+			jitter.note("no measurement path set a verdict — unmeasured")
 		}
 		return Result{}
 	})
@@ -155,6 +187,9 @@ func runBandwidth() Result {
 	r := Result{Verb: "bandwidth", Requested: "1 Mbps", Tolerance: "±5% (bytes/sec through the proxy)"}
 	res := withStack("bw", true, "", func(s *b1Stack) Result {
 		const payload = 400_000 // bytes
+		// 1 Mbps = 1,000,000 bit/s = 125,000 byte/s = 125 KB/s (decimal KB,
+		// which is also what internal/fault now converts "1mbps" to).
+		const requestedBps = 1_000_000.0 / 8.0
 
 		primary := config.Fault{Name: "bw_primary", Target: echoTarget, Verb: "bandwidth", Inject: map[string]any{"bandwidth": "1mbps"}}
 		tr, aerr := s.applyFault(primary)
@@ -163,17 +198,39 @@ func runBandwidth() Result {
 			r.Verdict = "miss"
 			r.note("primary (human-authored) form FAILED: %v — translate.go passed the raw YAML string %q straight to Toxiproxy's numeric \"rate\" attribute (KB/s) with no unit parsing or Mbps->KB/s conversion", aerr, "1mbps")
 		} else {
-			r.Verdict = "unmeasured"
-			r.note("primary (human-authored) form unexpectedly succeeded against this Toxiproxy version — this harness only measures the failure path here, not the resulting bandwidth; treat as needing manual follow-up")
+			// internal/fault now parses "1mbps" into a numeric KB/s value
+			// Toxiproxy accepts, so Apply succeeding is the normal case —
+			// measure it, don't stop at "it didn't error". An earlier
+			// version of this harness only handled the failure path here
+			// and reported "unmeasured" on success without ever running
+			// the actual throughput measurement, which is a harness gap,
+			// not a real "no data" situation: the fault WAS applied and
+			// bytes WERE measurable.
+			out, err := dockerExec(s.clientCont, "python3", "-c", bandwidthClientPy, "echo", echoPort, fmt.Sprint(payload))
+			if err != nil {
+				r.Verdict = "unmeasured"
+				r.note("measurement exec failed: %v: %s", err, out)
+			} else if obj, perr := lastJSONObject(out); perr != nil {
+				r.Verdict = "unmeasured"
+				r.note("could not parse measurement output: %v", perr)
+			} else {
+				bps, _ := obj["bytes_per_sec"].(float64)
+				r.Measured = fmt.Sprintf("%.0f bytes/sec", bps)
+				pct := math.Abs(bps-requestedBps) / requestedBps * 100
+				r.Verdict = "miss"
+				if pct <= 5 {
+					r.Verdict = "pass"
+				}
+				r.note("measured %.0f B/s vs requested %.0f B/s (%.1f%% off, tolerance ±5%%)", bps, requestedBps, pct)
+			}
 		}
 		s.manager.Teardown()
 
 		// SECONDARY: already-numeric, AND already unit-converted by this
-		// harness (translate.go does not do this conversion either way —
-		// 1 Mbps = 1,000,000 bit/s = 125,000 byte/s = ~122.07 KB/s, and
-		// Toxiproxy's "rate" attribute is KB/s).
-		const requestedKBps = 122
-		const requestedBps = 1_000_000.0 / 8.0
+		// harness — kept for parity/comparison now that the primary path
+		// also measures a real number; not required to distinguish a gap
+		// anymore, since translate.go does the KB/s conversion itself.
+		const requestedKBps = 125
 		sec := Result{Verb: "bandwidth", Requested: fmt.Sprintf("1 Mbps == %d KB/s (numeric, unit-converted by this harness, NOT by translate.go)", requestedKBps), Tolerance: "±5% (bytes/sec through the proxy)"}
 		fBw := config.Fault{Name: "bw_secondary", Target: echoTarget, Verb: "bandwidth", Inject: map[string]any{"bandwidth": requestedKBps}}
 		if tr2, err := s.applyFault(fBw); err != nil {
@@ -202,8 +259,12 @@ func runBandwidth() Result {
 			}
 		}
 		r.Secondary = &sec
+		// Defensive fallback only (see runLatencyJitter's identical
+		// comment): "" must never default to "miss" without a number
+		// behind it.
 		if r.Verdict == "" {
-			r.Verdict = "miss"
+			r.Verdict = "unmeasured"
+			r.note("no measurement path set a verdict — unmeasured")
 		}
 		return Result{}
 	})
