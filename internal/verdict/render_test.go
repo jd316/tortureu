@@ -113,3 +113,59 @@ func TestRender_IsDerivedFromSameDocumentAsJSON(t *testing.T) {
 		t.Errorf("Render(v) does not show the exit code %d derived from the document", wantExit)
 	}
 }
+
+// spec: R-DC2-2
+// An aborted run MUST name every unclassified host — that's the entire reason
+// the run refused to start. Before this fix, Render dropped
+// EgressAudit.Unclassified entirely, so a user got "exit 3" with no
+// explanation. Prove every unclassified host name appears in the human
+// output.
+func TestRender_NamesEveryUnclassifiedHostOnAbort(t *testing.T) {
+	v := Verdict{
+		Scenario:  "api",
+		Status:    StatusAborted,
+		DurationS: 60,
+		EgressAudit: EgressAudit{
+			Unclassified: []string{"api.partner.com", "cdn.unknown-vendor.net"},
+		},
+	}
+
+	human := Render(v)
+
+	for _, host := range v.EgressAudit.Unclassified {
+		if !strings.Contains(human, host) {
+			t.Errorf("Render(v) does not name unclassified host %q; render:\n%s", host, human)
+		}
+	}
+	if !strings.Contains(human, "exit 3") {
+		t.Errorf("Render(v) does not show exit 3 for an aborted verdict; render:\n%s", human)
+	}
+}
+
+// spec: R-VER-7
+// Exit 3 (aborted) covers two distinct causes: unclassified egress, or a
+// failed reset. Verdict.Reset was carried in the document but never rendered,
+// so a reset-failure abort looked identical to (and as unexplained as) any
+// other abort. Prove a non-clean reset value is visible in the human output.
+func TestRender_ShowsFailedReset(t *testing.T) {
+	v := Verdict{
+		Scenario:  "api",
+		Status:    StatusAborted,
+		DurationS: 60,
+		Reset:     "failed",
+	}
+
+	human := Render(v)
+
+	if !strings.Contains(human, "failed") {
+		t.Errorf("Render(v) does not surface the failed reset; render:\n%s", human)
+	}
+
+	// A clean reset must not be reported as if it were a problem.
+	v2 := v
+	v2.Reset = "clean"
+	human2 := Render(v2)
+	if strings.Contains(human2, "reset:") {
+		t.Errorf("Render(v) reports reset:clean as if it needed explaining; render:\n%s", human2)
+	}
+}

@@ -19,7 +19,23 @@ func Render(v Verdict) string {
 	if v.Commit != "" {
 		fmt.Fprintf(&b, "  commit %s", v.Commit)
 	}
-	b.WriteString("\n\n")
+	b.WriteString("\n")
+
+	// R-DC2-2: an abort MUST name every unclassified host — this is the
+	// reason a user gets exit 3, and it must be impossible to miss.
+	if len(v.EgressAudit.Unclassified) > 0 {
+		fmt.Fprintf(&b, "\n  unclassified egress, run refused: %s\n",
+			strings.Join(v.EgressAudit.Unclassified, ", "))
+	}
+
+	// A non-clean reset is the other legitimate abort cause (R-VER-7: exit 3
+	// is "unclassified egress, or reset failed") and was otherwise invisible
+	// to a human even though it's already in the JSON document.
+	if v.Reset != "" && v.Reset != "clean" {
+		fmt.Fprintf(&b, "\n  reset: %s\n", v.Reset)
+	}
+
+	b.WriteString("\n")
 
 	for _, f := range v.Findings {
 		fmt.Fprintf(&b, "  ✗ %s -> %s", f.Broke.Assertion, f.Broke.Observed)
@@ -70,8 +86,9 @@ func Render(v Verdict) string {
 		b.WriteString("\n")
 	}
 
-	fmt.Fprintf(&b, "  egress: %d mocked, %d blocked, %d real",
-		len(v.EgressAudit.Mocked), len(v.EgressAudit.Blocked), len(v.EgressAudit.Real))
+	fmt.Fprintf(&b, "  egress: %d mocked, %d blocked, %d real, %d unclassified",
+		len(v.EgressAudit.Mocked), len(v.EgressAudit.Blocked), len(v.EgressAudit.Real),
+		len(v.EgressAudit.Unclassified))
 	fmt.Fprintf(&b, "          exit %d\n", ExitCode(v))
 
 	return b.String()
