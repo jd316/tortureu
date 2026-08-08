@@ -34,11 +34,9 @@ func sortByDomainThenID(entries []doctor.CoverageEntry) {
 	})
 }
 
-// renderPrereqs renders a prerequisite preflight (closest fit: R-CLI-3 —
-// doctor's job is telling a user what their setup can and cannot do, and
-// R-AUD-3's "hint, never a failure" spirit — SPEC.md names neither
-// `doctor` nor `init` checking installed tools explicitly; escalated in
-// the task report rather than inventing a requirement id for it).
+// renderPrereqs renders a prerequisite preflight (R-CLI-5: `doctor` MUST
+// report whether k6/docker/docker compose are present; escalated as a
+// SPEC.md gap by this task before R-CLI-5 existed to describe it).
 //
 // A tool is reported "found" only on exec.LookPath succeeding — never a
 // guessed path — and a missing tool gets an install hint, never a guess at

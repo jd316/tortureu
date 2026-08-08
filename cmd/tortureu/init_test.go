@@ -188,10 +188,12 @@ func TestInitDoesNotTouchAnotherToolsMCPRegistration(t *testing.T) {
 	}
 }
 
-// spec: closest fit R-DET-7 (a known-unknown must be surfaced, never
-// hidden) applied to a machine-level fact rather than a repo-level one; no
-// SPEC.md requirement names a prerequisite preflight explicitly — see the
-// task report's escalation.
+// spec: R-CLI-5
+//
+// R-CLI-5 was added after this task escalated that no requirement named a
+// prerequisite preflight (previously cited here as "closest fit R-DET-7");
+// re-pointed at the requirement written to describe it — "init MUST warn
+// about any that are missing without failing."
 //
 // PATH is stubbed to a directory with nothing in it, so k6 (and docker) are
 // genuinely absent via the real exec.LookPath, matching this task's

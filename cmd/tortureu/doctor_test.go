@@ -222,9 +222,11 @@ func TestDoctorResilienceFindingsAreLabelledHints(t *testing.T) {
 	}
 }
 
-// spec: closest fit R-CLI-3 (doctor's job is telling a user what their
-// setup can and cannot do) — no SPEC.md requirement names a prerequisite
-// preflight explicitly; see the task report's escalation.
+// spec: R-CLI-5
+//
+// R-CLI-5 was added after this task escalated that no requirement named a
+// prerequisite preflight (previously cited here as "closest fit R-CLI-3");
+// re-pointed at the requirement written to describe it.
 //
 // This stubs PATH to a directory containing no binaries at all, so k6 is
 // genuinely absent from the real exec.LookPath the check performs — not a
@@ -252,7 +254,7 @@ func TestCheckPrerequisitesReportsGenuinelyMissingK6(t *testing.T) {
 	}
 }
 
-// spec: closest fit R-CLI-3
+// spec: R-CLI-5
 //
 // The rendering side: buildDoctorReport must surface a missing
 // prerequisite by name, with its hint, not silently drop it.
