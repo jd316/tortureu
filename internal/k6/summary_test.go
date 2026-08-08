@@ -112,3 +112,86 @@ func TestIngestSummary_NormalizesBooleanThresholdResults(t *testing.T) {
 		t.Errorf("rate<0.5 threshold: want ok=true (0 < 0.5), got %+v", failedResult)
 	}
 }
+
+// spec: R-VER-10
+// An E1 eval found the deeper defect the previous test's shape did not
+// reach: on the ramping-arrival-rate executor -- the only executor R-CFG-6
+// permits -- real k6 0.54.0 reports every threshold's boolean as false
+// regardless of the measured value, confirmed by running the pinned
+// grafana/k6:0.54.0 image directly with a script indistinguishable in
+// shape from what Compile generates (options.scenarios.load.executor =
+// 'ramping-arrival-rate'). Even a script whose handleSummary() explicitly
+// overwrote a threshold's ok to true before returning had that override
+// silently discarded: --summary-export's own writer recomputes its answer
+// independently of whatever handleSummary() returned.
+//
+// This is why TestIngestSummary_NormalizesBooleanThresholdResults survived
+// unnoticed: its raw booleans were both already true, so a bug that always
+// forces false could not show up there. This test's raw booleans are both
+// false -- k6's own (wrong) answer for an arrival-rate run -- while the
+// measured values genuinely satisfy both threshold expressions, matching
+// the real run that regressed: a control case with no defect produced
+// findings instead of zero. IngestSummary must recompute ok from the
+// measured value and the threshold expression, never trust k6's own
+// boolean, so a passing measurement is reported as passing regardless of
+// what k6's summary writer says next to it.
+func TestIngestSummary_RecomputesFromValueOnArrivalRateExecutor(t *testing.T) {
+	raw := []byte(`{
+		"metrics": {
+			"http_req_duration": {
+				"p(95)": 637.11,
+				"thresholds": {"p(95)<2000": false}
+			},
+			"http_req_failed": {
+				"value": 0,
+				"thresholds": {"rate<0.5": false}
+			}
+		}
+	}`)
+
+	metrics, err := IngestSummary(raw)
+	if err != nil {
+		t.Fatalf("IngestSummary: %v", err)
+	}
+
+	durMetric := metrics["http_req_duration"].(map[string]any)
+	durOK := durMetric["thresholds"].(map[string]any)["p(95)<2000"].(map[string]any)["ok"]
+	if durOK != true {
+		t.Errorf("p(95)<2000: want ok=true (637.11ms < 2000ms measured, k6's own reported boolean of false must not be trusted), got %v", durOK)
+	}
+
+	failedMetric := metrics["http_req_failed"].(map[string]any)
+	failedOK := failedMetric["thresholds"].(map[string]any)["rate<0.5"].(map[string]any)["ok"]
+	if failedOK != true {
+		t.Errorf("rate<0.5: want ok=true (0 < 0.5 measured, k6's own reported boolean of false must not be trusted), got %v", failedOK)
+	}
+}
+
+// spec: R-VER-10
+// The failure-safe direction of the same rule: a threshold whose measured
+// value genuinely violates the expression MUST still be reported as
+// failed, even though k6's own boolean cannot be trusted either way. This
+// guards against a naive fix that stops trusting k6's `false` by defaulting
+// to true -- inventing a pass is explicitly the one outcome worse than
+// inventing a failure per the coordinator's direction.
+func TestIngestSummary_RecomputedFailureIsNotMaskedAsPassing(t *testing.T) {
+	raw := []byte(`{
+		"metrics": {
+			"http_req_duration": {
+				"p(95)": 4218,
+				"thresholds": {"p(95)<2000": true}
+			}
+		}
+	}`)
+
+	metrics, err := IngestSummary(raw)
+	if err != nil {
+		t.Fatalf("IngestSummary: %v", err)
+	}
+
+	durMetric := metrics["http_req_duration"].(map[string]any)
+	durOK := durMetric["thresholds"].(map[string]any)["p(95)<2000"].(map[string]any)["ok"]
+	if durOK != false {
+		t.Errorf("p(95)<2000: want ok=false (4218ms measured > 2000ms limit), got %v -- a real breach must never be reported as passing", durOK)
+	}
+}
