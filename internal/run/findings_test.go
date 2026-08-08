@@ -132,7 +132,11 @@ func TestEvaluateThresholds_ReadsRealK6SummaryShapeNotNestedUnderValues(t *testi
 func TestEvaluatePromqlAsserts_UnevaluatedAssertStillReadsUnevaluatedNotMeasured(t *testing.T) {
 	// Regression guard: adding measured-value reporting must not make an
 	// unevaluated assertion (no -prom-url configured) look like a measured
-	// pass, which would undo the Critical fixed in the previous round.
+	// pass, which would undo the Critical fixed two rounds ago. A real
+	// first run then showed *why* a string prefix in Broke.Observed wasn't
+	// enough: it rendered as "p(95)<2000 -> 0.583" — a passing-looking
+	// number next to a fail marker, worse than either a clear pass or fail.
+	// internal/verdict now carries this structurally.
 	asserts := []config.AssertEntry{{"promql": "up == 1"}}
 	passed, findings := evaluatePromqlAsserts(asserts, nil, oneFault(), detect.System{})
 	if len(passed) != 0 {
@@ -141,12 +145,18 @@ func TestEvaluatePromqlAsserts_UnevaluatedAssertStillReadsUnevaluatedNotMeasured
 	if len(findings) != 1 {
 		t.Fatalf("findings = %v, want exactly one", findings)
 	}
-	got := findings[0].Broke.Observed
-	if !strings.Contains(got, "not evaluated") {
-		t.Errorf("Broke.Observed = %q, want it to say \"not evaluated\" — distinct from \"not measured\", which means something else (an evaluated assertion whose value this package could not read)", got)
+	f := findings[0]
+	if !f.Unevaluated {
+		t.Error("Unevaluated = false, want true")
 	}
-	if strings.Contains(got, "not measured") {
-		t.Errorf("Broke.Observed = %q must not say \"not measured\" — that would blur an assertion that never ran with one that ran but had no readable value", got)
+	if !strings.Contains(f.Reason, "Prometheus") {
+		t.Errorf("Reason = %q, want it to name the actual cause", f.Reason)
+	}
+	if strings.HasPrefix(f.Reason, "not evaluated") {
+		t.Errorf("Reason = %q must not carry the \"not evaluated: \" prefix — the renderer supplies that now", f.Reason)
+	}
+	if f.Broke.Observed != "" {
+		t.Errorf("Broke.Observed = %q, want empty — printing a value next to an unchecked assertion is what made the old output misleading", f.Broke.Observed)
 	}
 }
 
@@ -352,8 +362,11 @@ func TestEvaluatePromqlAsserts_NoQuerierProducesUnevaluatedFindingNotSilentPass(
 	if f.Confidence != verdict.Ambiguous {
 		t.Errorf("Confidence = %q, want ambiguous — an unevaluated assertion is not a confident attribution of anything", f.Confidence)
 	}
-	if !strings.Contains(f.Broke.Observed, "not evaluated") {
-		t.Errorf("Broke.Observed = %q, want it to say the assertion was never evaluated, not that it broke", f.Broke.Observed)
+	if !f.Unevaluated {
+		t.Error("Unevaluated = false, want true — the assertion was never evaluated, not broken")
+	}
+	if f.Broke.Observed != "" {
+		t.Errorf("Broke.Observed = %q, want empty", f.Broke.Observed)
 	}
 }
 
@@ -381,8 +394,17 @@ func TestEvaluateSQLAsserts_AlwaysUnevaluated(t *testing.T) {
 	if f.Confidence != verdict.Ambiguous {
 		t.Errorf("Confidence = %q, want ambiguous", f.Confidence)
 	}
-	if !strings.Contains(f.Broke.Observed, "not evaluated") {
-		t.Errorf("Broke.Observed = %q, want it to say the assertion was never evaluated", f.Broke.Observed)
+	if !f.Unevaluated {
+		t.Error("Unevaluated = false, want true")
+	}
+	if f.Reason == "" {
+		t.Error("Reason is empty, want it to say why sql: cannot be evaluated")
+	}
+	if strings.HasPrefix(f.Reason, "not evaluated") {
+		t.Errorf("Reason = %q must not carry the \"not evaluated: \" prefix — the renderer supplies that now", f.Reason)
+	}
+	if f.Broke.Observed != "" {
+		t.Errorf("Broke.Observed = %q, want empty", f.Broke.Observed)
 	}
 	if !strings.HasPrefix(f.Broke.Assertion, "sql:") {
 		t.Errorf("Broke.Assertion = %q, want it to name the sql: assertion", f.Broke.Assertion)

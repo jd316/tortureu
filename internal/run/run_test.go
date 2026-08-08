@@ -130,7 +130,17 @@ func TestRun_AllUnevaluatedAssertsNeverExitZero(t *testing.T) {
 		t.Errorf("ExitCode = %d, want 4 (inconclusive) — the trigger is status:fail with every finding ambiguous, which an all-unevaluated run satisfies", verdict.ExitCode(*v))
 	}
 	if len(v.Findings) == 0 {
-		t.Error("Findings is empty, want the unevaluated promql assertion recorded as a finding, not silently dropped")
+		t.Fatal("Findings is empty, want the unevaluated promql assertion recorded as a finding, not silently dropped")
+	}
+	f := v.Findings[0]
+	if !f.Unevaluated {
+		t.Error("Unevaluated = false, want true — internal/verdict now carries this structurally, not as a string prefix")
+	}
+	if f.Reason == "" {
+		t.Error("Reason is empty, want an actionable reason (e.g. naming -prom-url)")
+	}
+	if f.Broke.Observed != "" {
+		t.Errorf("Broke.Observed = %q, want empty — a real first run showed a value here reads as a passing measurement next to a fail marker", f.Broke.Observed)
 	}
 }
 

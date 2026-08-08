@@ -128,15 +128,27 @@ func buildCandidates(f config.Fault, deps []detect.Dep, lang string) []verdict.C
 // must never read as false" — nor, by the same reasoning, as true).
 // Confidence is Ambiguous so verdict.ExitCode's existing "status: fail with
 // every finding ambiguous => exit 4 (inconclusive)" rule fires when every
-// finding in a run is one of these — verdict.Verdict has no separate
-// "unevaluated" list of its own to populate instead (escalated in the
-// Task 7 report: a dedicated field would be cleaner than overloading
-// Findings this way, but that is internal/verdict's call, not this
-// package's to make unilaterally).
+// finding in a run is one of these.
+//
+// internal/verdict now carries this structurally (Finding.Unevaluated,
+// Finding.Reason) rather than this package overloading Broke.Observed with
+// a string prefix — the earlier approach ("not evaluated: ..." stuffed into
+// Observed) let a rendered verdict show a comparison arrow and a measured-
+// looking value next to an assertion that was never actually checked
+// (`p(95)<2000 -> 0.583` reads as "0.583 was compared against 2000", not
+// "this was never evaluated"). Broke is left entirely unset here: the
+// renderer's INCONCLUSIVE path prints Reason instead, with no arrow and no
+// value to misread. Broke.Assertion is still set — the renderer's `?
+// <assertion> — not evaluated: <reason>` line needs to name which
+// assertion this is — but Broke.Observed (and At/SustainedS) stay unset,
+// per Finding.Unevaluated's own doc comment: nothing was measured, so there
+// is nothing to print next to a comparison arrow that doesn't exist here.
 func unevaluatedFinding(assertion, reason string) verdict.Finding {
 	return verdict.Finding{
-		Confidence: verdict.Ambiguous,
-		Broke:      verdict.Broke{Assertion: assertion, Observed: "not evaluated: " + reason},
+		Confidence:  verdict.Ambiguous,
+		Unevaluated: true,
+		Reason:      reason,
+		Broke:       verdict.Broke{Assertion: assertion},
 	}
 }
 
