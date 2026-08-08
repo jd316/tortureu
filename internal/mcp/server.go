@@ -47,16 +47,19 @@ func NewServer() *Server {
 
 // Serve reads newline-delimited JSON-RPC requests from r and writes
 // newline-delimited JSON-RPC responses to w until r is exhausted or
-// returns an error. Requests are handled one at a time, in the order
-// received — there is no concurrent dispatch and no per-call timeout, so a
-// long-running run_experiment call blocks the loop until it finishes: the
-// server simply doesn't read or answer anything else while it's in
-// flight. That is a deliberate, documented limitation, not an accident:
+// returns an error (R-MCP-7: newline-delimited JSON-RPC 2.0 on stdio).
+// Requests are handled one at a time, in the order received — there is no
+// concurrent dispatch and no per-call timeout, so a long-running
+// run_experiment call blocks the loop until it finishes: the server simply
+// doesn't read or answer anything else while it's in flight. That is
+// R-MCP-7's own normative behaviour, not just a documented limitation:
 // MCP's JSON-RPC stdio transport has no standard progress-notification
 // this server implements, so the honest, predictable behaviour is "nothing
 // else happens until this returns" rather than a partial pipelining
-// scheme that could make a stalled call look identical to a slow one.
-// Callers that need concurrent calls must run multiple server processes.
+// scheme that could make a stalled call look identical to a slow one — and
+// per R-MCP-7, an assistant that mistakes "working" for "wedged" would
+// abandon the call and retry, starting a second Docker stack. Callers that
+// need concurrent calls must run multiple server processes.
 //
 // A JSON-RPC notification (a request with no "id") is dispatched the same
 // as any other method but produces no response line, per the JSON-RPC 2.0

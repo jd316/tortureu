@@ -64,11 +64,12 @@ func serve(t *testing.T, s *Server, requests ...[]byte) []rpcResponse {
 	return decodeResponses(t, out.Bytes())
 }
 
-// No SPEC.md requirement governs the JSON-RPC handshake itself (SPEC.md has
-// no transport section — escalated in the task report per R-PROC-2/4
-// rather than inventing a citation), so this test carries no // spec:
-// comment. It proves the coordinator's literal ask: initialize responds
-// with a protocol version and capabilities.
+// spec: R-MCP-7
+//
+// Was written uncited (SPEC.md had no transport requirement at the time —
+// see the task report's escalation); R-MCP-7 now names exactly this:
+// newline-delimited JSON-RPC 2.0 on stdio, initialize supported. No
+// behaviour change — this is traceability, not a fix.
 func TestServer_Initialize_RespondsWithProtocolVersionAndCapabilities(t *testing.T) {
 	s := NewServer()
 	resps := serve(t, s, rpcCall(1, "initialize", map[string]any{"protocolVersion": "2024-11-05"}))
@@ -95,6 +96,7 @@ func TestServer_Initialize_RespondsWithProtocolVersionAndCapabilities(t *testing
 }
 
 // spec: R-MCP-1
+// spec: R-MCP-7
 func TestServer_ToolsList_ReturnsExactlyFiveToolsWithSchemas(t *testing.T) {
 	s := NewServer()
 	resps := serve(t, s, rpcCall(1, "tools/list", nil))
@@ -128,12 +130,10 @@ func TestServer_ToolsList_ReturnsExactlyFiveToolsWithSchemas(t *testing.T) {
 	}
 }
 
-// This test proves the coordinator's second explicit ask ("one proving a
-// bad call returns a JSON-RPC error rather than panicking"). No SPEC.md
-// requirement names JSON-RPC error codes specifically, so it carries no
-// // spec: comment (see the uncited-test note above); R-MCP-2's "the only
-// tool that executes anything" is still upheld here in spirit — an unknown
-// tool name executes nothing at all.
+// spec: R-MCP-7
+//
+// Proves R-MCP-7's "unknown tool ... MUST return a JSON-RPC error rather
+// than panicking" clause directly.
 func TestServer_ToolsCall_UnknownToolReturnsJSONRPCErrorNotPanic(t *testing.T) {
 	s := NewServer()
 	resps := serve(t, s, rpcCall(1, "tools/call", map[string]any{"name": "delete_everything", "arguments": map[string]any{}}))
@@ -149,6 +149,10 @@ func TestServer_ToolsCall_UnknownToolReturnsJSONRPCErrorNotPanic(t *testing.T) {
 	}
 }
 
+// spec: R-MCP-7
+//
+// Proves R-MCP-7's "parse error ... MUST return a JSON-RPC error rather
+// than panicking or closing the stream" clause directly.
 func TestServer_HandleLine_MalformedJSONReturnsParseErrorNotPanic(t *testing.T) {
 	s := NewServer()
 	resp := s.handleLine([]byte(`{not json`))
@@ -160,6 +164,11 @@ func TestServer_HandleLine_MalformedJSONReturnsParseErrorNotPanic(t *testing.T) 
 	}
 }
 
+// spec: R-MCP-7
+//
+// Notification semantics are part of the "JSON-RPC 2.0" R-MCP-7 requires;
+// this is the general JSON-RPC 2.0 spec's own rule, exercised here because
+// a naive implementation could easily send a response for every line.
 func TestServer_NotificationGetsNoResponse(t *testing.T) {
 	s := NewServer()
 	// A request with no "id" is a JSON-RPC notification: dispatched, but
@@ -207,12 +216,14 @@ assert:
 	return path
 }
 
-// This test exercises the real Serve loop end to end (initialize, then
-// tools/call) against emit_k6_script — the one tool whose real dispatch
-// path (read a file, parse it, compile) needs no Docker daemon, unlike
-// run_experiment's. It is the "real end-to-end" case the coordinator asked
-// for, to the extent practical without a live Docker daemon or a vendored
-// MCP client SDK (see the serve() helper's comment and the task report).
+// spec: R-MCP-7
+//
+// Exercises the real Serve loop end to end (initialize, then tools/call)
+// against emit_k6_script — the one tool whose real dispatch path (read a
+// file, parse it, compile) needs no Docker daemon, unlike run_experiment's.
+// It is the "real end-to-end" case the coordinator asked for, to the
+// extent practical without a live Docker daemon or a vendored MCP client
+// SDK (see the serve() helper's comment and the task report).
 func TestServer_ServeEndToEnd_EmitK6ScriptThroughTheWire(t *testing.T) {
 	dir := t.TempDir()
 	writeComposeFile(t, dir)
@@ -249,6 +260,7 @@ func TestServer_ServeEndToEnd_EmitK6ScriptThroughTheWire(t *testing.T) {
 
 // spec: R-MCP-2
 // spec: R-MCP-3
+// spec: R-MCP-7
 //
 // run_experiment's dispatch wrapper (callRunExperiment, dispatch.go) is a
 // thin argument-parsing layer around the already-tested RunExperiment
@@ -281,6 +293,7 @@ func TestServer_ToolsCall_RunExperiment_InvalidTortureYAMLReturnsErrorNotPanic(t
 }
 
 // spec: R-VER-4
+// spec: R-MCP-7
 //
 // Exercises explain_failure's transport path against a runRecord this test
 // injects directly (package-internal field access), standing in for one
