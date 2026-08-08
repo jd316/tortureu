@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jdb316/tortureu/internal/ci"
 	"github.com/jdb316/tortureu/internal/config"
 	"github.com/jdb316/tortureu/internal/detect"
 )
@@ -208,6 +209,36 @@ func TestInitCIGitlabWritesGitlabPipeline(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "tortureu run") {
 		t.Errorf("pipeline does not run tortureu:\n%s", content)
+	}
+}
+
+// spec: R-CLI-11
+//
+// R-DET-7 says gaps are surfaced, not hidden, and while no release is
+// published the biggest gap in a generated pipeline is that it cannot yet
+// install the binary it runs. The stdout report must say that in the same
+// terms the file does — a red build for a stated reason — rather than
+// leaving the user to discover it from a failing job.
+func TestInitCIReportsTheInstallStateItActuallyGenerated(t *testing.T) {
+	chdirTemp(t)
+	var out, errb bytes.Buffer
+	if code := runInit([]string{"-ci"}, &out, &errb); code != 0 {
+		t.Fatalf("runInit -ci exited %d: %s", code, errb.String())
+	}
+	got := out.String()
+	var want []string
+	if ci.ReleaseVersion == "" {
+		want = []string{"no published release", "exit 2"}
+	} else {
+		want = []string{ci.ReleaseVersion}
+	}
+	for _, w := range want {
+		if !strings.Contains(got, w) {
+			t.Errorf("init --ci report does not mention %q (ReleaseVersion=%q):\n%s", w, ci.ReleaseVersion, got)
+		}
+	}
+	if strings.Contains(got, "builds from source") {
+		t.Errorf("init --ci still reports building from source:\n%s", got)
 	}
 }
 

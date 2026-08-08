@@ -1,0 +1,85 @@
+# goreleaser config — how TortureU becomes something a CI runner can install
+# (SPEC.md R-CLI-11, TBD-11).
+#
+# Run by .github/workflows/release.yml on a `v*` tag. Locally, the only safe
+# invocation is a snapshot, which builds everything and publishes nothing:
+#
+#     goreleaser release --snapshot --clean
+#
+# Licensing (SPEC.md §10): the archives contain the MIT tortureu binary and
+# nothing else. k6 is AGPL-3 and is never linked (R-LIC-1) and never bundled —
+# not bundling it also keeps R-LIC-3's "redistributed unmodified, with its own
+# licence" obligation from applying at all.
+version: 2
+
+project_name: tortureu
+
+builds:
+  - id: tortureu
+    main: ./cmd/tortureu
+    binary: tortureu
+    # Static: the CI image is Alpine (musl), and a cgo-linked binary built on
+    # glibc would not run in it.
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+archives:
+  - id: tortureu
+    formats: [tar.gz]
+    # The generated CI pipeline builds this exact filename from the tag it
+    # pins (internal/ci: tortureu_${version#v}_linux_amd64.tar.gz). Changing
+    # this template breaks every pipeline `init --ci` has already written, so
+    # it is not a cosmetic setting.
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  # Downloaded and verified by the generated GitHub workflow. The name is part
+  # of the same contract as the archive template above.
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  # Stated rather than inferred from the git remote: `goreleaser check` (and
+  # a snapshot build) must work in a checkout that has no remote configured.
+  github:
+    owner: jdb316
+    name: tortureu
+  # Created as a draft: a release is a decision a maintainer makes, and the
+  # download URLs the generated pipelines point at only resolve once it is
+  # published. Publish it, then set internal/ci.ReleaseVersion to the tag.
+  draft: true
+  prerelease: auto
+  footer: |
+    Install:
+
+        go install github.com/jdb316/tortureu/cmd/tortureu@{{ .Tag }}
+
+    or download the archive for your platform and verify it against
+    `checksums.txt`. Container image: `ghcr.io/jdb316/tortureu:{{ .Tag }}`.
+
+    TortureU is MIT. It drives k6 (AGPL-3) as a separate process and neither
+    links nor ships it — install k6 separately.

@@ -17,9 +17,17 @@ import (
 // not on a substring of a string we happened to build.
 func parse(t *testing.T, provider string) map[string]any {
 	t.Helper()
-	_, content, err := Generate(provider)
+	return parseAt(t, provider, ReleaseVersion)
+}
+
+// parseAt is parse for an arbitrary pinned release version, so both sides of
+// the "a release exists / does not exist yet" fork (R-CLI-11) are testable
+// without waiting for a tag to be pushed.
+func parseAt(t *testing.T, provider, version string) map[string]any {
+	t.Helper()
+	_, content, err := generate(provider, version)
 	if err != nil {
-		t.Fatalf("Generate(%q): %v", provider, err)
+		t.Fatalf("generate(%q, %q): %v", provider, version, err)
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal(content, &doc); err != nil {
@@ -287,6 +295,166 @@ func TestDefaultPathsAreTheConventionalOnes(t *testing.T) {
 		if got != path {
 			t.Errorf("Generate(%q) path = %q, want %q", provider, got, path)
 		}
+	}
+}
+
+// installShell returns the shell the generated pipeline runs to install
+// tortureu, pulled out of the parsed document rather than the template. An
+// empty result means the pipeline installs nothing by running a command —
+// which for GitLab is the pinned-image case, where the binary is in the
+// image and there is nothing to install.
+func installShell(t *testing.T, provider, version string) string {
+	t.Helper()
+	doc := parseAt(t, provider, version)
+	switch provider {
+	case ProviderGitHub:
+		jobs, _ := doc["jobs"].(map[string]any)
+		for _, j := range jobs {
+			job, _ := j.(map[string]any)
+			steps, _ := job["steps"].([]any)
+			for _, s := range steps {
+				step, _ := s.(map[string]any)
+				if name, _ := step["name"].(string); strings.Contains(name, "install tortureu") {
+					body, _ := step["run"].(string)
+					return body
+				}
+			}
+		}
+	case ProviderGitLab:
+		for _, v := range doc {
+			job, ok := v.(map[string]any)
+			if !ok {
+				continue
+			}
+			lines, ok := job["before_script"].([]any)
+			if !ok {
+				continue
+			}
+			var b strings.Builder
+			for _, l := range lines {
+				fmt.Fprintf(&b, "%v\n", l)
+			}
+			return b.String()
+		}
+	}
+	return ""
+}
+
+// spec: R-CLI-11
+//
+// The install step may not build tortureu from the checkout: a consumer's
+// repo has no TortureU source, so such a pipeline runs nowhere it is meant
+// to run. This holds on both sides of the release fork.
+func TestGeneratedPipelinesDoNotBuildTortureuFromSource(t *testing.T) {
+	for _, provider := range Providers() {
+		for _, version := range []string{"", "v9.9.9"} {
+			_, content, err := generate(provider, version)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(content), "go build") {
+				t.Errorf("%s pipeline (version %q) builds tortureu from source; it must install a published artefact", provider, version)
+			}
+		}
+	}
+}
+
+// spec: R-CLI-11
+//
+// A published artefact must be pinned to a version and checksum-verified
+// where it is downloaded. `latest`, in any spelling, makes a regression
+// unattributable: the service changed, or the harness did.
+func TestInstallIsVersionPinnedAndNeverFloatsOnLatest(t *testing.T) {
+	const version = "v9.9.9"
+	for _, provider := range Providers() {
+		_, content, err := generate(provider, version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(content)
+		if !strings.Contains(s, version) {
+			t.Errorf("%s pipeline does not mention the pinned version %s:\n%s", provider, version, s)
+		}
+		for _, float := range []string{"@latest", ":latest", "/latest/download"} {
+			if strings.Contains(s, float) {
+				t.Errorf("%s pipeline floats on %q — the installed harness must be pinned", provider, float)
+			}
+		}
+	}
+
+	gh := installShell(t, ProviderGitHub, version)
+	if gh == "" {
+		t.Fatal("github workflow has no `install tortureu` step")
+	}
+	for _, want := range []string{version, "checksums.txt", "sha256sum -c"} {
+		if !strings.Contains(gh, want) {
+			t.Errorf("github install step does not contain %q — a downloaded archive must be checksum-verified:\n%s", want, gh)
+		}
+	}
+
+	// GitLab runs the job inside the released image, so the pin is the image tag.
+	doc := parseAt(t, ProviderGitLab, version)
+	found := false
+	for name, v := range doc {
+		job, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, isJob := job["script"]; !isJob {
+			continue
+		}
+		found = true
+		image, _ := job["image"].(string)
+		if !strings.HasSuffix(image, ":"+version) {
+			t.Errorf("gitlab job %s image %q is not pinned to %s", name, image, version)
+		}
+	}
+	if !found {
+		t.Fatal("gitlab pipeline declares no job")
+	}
+}
+
+// spec: R-CLI-11
+//
+// Before the first tag there is nothing to install. The generated step must
+// then FAIL the job with exit 2 (harness error) and say why — not download a
+// URL that 404s, and not quietly continue. Proven by executing the emitted
+// shell, not by reading the template: the stub tortureu on PATH exits 0, so
+// a step that merely fell through would come back green here.
+func TestInstallStepFailsLoudlyWhileNoReleaseExists(t *testing.T) {
+	for _, provider := range Providers() {
+		for _, shell := range []string{"bash", "sh"} {
+			body := installShell(t, provider, "")
+			if body == "" {
+				t.Fatalf("%s pipeline has no install step while no release exists; it must fail loudly", provider)
+			}
+			for _, download := range []string{"curl", "wget", "http://", "https://github.com/jdb316/tortureu/releases/download"} {
+				if strings.Contains(body, download) {
+					t.Errorf("%s install step attempts %q with no release published — a missing release must not be reported as a network failure:\n%s", provider, download, body)
+				}
+			}
+			out, status := runScript(t, shell, body, 0)
+			if status != 2 {
+				t.Errorf("%s install step under %s exited %d, want 2 (R-VER-7 harness error)\n%s", provider, shell, status, out)
+			}
+			if !strings.Contains(strings.ToLower(out), "no published release") {
+				t.Errorf("%s install step under %s does not say a release is missing: %q", provider, shell, out)
+			}
+		}
+	}
+}
+
+// spec: R-CLI-11
+//
+// The one constant a tag sets. Empty means "no release yet" and selects the
+// fail-loudly branch above; anything else must be a real tag, because it is
+// interpolated straight into a download URL and an image tag.
+func TestReleaseVersionIsEmptyOrARealTag(t *testing.T) {
+	if ReleaseVersion == "" {
+		return
+	}
+	if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`).MatchString(ReleaseVersion) {
+		t.Errorf("ReleaseVersion = %q, want empty or a vMAJOR.MINOR.PATCH tag", ReleaseVersion)
 	}
 }
 

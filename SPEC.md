@@ -587,6 +587,24 @@ The generated pipeline **MUST**:
   rule applies: a result the pipeline cannot interpret is reported as uninterpretable, not
   silently treated as success.
 
+The step that installs `tortureu` **MUST NOT** build it from the checked-out source. A consumer's
+repo contains no TortureU source, so `go build ./cmd/tortureu` describes a pipeline that can only
+run inside this repo — a generated file that is wrong everywhere it is meant to be used. The
+install step **MUST** instead take a **published, version-pinned artefact**: a release archive
+whose checksum is verified against the release's own `checksums.txt`, or a container image at the
+same pinned tag. It **MUST NOT** float on `latest` or `@latest`, in either form — a pipeline whose
+binary changes under it cannot tell a regression in the service from a change in the harness.
+
+While no such artefact is published, the generated install step **MUST** fail the job with exit `2`
+(harness error, **R-VER-7**), state plainly that no release exists yet, and list the routes the
+reader may substitute. Two things it **MUST NOT** do: emit a download of a URL that does not
+resolve, which reports a missing release as a network accident; and let the job continue, which
+reports it as nothing at all. The same prohibition on `continue-on-error` / `allow_failure` applies
+here as to the run step — an uninstallable harness is exit `2`'s literal meaning, not a warning.
+*(resolves TBD-11 as far as it can be resolved before a maintainer pushes the first tag: the
+mechanics, the pinning rule and the pre-release behaviour are fixed here; the pinned version itself
+is one constant, set when the tag exists)*
+
 `--ci` is a **mode**, not a modifier: it writes the pipeline file only, and **MUST NOT** run
 detection or write `torture.yaml`. The two artefacts have different lifetimes — `torture.yaml` is
 regenerated as the stack changes, the pipeline is written once — and a repo may want CI wiring
@@ -1095,12 +1113,32 @@ nothing to suggest, and only the second is honest.
   file with no valid check, and a green result that checked nothing is worse than a red one.
   Resolves by amending R-CFG-18 to state the shape (or to require a per-entry discriminator).
 - ~~**TBD-2**~~ — **RESOLVED**: `emit` prints to stdout by default (R-CLI-8), so its output composes with a shell redirect rather than requiring a path argument.
-- **TBD-11** — How `tortureu` itself reaches a CI runner (R-CLI-11). There is no published
-  release, tag, container image or marketplace action, so the generated pipeline builds the binary
-  from the checked-out source (`go build ./cmd/tortureu`). That is correct inside this repo and
-  wrong in a consumer repo, which has no TortureU source to build. The generated step is therefore
-  marked in-file as the one line the user must adapt, rather than emitting an install command for a
-  distribution channel that does not exist. Resolves when v0 ships an installable artefact.
+- ~~**TBD-11**~~ — **RESOLVED 2026-08-09, except for one constant that only a tag can set.** How
+  `tortureu` itself reaches a CI runner (R-CLI-11). The old answer — build it from the checked-out
+  source — was correct inside this repo and wrong in every repo the generated file is *for*.
+
+  The release mechanics now exist rather than being wished for: `.goreleaser.yaml` builds
+  `linux`/`darwin` × `amd64`/`arm64` static binaries with a `checksums.txt`, `Dockerfile` builds a
+  CI-shaped image (`tortureu` on top of `docker:cli`, so the container that runs the experiment can
+  reach the compose stack), and `.github/workflows/release.yml` runs both on a `v*` tag. Three
+  install routes therefore exist, and R-CLI-11 now names which one the generated pipeline takes:
+  GitHub Actions downloads the pinned release archive and verifies it against `checksums.txt`;
+  GitLab runs the job *in* the image at the same pinned tag; and `go install
+  github.com/jdb316/tortureu/cmd/tortureu@<tag>` is the zero-infrastructure route documented in
+  README for humans, deliberately not the one CI takes — it needs a Go toolchain on the runner and
+  pins nothing that a checksum could verify.
+
+  The pinning rule is the part worth keeping: **no `latest`, in any spelling.** A harness that
+  updates itself under a pipeline makes every regression ambiguous — the service changed, or the
+  thing measuring it did, and the run cannot say which.
+
+  What genuinely cannot be closed here: **no tag has been pushed and no artefact published** — that
+  is a maintainer's decision, not an implementer's. So `ci.ReleaseVersion` is `""`, and while it is,
+  the generated install step **fails the job with exit 2** naming the reason and listing the routes,
+  which is the honest reading: the harness could not be installed, so nothing was proven. It does
+  not emit a download that 404s (a missing release is not a network flake) and it does not pass.
+  Setting that one constant to the first tag, and confirming the published URL resolves, is all that
+  remains.
 
 - **TBD-13** — Whether the keploy handoff `capture -engine keploy` generates (R-CLI-12) actually
   records a session end to end. keploy 3.6.11's flags, its `keploy config --generate` output and

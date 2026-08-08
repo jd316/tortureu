@@ -190,9 +190,15 @@ func runInitCI(args []string, ciOut string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "  0 pass · 1 assertion broke · 2 harness error · 3 aborted · 4 inconclusive")
 	fmt.Fprintln(stdout, "  1, 2, 3 and 4 all fail the build — 4 included (R-VER-8)")
 	fmt.Fprintln(stdout, "\ngaps (not hidden — R-DET-7):")
-	fmt.Fprintln(stdout, "  - the install step is a placeholder: TortureU has no published release,")
-	fmt.Fprintln(stdout, "    image or action yet, so it builds from source in the checkout (TBD-11).")
-	fmt.Fprintln(stdout, "    Edit it before this runs anywhere but this repo.")
+	if ci.ReleaseVersion == "" {
+		fmt.Fprintln(stdout, "  - there is no published release to install: the install step therefore")
+		fmt.Fprintln(stdout, "    FAILS the job with exit 2 (harness error) and names the install routes")
+		fmt.Fprintln(stdout, "    (SPEC.md TBD-11). Pin one of them to a tag — until you do, this")
+		fmt.Fprintln(stdout, "    pipeline is red on purpose rather than green having run nothing.")
+	} else {
+		fmt.Fprintf(stdout, "  - the install step pins tortureu %s and verifies what it downloads;\n", ci.ReleaseVersion)
+		fmt.Fprintln(stdout, "    edit it if you install tortureu some other way.")
+	}
 	fmt.Fprintln(stdout, "  - the pipeline needs a torture.yaml — run `tortureu init` to generate one.")
 	return 0
 }

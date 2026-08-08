@@ -13,12 +13,40 @@ One CLI that drives load and fault injection on the same clock **against a local
 > **Not yet:** trace ingestion is absent, so verdicts report `correlated` attribution rather than
 > `caused` — the ceiling is stated in every verdict rather than left implicit. `tortureu run
 > --db-load` and `--fuzz` drive host subprocesses, which cannot reach a SUT that DC-2 isolated on
-> an `internal: true` network; they fail loudly rather than reporting zero. There is no published
-> release or image yet, so the CI pipeline `init --ci` writes installs by building from source.
-> See [`SPEC.md` §12](SPEC.md) for these and the rest of what is deliberately open.
+> an `internal: true` network; they fail loudly rather than reporting zero. No tag has been pushed
+> yet, so no release archive or image exists to install; until one does, the pipeline `init --ci`
+> writes fails its install step with exit `2` and names the routes, rather than downloading a URL
+> that 404s. See [`SPEC.md` §12](SPEC.md) for these and the rest of what is deliberately open.
 >
 > Every one of the 154 tools in [`registry.yaml`](registry.yaml) is now reachable from the CLI, so
 > no entry tells you to run something that does not work.
+
+## Install
+
+The zero-infrastructure route — needs a Go toolchain and nothing else:
+
+```bash
+go install github.com/jdb316/tortureu/cmd/tortureu@latest   # pin to @v0.1.0 once tagged
+```
+
+Before the first tag, `@latest` resolves to a pseudo-version of the default branch — it works as
+soon as the repo is public, which is why this is the route that needs no infrastructure at all. It
+is deliberately *not* what CI uses: it needs a Go toolchain on the runner and pins nothing a
+checksum could verify.
+
+Two more routes exist once a tag is pushed: the release archive for your platform
+(`tortureu_<version>_<os>_<arch>.tar.gz`, verified against that release's `checksums.txt`) and the
+CI job image `ghcr.io/jdb316/tortureu:<tag>`, which carries the Docker CLI so the container can
+drive your compose stack. `.goreleaser.yaml` and `Dockerfile` build both; `.github/workflows/release.yml`
+runs them on a `v*` tag. **No tag has been pushed yet, so none of those URLs resolve today.**
+
+k6 is not bundled. It is AGPL-3 and TortureU is MIT, so TortureU drives it as a separate,
+unmodified process and never links it (`SPEC.md` §10) — install k6 yourself.
+
+For CI, `tortureu init --ci [github|gitlab]` writes a pipeline that installs a **pinned** release —
+never `latest`, because a harness that updates itself under your pipeline makes every regression
+ambiguous. While no release exists, that install step fails the job with exit `2` and prints the
+routes above; a red build for a stated reason beats a green one that ran no experiment.
 
 ## The problem
 
