@@ -130,6 +130,63 @@ func TestBuildRealDepsWiresApplierEndpointsFromFlagValues(t *testing.T) {
 	}
 }
 
+// spec: R-DC2-4
+//
+// The wiring proof: buildRunOptions must pass -allow-real-traffic and
+// -multiplier through to internal/run.Options unchanged, the same "does it
+// actually connect" check as TestBuildRealDepsWiresApplierEndpointsFromFlagValues.
+// This is the exact bug reported: Options{} was constructed with neither
+// field set, so egress.CheckMultiplier was always called (1, false) and a
+// replay multiplier could never trigger its guard.
+func TestBuildRunOptionsWiresMultiplierAndAllowRealTrafficFromFlagValues(t *testing.T) {
+	opts := buildRunOptions(false, true, 5.0)
+	if !opts.AllowRealTraffic {
+		t.Error("allowRealTraffic=true did not reach Options.AllowRealTraffic")
+	}
+	if opts.Multiplier != 5.0 {
+		t.Errorf("Options.Multiplier = %v, want 5.0", opts.Multiplier)
+	}
+
+	opts2 := buildRunOptions(true, false, 2.5)
+	if !opts2.NoReset {
+		t.Error("noReset=true did not reach Options.NoReset")
+	}
+}
+
+// spec: R-DC2-4
+//
+// Defaults must be the safe ones: a user who passes nothing gets 1x and no
+// real traffic, so the guard only relaxes on explicit request. Reads
+// runRun's own declared flags (via -h) rather than a re-declared flag set,
+// so this checks the actual verb, not a copy of it.
+func TestRunAllowRealTrafficAndMultiplierDefaultToSafeValues(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := runRun([]string{"-h"}, &out, &errb)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2 (flag.ContinueOnError on -h)", code)
+	}
+	usage := errb.String()
+
+	if !strings.Contains(usage, "-allow-real-traffic") {
+		t.Fatalf("-allow-real-traffic not declared:\n%s", usage)
+	}
+	if strings.Contains(usage, "-allow-real-traffic") && strings.Contains(usage[strings.Index(usage, "-allow-real-traffic"):], "(default true)") {
+		t.Errorf("-allow-real-traffic must default to false:\n%s", usage)
+	}
+
+	idx := strings.Index(usage, "-multiplier")
+	if idx == -1 {
+		t.Fatalf("-multiplier not declared:\n%s", usage)
+	}
+	block := usage[idx:]
+	if next := strings.Index(block[1:], "\n  -"); next != -1 {
+		block = block[:next+1]
+	}
+	if !strings.Contains(block, "(default 1)") {
+		t.Errorf("-multiplier must default to 1:\n%s", block)
+	}
+}
+
 // spec: R-CLI-1
 func TestRunMissingConfigExitsTwo(t *testing.T) {
 	dir := t.TempDir()

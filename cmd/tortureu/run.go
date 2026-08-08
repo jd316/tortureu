@@ -49,6 +49,15 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	promURL := fs.String("prom-url", "", "Prometheus base URL; promql: asserts are skipped when empty")
 	mockURL := fs.String("mock-url", "", "WireMock base URL, for error_rate faults against a class: mock host; empty fails loudly if declared (R-EXE-19)")
 	brokerURL := fs.String("broker-url", "", "message broker base URL, for poison_pill/duplicate faults; empty fails loudly if declared (R-EXE-19)")
+	// multiplier/allowRealTraffic default to the safe values (1x, no real
+	// traffic): a user who passes nothing gets no widened blast radius.
+	// egress.CheckMultiplier only relaxes when -allow-real-traffic is
+	// explicitly set (R-DC2-4) — replay above 1x against a class: real
+	// host requires deliberate consent, because blast radius scales with
+	// the multiplier and the multiplier is exactly what makes replay
+	// attractive.
+	multiplier := fs.Float64("multiplier", 1, "replay rate multiplier applied against class: real hosts; only relevant with -allow-real-traffic")
+	allowRealTraffic := fs.Bool("allow-real-traffic", false, "permit replay above 1x against a class: real host (R-DC2-4); without this, a multiplier above 1x against a real host aborts the run")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -71,8 +80,23 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	}
 
 	deps := buildRealDeps(*toxiproxyURL, *promURL, *mockURL, *brokerURL)
-	v := tortureurun.Run(cfg, *sys, deps, tortureurun.Options{NoReset: *noReset})
+	opts := buildRunOptions(*noReset, *allowRealTraffic, *multiplier)
+	v := tortureurun.Run(cfg, *sys, deps, opts)
 	return emitVerdict(v, *asJSON, stdout)
+}
+
+// buildRunOptions is the one call site that turns the run verb's flags into
+// internal/run.Options. It exists as its own function, the same reasoning
+// as buildRealDeps: a test must be able to prove -allow-real-traffic and
+// -multiplier actually reach Options (R-DC2-4) instead of the wiring being
+// asserted only by reading the source — this is the fourth time in this
+// project a value existed and never reached its consumer.
+func buildRunOptions(noReset, allowRealTraffic bool, multiplier float64) tortureurun.Options {
+	return tortureurun.Options{
+		NoReset:          noReset,
+		AllowRealTraffic: allowRealTraffic,
+		Multiplier:       multiplier,
+	}
 }
 
 // buildRealDeps is the one call site that wires the four `run` endpoint
