@@ -267,7 +267,7 @@ domains:
     coverage: compose
     note: "DC-1 noun rule. We own experiment/fault/slo/verdict. Vendors own their primitives."
     tools:
-      - { id: tortureu-mcp, tier: drive, when: always,        how: "tortureu mcp",            note: "describe_system, propose_experiments, run_experiment, explain_failure, emit_k6_script", planned: mcp }
+      - { id: tortureu-mcp, tier: drive, when: always,        how: "tortureu mcp",            note: "lists the five tools (describe_system, propose_experiments, run_experiment, explain_failure, emit_k6_script); no stdio transport yet" }
       - { id: k6-x-agent, tier: know,    when: always,        how: "k6 x agent",              note: "coexists. disjoint nouns. escape hatch after emit_k6_script" }
       - { id: grafana-mcp, tier: know,   when: always,        how: "grafana mcp",             note: "query metrics/logs/traces conversationally" }
       - { id: steadybit-mcp, tier: know, when: never,         how: "commercial" }
