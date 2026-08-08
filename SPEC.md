@@ -504,6 +504,22 @@ and the ceiling is exactly what tells a user why their findings say `correlated`
 *(the field existed in `VERDICT.md` §1 and in `internal/verdict` and was never populated by
 `internal/run`; specified here before the fix, per R-PROC-2)*
 
+**R-VER-12** — The verdict **MUST** carry the commit the run was made against, in `VERDICT.md`
+§1's `commit` field, resolved from the git `HEAD` of the repository containing the target's compose
+file. It **MUST** be the **full 40-character hash** in the JSON document: `VERDICT.md` §4's human
+rendering abbreviates it for display, but a store that anchors trends on an abbreviated hash can
+collide, and at least one real consumer (`tortureu emit bencher` → `bencher run --hash`) rejects
+anything shorter outright.
+
+When the repo is not a git checkout, or git is unavailable, or `HEAD` cannot be resolved, the field
+**MUST** be left empty rather than filled with a placeholder. An invented anchor is worse than an
+absent one: a trend line silently keyed on a fabricated commit compares runs that are not what it
+says they are.
+
+*(the field existed in `VERDICT.md` §1 and in `internal/verdict` and was written by no producer
+anywhere in the codebase, so every verdict emitted an empty anchor; found while implementing
+`emit bencher`, which is the consumer that needs it. Specified here before the fix, per R-PROC-2)*
+
 **R-VER-9** — Human output **MUST** be rendered from the same verdict document as machine output.
 No second code path.
 
@@ -1049,13 +1065,18 @@ nothing to suggest, and only the second is honest.
   repo with no Bencher project gets. That is still blocked on runs worth comparing, so it stays
   open.
 
-  Second, and more useful: implementing this exposed that the format is **not the binding
+  Second, and more useful: implementing this exposed that the format was **not the binding
   constraint**. Every trend needs a per-run anchor, and `verdict.Commit` — VERDICT.md §1's
-  `commit` field, the one it labels "for §12 trend tracking" — is **written by no producer in this
-  codebase**; `internal/run` never sets it. Bencher's own `--hash` additionally rejects anything
-  but a full 40-character git hash, so VERDICT.md's own example value (`a3f19c2`) is refused. Any
-  storage format chosen today would therefore be a store of unanchored rows. Populating the commit
-  anchor is the prerequisite, and it is upstream of this decision rather than part of it.
+  `commit` field, the one it labels "for §12 trend tracking" — was **written by no producer in
+  this codebase**; `internal/run` never set it, so every verdict carried an empty anchor and any
+  storage format chosen would have been a store of unanchored rows. Bencher's own `--hash`
+  additionally rejects anything but a full 40-character git hash, so VERDICT.md's own example
+  value (`a3f19c2`) is refused.
+
+  **That prerequisite is now closed**: R-VER-12 specifies the anchor and `internal/run` resolves it
+  from the git HEAD of the repo containing the compose file, as the full 40-character hash, empty
+  outside a checkout rather than a placeholder. What remains open here is genuinely only the local
+  storage-format choice above.
 
 - **TBD-14** — What SHAPE a `sql:` assertion (R-CFG-18) is. R-CFG-18 says a `sql:` entry is
   accepted for run-scoped data-integrity invariants; it does not say whether the expression is a

@@ -220,6 +220,11 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 	// verdict including the ones that end early. Detection has already
 	// computed it (R-DET-6) and nothing here recomputes or second-guesses
 	// it; MaxConfidence has a floor of "correlated" and is never empty.
+	// R-VER-12: the commit this run is anchored to, resolved once, on the
+	// same path as Observability so early exits carry it too. Empty when
+	// this is not a git checkout — never a placeholder.
+	v.Commit = commitAnchor(cfg.Target.Compose)
+
 	v.Observability = verdict.Observability{
 		Traces:        sys.Obs.Traces,
 		Metrics:       sys.Obs.Metrics,

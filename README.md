@@ -10,11 +10,15 @@ One CLI that drives load and fault injection on the same clock **against a local
 > that names the causing fault. All nine verbs are real — `init`, `run`, `doctor`, `smoke`,
 > `check`, `emit`, `capture`, `replay` — and `mcp` speaks JSON-RPC 2.0 over stdio.
 >
-> **Not yet:** `emit` covers 10 of the delegate-tier tools (`pumba`, `netem`, `iptables`,
-> `gatling`, `locust`, `chaosmesh`, `clockskew`, `fio`, `sysbench`, `memtier`); the remaining
-> entries in `registry.yaml` carry a `planned:` marker and `tortureu doctor` will not tell you to
-> run them. Trace ingestion is absent, so verdicts report `correlated` attribution rather than
-> `caused`. See [`SPEC.md` §12](SPEC.md) for what is deliberately open.
+> **Not yet:** trace ingestion is absent, so verdicts report `correlated` attribution rather than
+> `caused` — the ceiling is stated in every verdict rather than left implicit. `tortureu run
+> --db-load` and `--fuzz` drive host subprocesses, which cannot reach a SUT that DC-2 isolated on
+> an `internal: true` network; they fail loudly rather than reporting zero. There is no published
+> release or image yet, so the CI pipeline `init --ci` writes installs by building from source.
+> See [`SPEC.md` §12](SPEC.md) for these and the rest of what is deliberately open.
+>
+> Every one of the 154 tools in [`registry.yaml`](registry.yaml) is now reachable from the CLI, so
+> no entry tells you to run something that does not work.
 
 ## The problem
 
@@ -76,7 +80,7 @@ What it does give you is the *candidate config surface* — library plus knob na
 
 | Document | What it is |
 |---|---|
-| [`SPEC.md`](SPEC.md) | normative. 128 numbered requirements. Build against this. |
+| [`SPEC.md`](SPEC.md) | normative. 129 numbered requirements. Build against this. |
 | [`RESEARCH.md`](RESEARCH.md) | the survey: 154 tools across 19 domains, and why each is driven, delegated or merely named |
 | [`VERDICT.md`](VERDICT.md) | verdict schema, exit codes, MCP surface |
 | [`BENCHMARKS.md`](BENCHMARKS.md) | how this gets evaluated, and what we refuse to claim |

@@ -34,7 +34,7 @@ domains:
       - { id: vegeta,    tier: know,     when: always,        how: "vegeta attack -rate=<n>", note: "we do not drive vegeta: `tortureu smoke` implements its constant-rate model in-process, because reaching a DC-2-isolated SUT needs a custom dialer a subprocess cannot use (R-CLI-6)", licence: "MIT" }
       - { id: gatling,   tier: delegate, when: "lang:java|lang:scala", how: "tortureu emit gatling", note: "highest throughput per generator" }
       - { id: locust,    tier: delegate, when: "lang:python", how: "tortureu emit locust" }
-      - { id: jmeter,    tier: delegate, when: "dep:jms|dep:ldap|dep:soap", how: "tortureu emit jmeter", note: "only for protocols k6 lacks", planned: emit }
+      - { id: jmeter,    tier: delegate, when: "dep:jms|dep:ldap|dep:soap", how: "tortureu emit jmeter", note: "only for protocols k6 lacks" }
       - { id: artillery, tier: know,     when: never,         how: "npx artillery run",       note: "Lambda/Fargate fan-out if you outgrow one generator" }
       - { id: wrk2,      tier: know,     when: never,         how: "wrk2 -R<rate>",           note: "correct coordinated-omission handling" }
       - { id: oha,       tier: know,     when: never,         how: "oha -q <rate> <url>",     note: "TUI, quick local checks" }
@@ -150,7 +150,7 @@ domains:
     coverage: drive
     tools:
       - { id: schemathesis, tier: drive, when: "spec:openapi", how: "tortureu run --fuzz",    note: "cheapest 500-finder that exists", licence: "MIT" }
-      - { id: restler,   tier: delegate, when: "spec:openapi", how: "tortureu emit restler",  note: "stateful: infers request SEQUENCES", planned: emit }
+      - { id: restler,   tier: delegate, when: "spec:openapi", how: "tortureu emit restler",  note: "stateful: infers request SEQUENCES" }
       - { id: dredd,     tier: know,     when: "spec:openapi", how: "dredd api.yaml <url>",   note: "overlaps schemathesis" }
       - { id: hypothesis, tier: know,    when: "lang:python", how: "in-process",              note: "property testing belongs in the app's suite" }
       - { id: go-fuzz,   tier: know,     when: "lang:go",     how: "go test -fuzz" }
@@ -208,7 +208,7 @@ domains:
     tools:
       - { id: k6-thresholds, tier: drive, when: always,       how: "assert: [http_req_duration: [...]]", note: "D-2: our assertion language, verbatim", licence: "AGPL-3.0 (k6)" }
       - { id: promql,    tier: drive,    when: always,        how: "assert: [{promql: ...}]", note: "everything k6 cannot see", licence: "Apache-2.0 (Prometheus)" }
-      - { id: bencher,   tier: delegate, when: always,        how: "tortureu emit bencher",   note: "turns one-shot runs into a trend", planned: emit }
+      - { id: bencher,   tier: delegate, when: always,        how: "tortureu emit bencher",   note: "turns one-shot runs into a trend" }
       - { id: openslo,   tier: know,     when: never,         how: "openslo validate",        note: "rejected for v0 (D-2): built for burn-rate, not run-scoped" }
       - { id: sloth,     tier: know,     when: "platform:k8s", how: "sloth generate" }
       - { id: hyperfine, tier: know,     when: never,         how: "hyperfine '<cmd>'",       note: "statistically sound CLI benchmarking" }
@@ -223,7 +223,7 @@ domains:
       For run-scoped invariants, a SQL check or a promql assertion is the honest answer.
     tools:
       - { id: sql-invariants, tier: drive, when: "dep:postgresql|dep:mysql", how: "assert: [{sql: 'select count(*) ...'}]", note: "run-scoped integrity. simplest thing that works", licence: "MIT (this project)" }
-      - { id: soda-core, tier: delegate, when: "dep:postgresql|dep:mysql|dep:snowflake", how: "tortureu emit soda", note: "YAML-first checks, lighter than GE", planned: emit }
+      - { id: soda-core, tier: delegate, when: "dep:postgresql|dep:mysql|dep:snowflake", how: "tortureu emit soda", note: "YAML-first checks, lighter than GE" }
       - { id: seeds,     tier: drive,    when: always,        how: "reset.seed",              note: "D-8: deterministic start state", licence: "MIT (this project)" }
       - { id: gofakeit,  tier: delegate, when: "lang:go",     how: "tortureu emit fixtures" }
       - { id: faker,     tier: delegate, when: "lang:python|lang:js", how: "tortureu emit fixtures" }
