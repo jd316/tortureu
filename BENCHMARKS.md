@@ -43,7 +43,7 @@ effect. `make bench` runs it; results land in `benchmarks/results/<date>-<commit
 | `bandwidth: 1mbps` | 1 Mbps | bytes/sec through the proxy | ±5% |
 | `down` | connection refused | error class at client | exact |
 | `pause` (SIGSTOP) | no response, conn held open | client sees timeout not RST | exact |
-| `kill` (SIGKILL) | conn reset | client sees RST | exact |
+| `kill` (SIGKILL) | SIGKILL delivered, exit 137 | signal + exit code (**not** client RST — see R-EXE-25) | exact |
 | `cpu: 90%` | 90% of quota | cgroup cpu.stat | ±5% |
 
 **Platform:** Linux 7.0.0-29-generic, Docker 29.5.3, AMD Ryzen 7 5800H (16 cores), cgroup v2.

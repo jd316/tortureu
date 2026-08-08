@@ -548,6 +548,21 @@ delivered or consumed. Unlike a network toxic, a published message is durable �
 NOT** imply reversibility it cannot deliver, in the same posture as **R-EXE-16**'s SIGKILL caveat.
 *(Task 5b escalation)*
 
+**R-EXE-25** — `pause`, `kill` and `graceful` are distinct at the **signal and exit-code** layer
+(`SIGSTOP`; `SIGKILL`, exit 137; `SIGTERM`, exit 0), **not** at the client-visible TCP layer. A
+client sees `EOF` for both `kill` and `graceful`.
+
+An earlier draft claimed three distinct *client-visible* failure classes, and B1 measured that as a
+`kill` MISS. Investigation with real Docker across three topologies — published port, shared network
+namespace, and an unread-data control — found `io.EOF` in every case and never `ECONNRESET`: Linux
+closes an idle drained socket with an orderly FIN on process death regardless of which signal killed
+the process, and the applier cannot reach the target's own socket options to force an abortive close.
+
+**For an actual RST, use Toxiproxy's `reset_peer`** — the network-layer mechanism that already
+exists for exactly this. The claim is corrected rather than the measurement widened; evidence is
+committed as `internal/run/kill_rst_test.go`, which fails loudly if the behaviour ever changes.
+*(B1 → Task 7 investigation, 2026-08-08)*
+
 **R-EXE-24** — `jitter` accompanies `latency` and adds a **uniform** random offset in
 `[-jitter, +jitter]`, not Gaussian noise with standard deviation `jitter`. That is Toxiproxy's
 semantics and we adopt it rather than translating, so the observed standard deviation of the delay

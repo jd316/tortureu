@@ -86,7 +86,7 @@ domains:
     tools:
       - { id: stress-ng, tier: drive,    when: always,        how: "faults: [{inject: {cpu|mem|io|fd}}]", note: "300+ stressors", licence: "GPL-2.0" }
       - { id: cgroups,   tier: drive,    when: always,        how: "faults: [{inject: {cpu_limit|mem_limit}}]", licence: "n/a (Linux kernel feature)" }
-      - { id: signals,   tier: drive,    when: always,        how: "faults: [{inject: {pause|kill|graceful}}]", note: "SIGSTOP vs SIGKILL vs SIGTERM = 3 failure classes", licence: "n/a (POSIX)" }
+      - { id: signals,   tier: drive,    when: always,        how: "faults: [{inject: {pause|kill|graceful}}]", note: "SIGSTOP vs SIGKILL vs SIGTERM — distinct at the signal/exit-code layer, not client-visible TCP (R-EXE-25); use reset_peer for an RST", licence: "n/a (POSIX)" }
       - { id: fio,       tier: delegate, when: "dep:postgresql|dep:mysql|dep:mongodb", how: "tortureu emit fio", note: "fsync latency is where DBs die", planned: emit }
       - { id: libfaketime, tier: delegate, when: always,      how: "tortureu emit clockskew", note: "breaks JWT exp, cache TTL, leader leases", planned: emit }
       - { id: chaosblade, tier: know,    when: "lang:java",   how: "blade create jvm delay",  note: "JVM-level injection is genuinely unique" }
