@@ -15,11 +15,16 @@ import (
 	"time"
 )
 
-// chunkSize is deliberately large (1MB per accepted request) so that
+// chunkSize is deliberately large (4MB per accepted request) so that
 // sustained load accumulates memory fast enough to matter within an
 // eval-length run, against docker-compose.yml's deliberately small
-// mem_limit.
-const chunkSize = 1 << 20
+// mem_limit. A first attempt at 1MB was flaky: the Go GC, under cgroup
+// memory pressure, reclaimed already-drained slices aggressively enough to
+// oscillate just under the limit rather than reliably exceeding it (an E1
+// finding in its own right -- documented in evals/results/summary.json).
+// Larger chunks mean fewer, bigger live allocations in flight at any one
+// time, which the GC has less room to interleave-collect around.
+const chunkSize = 4 << 20
 
 var (
 	mu    sync.Mutex
