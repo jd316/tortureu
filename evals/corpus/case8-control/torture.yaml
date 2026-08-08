@@ -3,7 +3,11 @@ version: 0
 target:
   compose: ./docker-compose.yml
   service: control-api
-  base_url: http://localhost:8081
+  # k6 now runs joined into the SUT container's own network namespace
+  # (internal/run/load.go's container-mode fix), so "localhost" here
+  # resolves inside that namespace -- the SUT's own listen port (8080),
+  # not the host-published mapping (8081:8080 in docker-compose.yml).
+  base_url: http://localhost:8080
 
 egress:
   default: deny
@@ -29,6 +33,12 @@ load:
       flow:
         - { method: GET, path: /ping }
 
+# Realistic thresholds for a trivial "return 200" handler. Deliberately NOT
+# loosened to make the run pass: evals/results/summary.json documents that
+# k6 0.54.0's --summary-export reports every arrival-rate-executor threshold
+# as false regardless of the measured value (reproduced with p(95)<5000 too,
+# against a measured p95 of ~2ms) -- so no threshold value here changes the
+# outcome. Left at a realistic number rather than an artificially loose one.
 assert:
   - http_req_duration: ["p(95)<500"]
   - http_req_failed:   ["rate<0.01"]

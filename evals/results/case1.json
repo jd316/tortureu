@@ -1,11 +1,11 @@
 {
-  "run_id": "2026-08-08T10:08:22Z-checkout-api-000999",
+  "run_id": "2026-08-08T11:35:12Z-checkout-api-ed3c80",
   "scenario": "checkout-api",
   "status": "error",
-  "started_at": "2026-08-08T10:08:22Z",
-  "duration_s": 47,
+  "started_at": "2026-08-08T11:35:12Z",
+  "duration_s": 32,
   "reset": "clean",
-  "error": "load generator failed: exit status 99",
+  "error": "fault scheduling failed: fault \"dep_slow\": load ended before phase \"peak\" started — the fault never fired (R-EXE-19)",
   "findings": [],
   "passed": [],
   "egress_audit": {
