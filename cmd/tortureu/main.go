@@ -13,7 +13,6 @@ import (
 // v0 (PLAN.md Task 8): they exit 2 naming themselves rather than silently
 // doing nothing or pretending to succeed.
 var stubVerbs = map[string]bool{
-	"check":   true,
 	"emit":    true,
 	"capture": true,
 	"replay":  true,
@@ -43,6 +42,8 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		return runDoctor(rest, stdout, stderr)
 	case verb == "mcp":
 		return runMcp(os.Stdin, rest, stdout, stderr)
+	case verb == "check":
+		return runCheck(rest, stdout, stderr)
 	case stubVerbs[verb]:
 		fmt.Fprintf(stderr, "tortureu %s: not implemented in v0\n", verb)
 		return 2

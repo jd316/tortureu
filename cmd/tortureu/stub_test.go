@@ -10,8 +10,9 @@ import (
 func TestStubVerbsExitTwoNotImplemented(t *testing.T) {
 	// mcp graduated from stub to real (Task 8 addendum): internal/mcp ships
 	// the tool layer, and this package now wires the `mcp` verb to it —
-	// see mcp_test.go for its own coverage.
-	for _, v := range []string{"check", "emit", "capture", "replay"} {
+	// see mcp_test.go for its own coverage. check graduated similarly
+	// (R-CLI-7): see check_test.go.
+	for _, v := range []string{"emit", "capture", "replay"} {
 		var out, errb bytes.Buffer
 		code := Main([]string{v}, &out, &errb)
 		if code != 2 {
