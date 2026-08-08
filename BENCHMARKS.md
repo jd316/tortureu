@@ -255,7 +255,7 @@ overfit to — so cases are added when we *fail* in the wild, never trimmed when
 
 ### Results
 
-Measured `2026-08-08T21:46:56Z` at commit `4680185`, whole corpus in one run
+Measured `2026-08-08T23:10:22Z` at commit `fee7974`, whole corpus in one run
 (`bash evals/run_case.sh`), every case driven through the real `tortureu run` binary. Per-case
 verdict JSON is in [`evals/results/`](evals/results/).
 
