@@ -169,3 +169,48 @@ func TestRender_ShowsFailedReset(t *testing.T) {
 		t.Errorf("Render(v) reports reset:clean as if it needed explaining; render:\n%s", human2)
 	}
 }
+
+// spec: R-VER-2
+// status=error (TortureU itself broke) and status=fail (the SUT broke an
+// assertion) MUST NOT be conflated — and that distinction only helps a user
+// if the tool says *what* broke. Before this fix, Verdict had no
+// error-reason field at all, so an error verdict rendered as bare
+// "ERROR ... exit 2" with nothing to act on. Prove the reason renders
+// prominently, and that a fail verdict remains visibly distinct from an
+// error verdict (no shared/ambiguous wording).
+func TestRender_ErrorVerdictShowsReasonAndStaysDistinctFromFail(t *testing.T) {
+	errV := Verdict{
+		Scenario: "api",
+		Status:   StatusError,
+		Error:    "k6 not found on PATH",
+	}
+	human := Render(errV)
+	if !strings.Contains(human, "k6 not found on PATH") {
+		t.Errorf("Render(v) does not surface the error reason; render:\n%s", human)
+	}
+	if !strings.Contains(human, "ERROR") {
+		t.Errorf("Render(v) does not show ERROR status; render:\n%s", human)
+	}
+	if !strings.Contains(human, "exit 2") {
+		t.Errorf("Render(v) does not show exit 2 for an error verdict; render:\n%s", human)
+	}
+
+	failV := Verdict{
+		Scenario: "api",
+		Status:   StatusFail,
+		Findings: []Finding{{ID: "f1", Confidence: Caused, Broke: Broke{
+			Assertion: "http_req_failed: rate<0.01", Observed: "0.2", At: "peak",
+		}}},
+	}
+	failHuman := Render(failV)
+
+	if strings.Contains(failHuman, "k6 not found on PATH") {
+		t.Errorf("fail verdict rendering leaked an unrelated error reason")
+	}
+	if strings.Contains(failHuman, "ERROR") {
+		t.Errorf("fail verdict rendered as ERROR; fail and error must stay visually distinct")
+	}
+	if strings.Contains(human, "FAIL") {
+		t.Errorf("error verdict rendered as FAIL; fail and error must stay visually distinct")
+	}
+}

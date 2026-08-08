@@ -101,13 +101,20 @@ type Observability struct {
 // marshaled to JSON for machine consumers and passed to Render for humans
 // (R-VER-9) — there is no second, independently-maintained representation.
 type Verdict struct {
-	RunID         string         `json:"run_id"`
-	Scenario      string         `json:"scenario"`
-	Status        Status         `json:"status"`
-	StartedAt     string         `json:"started_at"`
-	DurationS     int            `json:"duration_s"`
-	Commit        string         `json:"commit,omitempty"`
-	Reset         string         `json:"reset,omitempty"`
+	RunID     string `json:"run_id"`
+	Scenario  string `json:"scenario"`
+	Status    Status `json:"status"`
+	StartedAt string `json:"started_at"`
+	DurationS int    `json:"duration_s"`
+	Commit    string `json:"commit,omitempty"`
+	Reset     string `json:"reset,omitempty"`
+	// Error is why status=error: what the tool itself broke on, e.g.
+	// "k6 not found on PATH" or "docker compose build: no Dockerfile for
+	// service checkout-api". MUST be set whenever Status == StatusError
+	// (R-VER-2) — an error with no reason is indistinguishable from a shrug.
+	// Say what failed and, where knowable, what to do about it: "k6 not
+	// found on PATH" is actionable, "run failed" is not.
+	Error         string         `json:"error,omitempty"`
 	Findings      []Finding      `json:"findings"`
 	Passed        []Passed       `json:"passed"`
 	EgressAudit   EgressAudit    `json:"egress_audit"`

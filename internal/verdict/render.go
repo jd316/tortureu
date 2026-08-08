@@ -35,6 +35,14 @@ func Render(v Verdict) string {
 		fmt.Fprintf(&b, "\n  reset: %s\n", v.Reset)
 	}
 
+	// R-VER-2: status=error means TortureU itself broke, distinct from
+	// status=fail (the SUT broke an assertion). That distinction only helps a
+	// user if the tool says what broke — an error with no reason is
+	// indistinguishable from a shrug, so surface it prominently.
+	if v.Status == StatusError && v.Error != "" {
+		fmt.Fprintf(&b, "\n  error: %s\n", v.Error)
+	}
+
 	b.WriteString("\n")
 
 	for _, f := range v.Findings {
