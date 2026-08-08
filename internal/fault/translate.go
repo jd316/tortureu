@@ -14,6 +14,9 @@ package fault
 import (
 	"fmt"
 	"math"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/jdb316/tortureu/internal/config"
 )
@@ -206,20 +209,110 @@ func asInt(v any) (int, bool) {
 	}
 }
 
+// durationPattern accepts a bare number (assumed already in milliseconds —
+// the form B1 confirmed already works against live Toxiproxy), a number
+// with an "ms" suffix (torture.example.yaml's pg_slow fault, "300ms"), or a
+// number with a plain "s" suffix (torture.example.yaml's stripe_slow
+// fault, "2s") — both real syntaxes B1 found silently passed through as a
+// string instead of being converted.
+var durationPattern = regexp.MustCompile(`(?i)^(\d+(?:\.\d+)?)\s*(ms|s)?$`)
+
+// parseMillis converts a latency/jitter/timeout field to the integer
+// milliseconds Toxiproxy's latency, timeout, and reset_peer toxics expect.
+// A malformed value errors naming the fault, the field, and the value
+// given, rather than silently truncating or coercing it (R-CFG-14: a
+// wrong-but-accepted latency value produces a run whose fault silently
+// never fired, same failure class as R-CFG-23's workers: 0).
+func parseMillis(faultName, field string, v any) (int, error) {
+	if n, ok := asInt(v); ok {
+		return n, nil
+	}
+	if f, ok := v.(float64); ok {
+		return int(math.Round(f)), nil
+	}
+	invalid := fmt.Errorf("fault %q: %s = %v is invalid; accepted forms: a bare number of milliseconds, or a number with an \"ms\" or \"s\" suffix (e.g. \"300ms\", \"2s\")", faultName, field, v)
+	s, ok := v.(string)
+	if !ok {
+		return 0, invalid
+	}
+	m := durationPattern.FindStringSubmatch(s)
+	if m == nil {
+		return 0, fmt.Errorf("fault %q: %s = %q is invalid; accepted forms: a bare number of milliseconds, or a number with an \"ms\" or \"s\" suffix (e.g. \"300ms\", \"2s\")", faultName, field, s)
+	}
+	n, err := strconv.ParseFloat(m[1], 64)
+	if err != nil {
+		return 0, fmt.Errorf("fault %q: %s = %q is invalid; accepted forms: a bare number of milliseconds, or a number with an \"ms\" or \"s\" suffix (e.g. \"300ms\", \"2s\")", faultName, field, s)
+	}
+	if strings.EqualFold(m[2], "s") {
+		n *= 1000
+	}
+	return int(math.Round(n)), nil
+}
+
+// ratePattern accepts a bare number (assumed already in KB/s — the form B1
+// confirmed already works) or a number with an "mbps" (megabits/s) or
+// "kbps" (kilobits/s) suffix, torture.yaml's documented bandwidth syntax
+// (e.g. "1mbps").
+var ratePattern = regexp.MustCompile(`(?i)^(\d+(?:\.\d+)?)\s*(mbps|kbps)$`)
+
+// parseRateKBps converts a bandwidth field to the integer KB/s Toxiproxy's
+// bandwidth toxic "rate" attribute expects. Same "error, don't coerce"
+// rule as parseMillis.
+func parseRateKBps(faultName, field string, v any) (int, error) {
+	if n, ok := asInt(v); ok {
+		return n, nil
+	}
+	if f, ok := v.(float64); ok {
+		return int(math.Round(f)), nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return 0, fmt.Errorf("fault %q: %s = %v is invalid; accepted forms: a bare number of KB/s, or a number with an \"mbps\"/\"kbps\" suffix (e.g. \"1mbps\")", faultName, field, v)
+	}
+	m := ratePattern.FindStringSubmatch(s)
+	if m == nil {
+		return 0, fmt.Errorf("fault %q: %s = %q is invalid; accepted forms: a bare number of KB/s, or a number with an \"mbps\"/\"kbps\" suffix (e.g. \"1mbps\")", faultName, field, s)
+	}
+	n, err := strconv.ParseFloat(m[1], 64)
+	if err != nil {
+		return 0, fmt.Errorf("fault %q: %s = %q is invalid; accepted forms: a bare number of KB/s, or a number with an \"mbps\"/\"kbps\" suffix (e.g. \"1mbps\")", faultName, field, s)
+	}
+	// bits/s -> bytes/s (÷8) -> KB/s (÷1000, decimal kilo).
+	switch strings.ToLower(m[2]) {
+	case "mbps":
+		n = n * 1_000_000 / 8 / 1000
+	case "kbps":
+		n = n * 1_000 / 8 / 1000
+	}
+	return int(math.Round(n)), nil
+}
+
 func translateToxic(f config.Fault) (Action, error) {
 	t := &Toxic{Attributes: map[string]any{}}
 	switch f.Verb {
 	case "latency":
 		t.Type = "latency"
-		t.Attributes["latency"] = f.Inject["latency"]
+		latency, err := parseMillis(f.Name, "latency", f.Inject["latency"])
+		if err != nil {
+			return Action{}, err
+		}
+		t.Attributes["latency"] = latency
 		if jitter, ok := f.Inject["jitter"]; ok {
-			t.Attributes["jitter"] = jitter
+			jitterMS, err := parseMillis(f.Name, "jitter", jitter)
+			if err != nil {
+				return Action{}, err
+			}
+			t.Attributes["jitter"] = jitterMS
 		}
 	case "down":
 		t.Disable = true
 	case "bandwidth":
 		t.Type = "bandwidth"
-		t.Attributes["rate"] = f.Inject["bandwidth"]
+		rate, err := parseRateKBps(f.Name, "bandwidth", f.Inject["bandwidth"])
+		if err != nil {
+			return Action{}, err
+		}
+		t.Attributes["rate"] = rate
 	case "slicer":
 		t.Type = "slicer"
 		t.Attributes["average_size"] = f.Inject["slicer"]
@@ -236,10 +329,64 @@ func translateToxic(f config.Fault) (Action, error) {
 	return Action{Fault: f, Kind: KindToxic, Toxic: t}, nil
 }
 
+// percentPattern accepts a bare number or a number with a trailing "%"
+// (torture.yaml's documented cpu syntax, e.g. "90%").
+var percentPattern = regexp.MustCompile(`^(\d+(?:\.\d+)?)\s*%?$`)
+
+// parsePercent converts a cpu load field to an integer percent in [0, 100].
+// B1 measured cpu: 90% producing ~403-416% of one core because the
+// untyped "90%" string reached the Docker applier under a generic key with
+// no defined unit; this both parses the value unambiguously and rejects
+// anything outside a real percentage (the same "reject nonsense, don't
+// coerce it" rule as R-CFG-23's workers >= 1).
+func parsePercent(faultName, field string, v any) (int, error) {
+	invalid := fmt.Errorf("fault %q: %s = %v is invalid; must be a percentage from 0 to 100 (e.g. \"90%%\" or 90)", faultName, field, v)
+	var n float64
+	switch val := v.(type) {
+	case int:
+		n = float64(val)
+	case int64:
+		n = float64(val)
+	case float64:
+		n = val
+	case string:
+		m := percentPattern.FindStringSubmatch(val)
+		if m == nil {
+			return 0, invalid
+		}
+		parsed, err := strconv.ParseFloat(m[1], 64)
+		if err != nil {
+			return 0, invalid
+		}
+		n = parsed
+	default:
+		return 0, invalid
+	}
+	if n < 0 || n > 100 {
+		return 0, invalid
+	}
+	return int(math.Round(n)), nil
+}
+
 func translateDocker(f config.Fault) (Action, error) {
 	d := &DockerAction{Container: f.Target, Args: map[string]any{}}
 	switch f.Verb {
-	case "cpu", "mem", "io", "fd":
+	case "cpu":
+		d.Kind = "stress"
+		d.Args["resource"] = "cpu"
+		pct, err := parsePercent(f.Name, "cpu", f.Inject["cpu"])
+		if err != nil {
+			return Action{}, err
+		}
+		// cpu_percent: integer 0-100, the target CPU load per stress-ng
+		// worker (stress-ng's --cpu-load semantics). Deliberately a
+		// distinct key from "amount" (used by mem/io/fd below) so the
+		// Docker applier has exactly one, unit-typed way to read it.
+		d.Args["cpu_percent"] = pct
+		if workers, ok := f.Inject["workers"]; ok {
+			d.Args["workers"] = workers
+		}
+	case "mem", "io", "fd":
 		d.Kind = "stress"
 		d.Args["resource"] = f.Verb
 		d.Args["amount"] = f.Inject[f.Verb]
@@ -254,10 +401,18 @@ func translateDocker(f config.Fault) (Action, error) {
 		d.Args["limit"] = f.Inject["mem_limit"]
 	case "pause":
 		d.Kind = "pause"
+		// SIGSTOP-equivalent: Docker's native `docker pause` uses the
+		// cgroup freezer rather than literally delivering SIGSTOP, but the
+		// client-visible effect matches SIGSTOP's (process stops
+		// responding without closing sockets), which is what the R-CFG-15
+		// three-class distinction is about.
+		d.Args["signal"] = "SIGSTOP"
 	case "kill":
 		d.Kind = "kill"
+		d.Args["signal"] = "SIGKILL"
 	case "graceful":
 		d.Kind = "graceful"
+		d.Args["signal"] = "SIGTERM"
 	}
 	return Action{Fault: f, Kind: KindDocker, Docker: d}, nil
 }
