@@ -339,6 +339,99 @@ func TestEvaluateThresholds_UnknownClientLibraryGetsNoFabricatedKnobs(t *testing
 	}
 }
 
+// spec: R-VER-4
+//
+// E1 found candidates 0/6: attribute() only ever pulled a candidate's
+// dependency from an active fault's target, so a finding with no causing
+// fault never got candidates at all — even when the relevant client was
+// detected perfectly. Two of E1's six real detections were load-only, no
+// fault involved (a connection pool exhausted under load, a cache
+// stampede on TTL expiry): exactly the cases D-9's candidate surface is
+// most useful for (pool exhaustion points at MaxConns, a stampede points
+// at TTL/singleflight settings), and the information never reached the
+// user. This proves a fault-free finding now sources candidates from every
+// client library detect.System actually found, not just the ones facing
+// an active fault target.
+func TestEvaluateThresholds_NoActiveFaultStillAttachesCandidatesFromDetectedClients(t *testing.T) {
+	metrics := map[string]any{
+		"http_req_duration": map[string]any{
+			"thresholds": map[string]any{"p(95)<500": map[string]any{"ok": false}},
+		},
+	}
+	deps := []detect.Dep{{
+		Name: "postgres", Type: "postgresql", Address: "postgres:5432",
+		Clients: []string{"github.com/jackc/pgx/v5"},
+	}}
+	_, findings := evaluateThresholds(metrics, nil, detect.System{Deps: deps})
+	if len(findings) != 1 {
+		t.Fatalf("findings = %v, want exactly one", findings)
+	}
+	f := findings[0]
+	if f.Cause != nil {
+		t.Errorf("Cause = %+v, want nil — no fault was active, so there is nothing to name as the cause", f.Cause)
+	}
+	candidates := f.Candidates
+	if len(candidates) != 1 {
+		t.Fatalf("Candidates = %v, want one entry for the one detected client, even with no active fault", candidates)
+	}
+	c := candidates[0]
+	if !strings.Contains(c.Library, "pgx") {
+		t.Errorf("Candidate.Library = %q, want the detected pgx client", c.Library)
+	}
+	if len(c.Knobs) == 0 {
+		t.Error("Candidate.Knobs is empty, want pgx's known pool-config knobs — the table has this library, it must not be withheld just because no fault fired")
+	}
+	// Without a causing fault, this is the plausible set load alone
+	// revealed matters for, not a diagnosis naming this client as the
+	// culprit — the finding's own Confidence (ambiguous, since
+	// confidenceFor(0) is not `correlated`) already signals that at the
+	// finding level, but the Source label must also make it legible
+	// looking at the candidate alone, since D-9's own schema has no
+	// separate confidence-per-candidate field to carry it.
+	if !strings.Contains(strings.ToLower(c.Source), "no active fault") {
+		t.Errorf("Candidate.Source = %q, want it to say plainly this is not from an active fault — otherwise it reads identically to a fault-scoped, tightly-attributed candidate", c.Source)
+	}
+}
+
+// spec: R-VER-4
+func TestEvaluateThresholds_NoActiveFaultUnknownClientStillGetsNoFabricatedKnobs(t *testing.T) {
+	// The honesty rule holds in the fault-free path too: an unrecognized
+	// library gets named and nothing else, never a guessed knob.
+	metrics := map[string]any{
+		"http_req_duration": map[string]any{
+			"thresholds": map[string]any{"p(95)<500": map[string]any{"ok": false}},
+		},
+	}
+	deps := []detect.Dep{{
+		Name: "widget", Type: "widget", Address: "widget:1234",
+		Clients: []string{"some-org/unheard-of-client"},
+	}}
+	_, findings := evaluateThresholds(metrics, nil, detect.System{Deps: deps})
+	candidates := findings[0].Candidates
+	if len(candidates) != 1 {
+		t.Fatalf("Candidates = %v, want one entry naming the client even without known knobs", candidates)
+	}
+	if len(candidates[0].Knobs) != 0 {
+		t.Errorf("Knobs = %v, want empty for a client library this package has no known knob table for", candidates[0].Knobs)
+	}
+}
+
+// spec: R-VER-4
+func TestEvaluateThresholds_NoActiveFaultAndNoDetectedClientAttachesNothing(t *testing.T) {
+	// Case 6's shape (an in-process unbounded queue): genuinely nobody's
+	// library. Attaching nothing is correct; padding Candidates with
+	// unrelated detected clients would misdirect the reader.
+	metrics := map[string]any{
+		"http_req_duration": map[string]any{
+			"thresholds": map[string]any{"p(95)<500": map[string]any{"ok": false}},
+		},
+	}
+	_, findings := evaluateThresholds(metrics, nil, detect.System{})
+	if len(findings[0].Candidates) != 0 {
+		t.Errorf("Candidates = %v, want empty — no dependency was detected at all, so there is nothing to point at", findings[0].Candidates)
+	}
+}
+
 // spec: R-VER-8
 // spec: R-COV-6
 func TestEvaluatePromqlAsserts_NoQuerierProducesUnevaluatedFindingNotSilentPass(t *testing.T) {

@@ -263,6 +263,62 @@ func faultWindow(f config.Fault) []string {
 	return []string{f.At, f.At + "+" + f.For}
 }
 
+// noFaultCandidateSource suffixes Candidate.Source for a fault-free finding
+// (see buildCandidatesFromDetectedDeps) — the only place available in D-9's
+// existing schema to carry the distinction between "the fault's target
+// named this dependency" (tightly scoped) and "this is every client the
+// run detected, offered because no fault narrowed it down" (the plausible
+// set, not a diagnosis). Candidate has no separate per-candidate confidence
+// field (internal/verdict, read-only for this task; deliberately minimal —
+// R-VER-4 already forbids a file:line), and the finding's own Confidence
+// already reads `ambiguous` for a fault-free breach (confidenceFor), but
+// that label lives on the Finding, not the Candidate — a reader looking at
+// Candidates alone (D-9's explain_failure surface) must not mistake this
+// list for a tightly attributed one just because it's non-empty.
+const noFaultCandidateSource = " (no active fault — detected client, not a diagnosis)"
+
+// buildCandidatesFromDetectedDeps returns a candidate for every client
+// library detect.System found, for a finding with no causing fault to
+// narrow the search to one target (R-VER-4, D-9). E1 found this gap
+// directly: two of six real detections were load-only defects (a
+// connection pool exhausted under sustained load, a cache stampede on TTL
+// expiry) — exactly the cases a candidate config surface is most useful
+// for, and the client was detected perfectly in both, but attribute()
+// previously only ever looked at active faults' targets, so a fault-free
+// finding got nothing. Ordered by dependency address then client name for
+// a deterministic verdict; a dependency detect.System found with no
+// Clients at all (case 6's shape: an in-process, nobody's-library defect)
+// contributes nothing, which is the honest answer, not a gap to pad.
+func buildCandidatesFromDetectedDeps(deps []detect.Dep, lang string) []verdict.Candidate {
+	if len(deps) == 0 {
+		return nil
+	}
+	source := manifestFor(lang) + noFaultCandidateSource
+
+	addresses := make([]string, 0, len(deps))
+	byAddress := make(map[string]detect.Dep, len(deps))
+	for _, dep := range deps {
+		addresses = append(addresses, dep.Address)
+		byAddress[dep.Address] = dep
+	}
+	sortStrings(addresses)
+
+	var candidates []verdict.Candidate
+	for _, addr := range addresses {
+		dep := byAddress[addr]
+		clients := append([]string(nil), dep.Clients...)
+		sortStrings(clients)
+		for _, client := range clients {
+			candidates = append(candidates, verdict.Candidate{
+				Library: client,
+				Source:  source,
+				Knobs:   knobsFor(client),
+			})
+		}
+	}
+	return candidates
+}
+
 // attribute fills in a finding's Cause and Candidates from the faults
 // active during this run (R-VER-3, R-VER-4, D-9). Cause is only set when
 // there is exactly one candidate fault — the same condition confidenceFor
@@ -271,6 +327,12 @@ func faultWindow(f config.Fault) []string {
 // Candidates, by contrast, are legitimately a list: D-4 defines `ambiguous`
 // as ">=2 candidate causes", so every active fault's target contributes its
 // own candidate config surface regardless of how many there are.
+//
+// With zero faults, there is no target to scope the search to at all — but
+// that is not a reason to withhold candidates entirely (see
+// buildCandidatesFromDetectedDeps's doc comment for why that was the E1
+// gap): every detected client is offered instead, labeled as the plausible
+// set rather than a single attributed cause.
 func attribute(f *verdict.Finding, faults []config.Fault, deps []detect.Dep, lang string) {
 	if len(faults) == 1 {
 		c := faults[0]
@@ -280,6 +342,10 @@ func attribute(f *verdict.Finding, faults []config.Fault, deps []detect.Dep, lan
 			Inject: c.Inject,
 			Window: faultWindow(c),
 		}
+	}
+	if len(faults) == 0 {
+		f.Candidates = buildCandidatesFromDetectedDeps(deps, lang)
+		return
 	}
 	for _, fault := range faults {
 		f.Candidates = append(f.Candidates, buildCandidates(fault, deps, lang)...)
