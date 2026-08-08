@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+
+	"github.com/compose-spec/compose-go/v2/types"
 )
 
 // clientPattern recognizes a client library import as belonging to a
@@ -148,38 +151,38 @@ func pep621PackageNames(raw string) []string {
 	return names
 }
 
-// detectLockfiles reads language manifests (R-DET-1, capped to the R-DET-14
-// v0 set: go.mod, package.json, pyproject.toml), sets sys.Lang, and attaches
-// client libraries to dependencies (R-DET-5).
-func detectLockfiles(dir string, sys *System) error {
-	var imports []string
-	var clientTable []clientPattern
-
+// readManifest reads whichever R-DET-14 v0 manifest (go.mod, package.json,
+// pyproject.toml) is present in dir and returns its ecosystem, the raw
+// dependency names/import paths it declares, and the client table to match
+// them against. lang is "" if none of the three is present; the caller
+// decides what that means (root vs. a service's build context read this
+// differently — see detectLockfiles and detectServiceManifests).
+func readManifest(dir string) (lang string, imports []string, clientTable []clientPattern, err error) {
 	switch {
 	case fileExists(dir, "go.mod"):
-		raw, err := os.ReadFile(filepath.Join(dir, "go.mod"))
-		if err != nil {
-			return err
+		raw, rerr := os.ReadFile(filepath.Join(dir, "go.mod"))
+		if rerr != nil {
+			return "", nil, nil, rerr
 		}
-		sys.Lang = "go"
+		lang = "go"
 		clientTable = goClientPatterns
 		for _, m := range goModRequireRe.FindAllStringSubmatch(string(raw), -1) {
 			imports = append(imports, m[1])
 		}
 
 	case fileExists(dir, "package.json"):
-		raw, err := os.ReadFile(filepath.Join(dir, "package.json"))
-		if err != nil {
-			return err
+		raw, rerr := os.ReadFile(filepath.Join(dir, "package.json"))
+		if rerr != nil {
+			return "", nil, nil, rerr
 		}
 		var pkg struct {
 			Dependencies    map[string]string `json:"dependencies"`
 			DevDependencies map[string]string `json:"devDependencies"`
 		}
-		if err := json.Unmarshal(raw, &pkg); err != nil {
-			return err
+		if rerr := json.Unmarshal(raw, &pkg); rerr != nil {
+			return "", nil, nil, rerr
 		}
-		sys.Lang = "node"
+		lang = "node"
 		clientTable = nodeClientPatterns
 		for name := range pkg.Dependencies {
 			imports = append(imports, name)
@@ -189,17 +192,33 @@ func detectLockfiles(dir string, sys *System) error {
 		}
 
 	case fileExists(dir, "pyproject.toml"):
-		raw, err := os.ReadFile(filepath.Join(dir, "pyproject.toml"))
-		if err != nil {
-			return err
+		raw, rerr := os.ReadFile(filepath.Join(dir, "pyproject.toml"))
+		if rerr != nil {
+			return "", nil, nil, rerr
 		}
-		sys.Lang = "python"
+		lang = "python"
 		clientTable = pyClientPatterns
 		for _, m := range pyprojectKeyRe.FindAllStringSubmatch(string(raw), -1) {
 			imports = append(imports, m[1])
 		}
 		imports = append(imports, pep621PackageNames(string(raw))...)
 	}
+	return lang, imports, clientTable, nil
+}
+
+// detectLockfiles reads the compose-project root's language manifest
+// (R-DET-1, capped to the R-DET-14 v0 set), sets sys.Lang and the
+// manifest-dependent Coverage facts, and attaches client libraries to
+// dependencies (R-DET-5). service is the compose service whose build
+// context is this same root directory, if any (from serviceForDir) — a
+// client found here is attributed to it, e.g. a single-service repo's
+// api built with `build: .` right where its own go.mod lives.
+func detectLockfiles(dir string, sys *System, service string) error {
+	lang, imports, clientTable, err := readManifest(dir)
+	if err != nil {
+		return err
+	}
+	sys.Lang = lang
 
 	switch {
 	case sys.Lang != "":
@@ -208,7 +227,7 @@ func detectLockfiles(dir string, sys *System) error {
 		sys.Coverage.AWS = FactFalse
 		sys.Coverage.Azure = FactFalse
 		for _, imp := range imports {
-			matchClient(sys, clientTable, imp)
+			matchClient(sys, clientTable, imp, service)
 			if hasImportPrefix(imp, awsSDKImports[sys.Lang]) {
 				sys.Coverage.AWS = FactTrue
 			}
@@ -247,6 +266,79 @@ func detectLockfiles(dir string, sys *System) error {
 	return nil
 }
 
+// serviceForDir reports the compose service whose build context resolves
+// to dir, or "" if none does (e.g. dir is the project root and every
+// service builds from a subdirectory, or every service pulls an image).
+func serviceForDir(services map[string]types.ServiceConfig, dir string) string {
+	names := make([]string, 0, len(services))
+	for name := range services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	target := filepath.Clean(dir)
+	for _, name := range names {
+		svc := services[name]
+		if svc.Build != nil && svc.Build.Context != "" && filepath.Clean(svc.Build.Context) == target {
+			return name
+		}
+	}
+	return ""
+}
+
+// detectServiceManifests reads each compose service's own build-context
+// manifest — a bounded, compose-declared location, never a general tree
+// walk (R-DET-1) — and attributes any client library found there to that
+// service (R-DET-5). This is the fix for the common monorepo/multi-service
+// layout (docker-compose.yml at the root, each service's own go.mod under
+// its build context) that the project-root-only scan in detectLockfiles
+// cannot see. rootDir is skipped here since detectLockfiles already
+// covers it, keyed by whichever service (if any) claims it as its own
+// build context.
+func detectServiceManifests(services map[string]types.ServiceConfig, rootDir string, sys *System) error {
+	names := make([]string, 0, len(services))
+	for name := range services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	root := filepath.Clean(rootDir)
+	for _, name := range names {
+		svc := services[name]
+		if svc.Build == nil || svc.Build.Context == "" {
+			continue
+		}
+		ctxDir := filepath.Clean(svc.Build.Context)
+		if ctxDir == root {
+			continue // already covered by detectLockfiles
+		}
+
+		lang, imports, clientTable, err := readManifest(ctxDir)
+		if err != nil {
+			return err
+		}
+		if lang == "" {
+			// R-DET-7: a service's build context having no supported
+			// manifest is not itself a gap — a service may legitimately
+			// have none (e.g. a prebuilt static binary, or an ecosystem
+			// outside R-DET-14's v0 set) — but an unsupported one present
+			// there MUST still surface rather than vanish.
+			for _, unsupported := range unsupportedManifests {
+				if fileExists(ctxDir, unsupported) {
+					sys.Gaps = append(sys.Gaps, fmt.Sprintf(
+						"unsupported manifest %s present in %s's build context (%s) — client libraries not detected (R-DET-14)",
+						unsupported, name, ctxDir))
+				}
+			}
+			continue
+		}
+		for _, imp := range imports {
+			matchClient(sys, clientTable, imp, name)
+		}
+	}
+	return nil
+}
+
 func fileExists(dir, name string) bool {
 	_, err := os.Stat(filepath.Join(dir, name))
 	return err == nil
@@ -262,11 +354,13 @@ func hasAnyUnsupportedManifest(dir string) bool {
 }
 
 // matchClient attaches imp to a dependency if it matches any pattern in
-// table, per the client column of SPEC.md §3.1.
-func matchClient(sys *System, table []clientPattern, imp string) {
+// table, per the client column of SPEC.md §3.1. service is the compose
+// service whose manifest imp was read from ("" for the project root when
+// no service claims it as a build context).
+func matchClient(sys *System, table []clientPattern, imp, service string) {
 	for _, cp := range table {
 		if hasImportPrefix(imp, cp.imports) {
-			attachClient(sys, cp.typ, imp)
+			attachClient(sys, cp.typ, imp, service)
 		}
 	}
 }
@@ -281,18 +375,21 @@ func hasImportPrefix(imp string, prefixes []string) bool {
 }
 
 // attachClient records imp as a client of the dependency of type typ,
-// creating a lockfile-only dependency per R-DET-13 if none exists yet.
-// R-DET-10: a type not already present via compose is only fabricated here
-// when its only source is lockfile.
-func attachClient(sys *System, typ, imp string) {
+// attributed to service (R-DET-5, via ClientRefs), creating a
+// lockfile-only dependency per R-DET-13 if none exists yet. R-DET-10: a
+// type not already present via compose is only fabricated here when its
+// only source is lockfile.
+func attachClient(sys *System, typ, imp, service string) {
+	ref := ClientRef{Import: imp, Service: service}
 	for i := range sys.Deps {
 		if sys.Deps[i].Type == typ {
 			sys.Deps[i].Clients = append(sys.Deps[i].Clients, imp)
+			sys.Deps[i].ClientRefs = append(sys.Deps[i].ClientRefs, ref)
 			return
 		}
 	}
 	if !lockfileOnly[typ] {
 		return
 	}
-	sys.Deps = append(sys.Deps, Dep{Name: typ, Type: typ, Clients: []string{imp}})
+	sys.Deps = append(sys.Deps, Dep{Name: typ, Type: typ, Clients: []string{imp}, ClientRefs: []ClientRef{ref}})
 }

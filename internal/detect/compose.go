@@ -187,7 +187,14 @@ func Detect(composePath string) (*System, error) {
 	}
 	detectExternalHosts(project.Services, workingDir, internalNames, sys)
 
-	if err := detectLockfiles(workingDir, sys); err != nil {
+	// R-DET-1: manifests are read from the compose project root and, per
+	// the extension below, each service's own declared build context —
+	// both are bounded, compose-declared locations, never a tree walk.
+	rootService := serviceForDir(project.Services, workingDir)
+	if err := detectLockfiles(workingDir, sys, rootService); err != nil {
+		return nil, err
+	}
+	if err := detectServiceManifests(project.Services, workingDir, sys); err != nil {
 		return nil, err
 	}
 

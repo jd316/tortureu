@@ -2,10 +2,22 @@ package detect
 
 // Dep is an external thing the system under test talks to.
 type Dep struct {
-	Name    string   // compose service name (or, for lockfile-only types, the type itself)
-	Type    string   // normalized: one of the R-DET-9 vocabulary values
-	Address string   // host:port, when derivable (R-DET-4)
-	Clients []string // R-DET-5 client libraries found in a lockfile
+	Name       string      // compose service name (or, for lockfile-only types, the type itself)
+	Type       string      // normalized: one of the R-DET-9 vocabulary values
+	Address    string      // host:port, when derivable (R-DET-4)
+	Clients    []string    // R-DET-5 client libraries found in a lockfile
+	ClientRefs []ClientRef // Clients, each attributed to its originating service
+}
+
+// ClientRef is one client library import (R-DET-5), together with the
+// compose service whose manifest it was read from. Manifests are read only
+// from the compose-project root and each service's own declared build
+// context (R-DET-1: a bounded, compose-declared location, never a general
+// tree walk). Service is "" when the import came from the project root and
+// no service's build context is that same directory.
+type ClientRef struct {
+	Import  string
+	Service string
 }
 
 // Obs is the observability coverage detected for the system (R-DET-6).
