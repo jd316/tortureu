@@ -341,6 +341,71 @@ func TestEvaluateThresholds_UnknownClientLibraryGetsNoFabricatedKnobs(t *testing
 
 // spec: R-VER-4
 //
+// E1 found candidates missing on cases 1, 2 and 5 — the fault-driven cases,
+// where attribution is most precise — because their detected client is
+// Go's standard net/http, which had no entry in clientKnobPatterns at all.
+// net/http is the most common HTTP client in Go by a wide margin, and case
+// 1 is literally "HTTP client with no timeout" — the canonical resilience
+// defect, and the case where naming the knob matters most. This proves the
+// table now names its real, existing timeout and pool knobs: the
+// whole-request deadline (Client.Timeout — the specific absence case 1
+// plants), the finer-grained per-phase deadlines (Transport's
+// ResponseHeaderTimeout, DialContext, TLSHandshakeTimeout), and the
+// connection-pool knob (Transport.MaxIdleConnsPerHost — net/http's
+// equivalent of case 3's pgx pool-exhaustion knob).
+func TestEvaluateThresholds_NetHTTPClientCarriesTimeoutAndPoolKnobs(t *testing.T) {
+	metrics := map[string]any{
+		"http_req_duration": map[string]any{
+			"thresholds": map[string]any{"p(99)<1500": map[string]any{"ok": false}},
+		},
+	}
+	faults := []config.Fault{{
+		Name: "dep_slow", At: "peak", Target: "dep:8080",
+		Verb: "latency", Inject: map[string]any{"latency": "300ms"},
+	}}
+	deps := []detect.Dep{{
+		Name: "dep", Type: "http", Address: "dep:8080",
+		Clients: []string{"net/http"},
+	}}
+	_, findings := evaluateThresholds(metrics, faults, detect.System{Deps: deps})
+	if len(findings) != 1 {
+		t.Fatalf("findings = %v, want exactly one", findings)
+	}
+	candidates := findings[0].Candidates
+	if len(candidates) != 1 {
+		t.Fatalf("Candidates = %v, want exactly one (the target's one detected client)", candidates)
+	}
+	knobs := candidates[0].Knobs
+	if len(knobs) == 0 {
+		t.Fatal("Knobs is empty, want net/http's known timeout and pool knobs — this is the whole point of the fix")
+	}
+	wantSubstrings := []string{"Timeout", "MaxIdleConnsPerHost"}
+	for _, want := range wantSubstrings {
+		found := false
+		for _, k := range knobs {
+			if strings.Contains(k, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Knobs = %v, want an entry containing %q", knobs, want)
+		}
+	}
+	// Case 1's own specific absence: the whole-request deadline.
+	foundClientTimeout := false
+	for _, k := range knobs {
+		if strings.Contains(k, "Client.Timeout") {
+			foundClientTimeout = true
+		}
+	}
+	if !foundClientTimeout {
+		t.Errorf("Knobs = %v, want Client.Timeout — the whole-request deadline case 1 plants the absence of", knobs)
+	}
+}
+
+// spec: R-VER-4
+//
 // E1 found candidates 0/6: attribute() only ever pulled a candidate's
 // dependency from an active fault's target, so a finding with no causing
 // fault never got candidates at all — even when the relevant client was

@@ -53,6 +53,18 @@ var clientKnobPatterns = []struct {
 	{"redis/go-redis", []string{"PoolSize", "DialTimeout", "ReadTimeout", "WriteTimeout"}},
 	{"gomodule/redigo", []string{"MaxIdle", "MaxActive", "IdleTimeout"}},
 	{"cenkalti/backoff", []string{"MaxRetries", "InitialInterval", "MaxElapsedTime"}},
+	// net/http: Go's standard HTTP client, by a wide margin the most common
+	// one — and, per an E1 finding, the client on three of its fault-driven
+	// cases (including case 1, "HTTP client with no timeout," the canonical
+	// resilience defect), none of which carried candidates because this
+	// table had no entry for it at all. Every name below is a real,
+	// existing exported field (never a guess, matching this table's own
+	// rule): Client.Timeout is the whole-request deadline case 1 plants the
+	// absence of; Transport's ResponseHeaderTimeout/DialContext/
+	// TLSHandshakeTimeout are the finer-grained per-phase deadlines;
+	// Transport.MaxIdleConnsPerHost is the connection-pool knob — net/http's
+	// equivalent of the pgx pool-exhaustion knob above.
+	{"net/http", []string{"Client.Timeout", "Transport.ResponseHeaderTimeout", "Transport.DialContext", "Transport.TLSHandshakeTimeout", "Transport.MaxIdleConnsPerHost"}},
 }
 
 // manifestFor names the manifest file a detected client library was almost
