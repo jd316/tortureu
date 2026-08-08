@@ -146,7 +146,10 @@ possible for a 5-second sustained window — through three configurations, all v
 `benchmarks/results/<date>-<commit>-b2.json`.
 
 **Platform:** Linux 7.0.0-29-generic, Docker 29.5.3, AMD Ryzen 7 5800H (16 cores). Measured
-at commit `698d549` ([full JSON](benchmarks/results/2026-08-08-698d549-b2.json)).
+twice: at commit `698d549` ([full JSON](benchmarks/results/2026-08-08-698d549-b2.json)) and
+re-run at `74c4517` ([full JSON](benchmarks/results/2026-08-08-74c4517-b2.json)) after the
+orchestrator gained co-driven load (`--db-load`, `--fuzz`) and its marker channel was tee'd —
+changes on the run path, so the overhead claim was re-measured rather than assumed to hold.
 
 **Results** (p50/p95/p99 in milliseconds, deltas against the `direct` baseline; rps is
 requests actually completed divided by the *real* wall-clock window the load ran in, not the
@@ -157,6 +160,24 @@ requested duration):
 | direct | 0.59ms | 2.74ms | 5.82ms | 8,610.6 | — | — | — | — |
 | toxiproxy (no toxic) | 0.68ms | 2.78ms | 5.46ms | 7,961.3 | +0.08ms | +0.04ms | −0.36ms | −7.5% |
 | tortureu (orchestrated, zero-effect toxic) | 0.69ms | 2.92ms | 5.69ms | 7,758.8 | +0.09ms | +0.18ms | −0.13ms | −9.9% |
+
+Re-run at `74c4517`, same machine, same scenario:
+
+| Config | p50 | p95 | p99 | rps | Δp50 | Δp95 | Δp99 | Δrps |
+|---|---|---|---|---|---|---|---|---|
+| direct | 0.47ms | 1.36ms | 1.99ms | 13,662.4 | — | — | — | — |
+| toxiproxy (no toxic) | 0.47ms | 1.30ms | 1.88ms | 13,829.8 | −0.00ms | −0.06ms | −0.11ms | +1.2% |
+| tortureu (orchestrated, zero-effect toxic) | 0.47ms | 1.26ms | 1.82ms | 14,123.9 | −0.01ms | −0.10ms | −0.17ms | +3.4% |
+
+**Read these two runs together, not separately.** The first measured the orchestrated path
+9.9% *slower* than direct; the second measured it 3.4% *faster*, and the whole absolute
+scale moved (direct p99 5.82ms → 1.99ms) on an unchanged machine and scenario. A proxy hop
+cannot make traffic faster, so the honest reading is that **the orchestration overhead is
+smaller than this harness's run-to-run variance** — most likely host contention, since these
+runs shared a machine with concurrent Docker workloads. The supportable claim is therefore
+"no overhead measurable at this scale", not a signed percentage in either direction. Pinning
+it down would need repeated trials on a quiet machine with a confidence interval, which has
+not been done.
 
 **Generator ceiling** (BENCHMARKS.md's own rule: a tool that reports "your backend maxes at
 2k rps" when the *generator* maxed out is worse than no tool), read from inside the actual
