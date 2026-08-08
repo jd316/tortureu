@@ -281,6 +281,61 @@ services:
 	}
 }
 
+// spec: R-DET-12
+// Observability infrastructure is its own classification — neither a
+// dependency (the SUT doesn't need it to serve requests) nor a gap (we
+// know exactly what it is). This is a verification test: the exclusion
+// from Deps/Gaps was already exercised incidentally by the R-DET-6
+// observability-confidence tests, but nothing previously cited R-DET-12
+// itself or covered more than one recognized backend at a time.
+func TestObservabilityInfraIsExcludedFromDepsAndGapsAcrossBackends(t *testing.T) {
+	dir := t.TempDir()
+	compose := writeFile(t, dir, "docker-compose.yml", `
+services:
+  api:
+    build: .
+  db:
+    image: postgres:16
+  tempo:
+    image: tempo:2.4.0
+  zipkin:
+    image: zipkin:2
+  loki:
+    image: grafana/loki:2.9.0
+  otelcol:
+    image: otel/opentelemetry-collector-contrib:0.96.0
+`)
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+
+	obsServices := []string{"tempo", "zipkin", "loki", "otelcol"}
+	for _, name := range obsServices {
+		for _, d := range sys.Deps {
+			if d.Name == name {
+				t.Errorf("%s classified as a dependency: %+v (R-DET-12: observability infra is its own classification)", name, d)
+			}
+		}
+		for _, g := range sys.Gaps {
+			if contains(g, name) {
+				t.Errorf("%s produced a gap %q, want it recognized as observability infra (R-DET-12)", name, g)
+			}
+		}
+	}
+	// Only the real dependency (postgres) should have made it through.
+	if len(sys.Deps) != 1 || sys.Deps[0].Name != "db" {
+		t.Errorf("Deps = %+v, want just db — observability services must not leak into the dependency list", sys.Deps)
+	}
+	if len(sys.Gaps) != 0 {
+		t.Errorf("Gaps = %v, want none — every service here is either a known dependency or recognized observability infra", sys.Gaps)
+	}
+	if !sys.Obs.Traces || !sys.Obs.Logs || !sys.Obs.Metrics {
+		t.Errorf("Obs = %+v, want traces/logs/metrics all true (tempo+zipkin, loki, otel-collector)", sys.Obs)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (func() bool {
 		for i := 0; i+len(substr) <= len(s); i++ {

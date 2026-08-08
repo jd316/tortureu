@@ -1,6 +1,8 @@
 package detect_test
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jdb316/tortureu/internal/detect"
@@ -250,5 +252,26 @@ func TestUnsupportedPomXMLManifestOnlyReportsFactsAsUndeterminedNotFalse(t *test
 	}
 	if sys.Coverage.LacksOtel != detect.FactUnknown {
 		t.Errorf("Coverage.LacksOtel = %v, want unknown (only manifest is an unsupported pom.xml)", sys.Coverage.LacksOtel)
+	}
+}
+
+// spec: R-COV-7
+// has:traffic-capture is deliberately NOT a detection fact: it derives
+// from torture.yaml (which class:mock/from:capture host is configured),
+// and torture.yaml is not an R-DET-1 input. Detection reports what the
+// repo IS; configuration reports what the user ASKED FOR; merging the two
+// here would quietly widen R-DET-1's bound the moment someone "completes"
+// Coverage by adding a field for it — an addition that would compile and
+// pass every other test, since its absence is invisible everywhere else.
+// This test exists solely to make that omission visible and load-bearing.
+func TestCoverageHasNoTrafficCaptureField(t *testing.T) {
+	typ := reflect.TypeOf(detect.Coverage{})
+	for i := 0; i < typ.NumField(); i++ {
+		name := strings.ToLower(typ.Field(i).Name)
+		if strings.Contains(name, "capture") || strings.Contains(name, "traffic") {
+			t.Errorf("Coverage has field %q, want no traffic-capture field — R-COV-7: "+
+				"has:traffic-capture derives from torture.yaml, not an R-DET-1 input, "+
+				"and detection MUST NOT attempt it", typ.Field(i).Name)
+		}
 	}
 }

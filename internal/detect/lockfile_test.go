@@ -96,6 +96,51 @@ require (
 	}
 }
 
+// spec: R-DET-13
+// A managed service like SQS has no container, so it can never get an
+// address the way an in-compose dependency does — it MUST still be
+// recorded (with clients, but no address) because it is still a
+// dependency that can fail. This is a verification test: the behaviour
+// already exists (built to satisfy R-DET-10's TestLockfileOnlyType... in
+// an earlier round), but nothing previously cited R-DET-13 or asserted
+// Address == "" specifically.
+func TestManagedServiceDependencyIsRecordedWithClientsButNoAddress(t *testing.T) {
+	dir := t.TempDir()
+	compose := writeFile(t, dir, "docker-compose.yml", `
+services:
+  api:
+    build: .
+`)
+	writeFile(t, dir, "go.mod", `
+module example.com/api
+
+go 1.22
+
+require github.com/aws/aws-sdk-go-v2/service/dynamodb v1.34.0
+`)
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+
+	var ddbDep *detect.Dep
+	for i := range sys.Deps {
+		if sys.Deps[i].Type == "dynamodb" {
+			ddbDep = &sys.Deps[i]
+		}
+	}
+	if ddbDep == nil {
+		t.Fatalf("no dynamodb dependency found via lockfile; deps: %+v", sys.Deps)
+	}
+	if len(ddbDep.Clients) == 0 {
+		t.Errorf("dynamodb dep has no clients, want the aws-sdk-go-v2 import recorded")
+	}
+	if ddbDep.Address != "" {
+		t.Errorf("dynamodb dep Address = %q, want empty — a managed service has no container, hence no address (R-DET-13)", ddbDep.Address)
+	}
+}
+
 // spec: R-DET-1
 func TestGeneralSourceFilesAreNotScannedOnlyManifests(t *testing.T) {
 	dir := t.TempDir()
