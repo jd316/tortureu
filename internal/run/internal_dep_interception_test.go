@@ -39,18 +39,38 @@ func TestREXE20_LatencyOnInternalDependency_InterceptedVsNot(t *testing.T) {
 
 	t.Run("intercepted: fault changes observed latency", func(t *testing.T) {
 		measured := measureRedisLatencyWithFault(t, true)
-		if measured.after <= measured.before*2 {
-			t.Errorf("latency did not meaningfully increase with the fault applied: before=%v after=%v — R-EXE-20's rename+alias mechanism is not actually on the SUT's connection path", measured.before, measured.after)
+		delta := measured.after - measured.before
+		if delta < requestedLatencyFloor {
+			t.Errorf("latency did not increase by at least %v (80%% of the requested %v fault): before=%v after=%v delta=%v — R-EXE-20's rename+alias mechanism is not actually on the SUT's connection path", requestedLatencyFloor, requestedLatency, measured.before, measured.after, delta)
 		}
 	})
 
 	t.Run("negative control: without the rename, the same fault has no effect", func(t *testing.T) {
 		measured := measureRedisLatencyWithFault(t, false)
-		if measured.after > measured.before*2 {
-			t.Errorf("latency increased even though the internal-host rename/alias was never applied — the SUT should be dialing the real redis directly, unaffected by an unaliased proxy: before=%v after=%v", measured.before, measured.after)
+		delta := measured.after - measured.before
+		if delta >= requestedLatencyFloor {
+			t.Errorf("latency increased by at least %v (80%% of the requested %v fault) even though the internal-host rename/alias was never applied — the SUT should be dialing the real redis directly, unaffected by an unaliased proxy: before=%v after=%v delta=%v", requestedLatencyFloor, requestedLatency, measured.before, measured.after, delta)
 		}
 	})
 }
+
+// requestedLatency is the toxic's own configured latency (see
+// measureRedisLatencyWithFault's ApplyToxic call, "latency": 300); B1
+// independently measures fidelity at +/-10ms, so this test only needs to
+// prove interception happened, not re-measure precision.
+//
+// requestedLatencyFloor (80% of that) replaces a former `after <= before*2`
+// ratio check: under system load the *baseline* ("before") measurement
+// itself inflates (observed ~278ms against an idle-box baseline of a few
+// ms), so a genuine ~490ms observation — a real, meaningful increase — fell
+// short of doubling a noisy baseline. An absolute floor tied to what was
+// actually requested is robust to baseline drift in a way a ratio never
+// is: it only asks "did the delta reflect the fault," not "was the
+// baseline itself small enough for a multiplier to work."
+const (
+	requestedLatency      = 300 * time.Millisecond
+	requestedLatencyFloor = requestedLatency * 8 / 10
+)
 
 type latencyMeasurement struct{ before, after time.Duration }
 
