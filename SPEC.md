@@ -783,18 +783,22 @@ nothing to suggest, and only the second is honest.
   Currently `""`. Candidates: `"correlated"` (we still schedule the faults, so time-window
   attribution holds — see D-4), or a distinct `"none"`. Raised by the Task 1 implementer.
 - **TBD-7** — `Gemfile` and `pom.xml` manifest support (deferred from R-DET-14).
-- **TBD-10** — **Standard-library clients are invisible to D-9's candidate mechanism.** Candidates
-  are sourced from clients detected in lockfiles (R-DET-5), and a stdlib client like Go's
-  `net/http` never appears in a `go.mod` require line — so no knob table can surface it, however
-  complete. E1 measured the consequence: the corpus's canonical "HTTP client with no timeout" case
-  is detected and correctly attributed, and still cannot name `Client.Timeout` as the fix.
+- **TBD-10** — **RESOLVED 2026-08-08.** Standard-library clients were invisible to D-9's candidate
+  mechanism: candidates came from lockfile-detected clients (R-DET-5), and Go's `net/http` never
+  appears in a `go.mod` require line, so no knob table could reach it. E1 measured the cost — the
+  corpus's canonical "HTTP client with no timeout" case was detected and correctly attributed and
+  still could not name `Client.Timeout` as the fix.
 
-  The tension is real rather than an oversight: **R-DET-1 forbids detection from reading source**,
-  and a stdlib import is only discoverable *by* reading source. Note that **R-AUD-5 already permits
-  bounded source inspection** at known construction sites for the audit — so `doctor` can see
-  `net/http` usage while the verdict cannot. Routing audit-discovered clients into the verdict's
-  candidate surface is the obvious resolution and is a design decision, not a patch.
-  *(E1, 2026-08-08)*
+  Resolved along the line the requirements already drew: **R-DET-1 forbids *detection* reading
+  source; R-AUD-5 permits the *audit* bounded inspection at known construction sites.** So
+  `internal/doctor` gained an `http` entry and a fallback that fires only on real evidence of an
+  `http.Client{` construction, and `internal/run` consumes audit findings alongside lockfile
+  clients. Two details worth keeping: the audit searches for realistic **source forms**
+  (`Timeout:`) rather than the qualified knob names it reports (`Client.Timeout` appears only in
+  docs, never in source), and a stdlib-HTTP finding attaches to the **service whose source
+  contains it**, naming its experiment target as undetermined rather than picking a dependency at
+  random — an experiment pointing at the wrong host would teach the user something false.
+
 - **TBD-9** — `Finding.Chain` (the fault -> symptom hop list in `VERDICT.md` §1) stays empty: no
   trace-ingestion pipeline exists in v0, and fabricating hops would be worse than omitting them.
   Binding once OpenTelemetry ingestion ships, which is also what raises confidence from
