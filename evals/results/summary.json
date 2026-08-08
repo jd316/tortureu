@@ -1,61 +1,49 @@
 {
-  "note": "Second reality-check pass, after the coordinator's fixes (container-network-namespace k6, fault unit parsing, threshold-shape normalization). Re-ran case 1 and case 8 first, as instructed. The DC-2/reachability fix is confirmed working. Two further, independently-reproducible defects were found in the process, both inside internal/k6 and internal/run, both out of this task's edit scope -- reported here rather than routed around, per the task brief. Given both defects mean no case's assertions can be trusted, cases 2-7 were not built; a second well-evidenced blocker is more valuable than six more fixtures hitting the identical two bugs.",
+  "note": "Third reality-check pass, after Defect A (threshold-boolean trust) and Defect B (marker channel) were fixed. Case 8 (control) is now confirmed clean across 8 consecutive runs -- zero findings every time. Case 1 is now blocked by a THIRD, newly-found defect: egress.Classify silently drops a user-declared torture.yaml egress.hosts entry for any host detect.Detect's closed image vocabulary didn't recognize, so the R-EXE-20 fault-interception rename never triggers and the fault never reaches the target. Per the coordinator's branching instruction ('if both behave, build 2-7; if something is still confounded, stop again'), case 1 does not behave, so this round stops here.",
 
-  "confirmed_fix": "internal/run.K6Runner now runs k6 as a container joined to the SUT's network namespace (docker run --network container:<id>) instead of as a host process against a published port. Verified directly: curl and a hand-built k6 container both reach the SUT this way after DC-2 topology enforcement. The original blocking defect from the first reality check is resolved.",
+  "confirmed_fixes": [
+    "Defect B (phase markers): confirmed fixed. Case 1's ramp_up/peak markers are now correctly received by the scheduler; no more 'load ended before phase started' scheduling errors.",
+    "Defect A (threshold trust): confirmed fixed. Case 8 produced status:pass with correctly-evaluated thresholds (ok:true matching the real measured value) in all 8 runs; case 1 also shows correctly-evaluated (if uninformative, see Defect C) thresholds."
+  ],
 
-  "new_defect_A": {
-    "title": "k6 0.54.0's --summary-export JSON reports every arrival-rate-executor threshold as false, regardless of the measured value -- while the CLI's own human summary shows the identical threshold passing",
-    "severity": "critical -- makes every k6-based assert: entry unusable for any torture.yaml, since R-CFG-6 mandates the arrival-rate executor family exclusively",
-    "reproduction": [
-      "internal/run pipeline: case 8 (control, no fault) with p(95)<500 -- measured p95 29.6ms, JSON says {\"ok\": false}",
-      "internal/run pipeline: case 8 re-run with a deliberately generous p(95)<5000 -- measured p95 ~2-70ms across three runs, JSON still says {\"ok\": false} every time",
-      "Standalone, entirely outside TortureU: a hand-written k6 script using ramping-arrival-rate with a generous p(95)<5000ms threshold against a trivial always-200 Python HTTP server -- CLI prints a green checkmark, --summary-export JSON says {\"p(95)<5000\": false}",
-      "Standalone, constant-arrival-rate executor (not ramping) -- identical mismatch",
-      "Control: the DEFAULT executor (plain vus/iterations, a closed model) does NOT show this mismatch -- CLI and JSON agree. The bug is specific to the arrival-rate executor family k6.Compile is required to emit (R-CFG-6)."
+  "case8_control_repeated_runs": {
+    "runs": 8,
+    "status": ["pass", "pass", "pass", "pass", "pass", "pass", "pass", "pass"],
+    "findings_per_run": [0, 0, 0, 0, 0, 0, 0, 0],
+    "false_positive_count": 0,
+    "conclusion": "Case 8 is clean. Zero findings across 8 consecutive runs, run specifically to build confidence on the single most important number in this eval, per the coordinator's instruction. This is the first time in the eval's three rounds that the control has produced the required result."
+  },
+
+  "case1_no_timeout": {
+    "status": "pass (spurious -- see defect_C)",
+    "findings": [],
+    "measured_http_req_duration_max_ms": 10.67,
+    "expected_if_fault_applied_ms": ">=3000",
+    "conclusion": "The fault is scheduled, Toxiproxy visibly has a dep_slow_latency toxic active on a 'dep:9090' proxy during the run (confirmed live via the Toxiproxy control API), and the run completes with correctly-evaluated thresholds -- but the SUT's actual traffic never passes through that proxy at all, so the injected 3s latency has zero effect on measured request timing (max observed: 10.67ms, even with the fault window widened to 35s against a 45s load phase to remove any timing-overlap doubt). This is not a timing artifact; it is defect C below."
+  },
+
+  "defect_C": {
+    "title": "egress.Classify silently drops a user-declared egress.hosts entry for any host detect.Detect's closed image vocabulary does not recognize -- the R-EXE-20 fault-interception rename then never fires, and the fault never reaches its target",
+    "severity": "critical for E1 specifically: it means a fault targeting any custom, non-database/cache/broker internal dependency (i.e. any ordinary service-to-service HTTP call between two of the user's own services -- exactly case 1's shape, 'HTTP client with no timeout') can never actually be delivered, on any torture.yaml, regardless of how the fixture is built.",
+    "root_cause": "internal/egress/egress.go's Classify(detected, cfg) iterates `for host, dclass := range detected` -- detected is detect.System.EgressClass, populated only for compose services whose image matches detect's closed R-DET-9 vocabulary (postgres*, redis*, kafka*, ...; see internal/detect/compose.go's imagePatterns). A host the user explicitly classifies in torture.yaml's egress.hosts (cfg.Hosts) but that detect never put in `detected` is never visited by this loop, so it is silently absent from the returned classes map entirely -- not 'internal', not 'unclassified', just missing. internal/run.internalNetworkFaultTargets then filters it out (classes[target] != ClassInternal), so ComposeTopologyApplier.Apply's R-EXE-20 rename-and-alias never happens for that host: the original service keeps running under its real name, and the SUT's traffic reaches it directly, bypassing the Toxiproxy proxy the fault was applied to.",
+    "empirical_confirmation": [
+      "torture.yaml explicitly declares `egress.hosts: {dep:9090: {class: internal}}`.",
+      "docker compose config on the applied overlay shows the 'dep' service with no `profiles:` key and no 'dep-tortureu-backend' clone service at all -- the R-EXE-20 rename never happened.",
+      "docker ps confirms the ORIGINAL 'dep' container (case*-dep-1) is running, aliased 'dep', at a different IP than the proxy.",
+      "docker exec into checkout-api's container shows /etc/hosts resolves 'dep' directly to the original dep container's IP (172.22.0.2), not the proxy's IP (172.22.0.3).",
+      "Toxiproxy's own control API shows the dep_slow_latency toxic genuinely applied and active on a 'dep:9090' proxy -- the fault *was* scheduled and applied by internal/run's own separate ensureProxy-on-first-toxic path -- but nothing ever dials that proxy, so the toxic has no observable effect.",
+      "Same result twice: once with the corpus's designed 20s/15s timing, once with the window widened to 45s/35s specifically to rule out a timing-overlap explanation."
     ],
-    "consequence": "internal/k6.IngestSummary and internal/run.evaluateThresholds are only permitted to read this JSON (R-VER-10 forbids parsing the human CLI text). Since the JSON's threshold field is wrong for the one executor family TortureU is allowed to generate, every real run's k6-based assertions report broken, unconditionally -- independent of whether the SUT has any defect at all. This is a 100% false-positive mechanism for the control case, and it also means a genuine defect case's 'detection' can never be distinguished from this background noise.",
-    "owner": "internal/k6 (IngestSummary) and/or internal/run (evaluateThresholds) -- both out of this task's edit scope. Reported, not patched."
+    "owner": "internal/egress (Classify) and/or internal/detect (the closed image vocabulary Classify's outer loop is keyed to) -- both out of this task's edit scope. Reported, not patched.",
+    "scope_beyond_case_1": "Any corpus case whose target is a custom application service (not postgres/mysql/redis/mongo/kafka/rabbitmq/etc.) will hit this identically. Cases 3 (postgres pool) and 7 (redis cache stampede) target recognized image types and should be unaffected; case 4 (queue consumer) likely targets a recognized broker image and should also be unaffected. Cases 2 and 5, depending on how they're built, may or may not hit this -- not yet built."
   },
 
-  "new_defect_B": {
-    "title": "k6 writes console.log() output (the R-EXE-8 phase-marker mechanism) to stderr, not stdout -- but internal/run/load.go's scanMarkers only reads the process's stdout pipe",
-    "severity": "critical -- every phase-anchored fault (at: <phase name>, the corpus's and the spec's primary anchor mechanism; only the t=<duration> absolute escape hatch is unaffected) never fires, in any run",
-    "reproduction": [
-      "Ran the exact k6 script internal/k6.Compile generated for case 1, redirecting stdout and stderr to separate files: 0 TORTUREU_PHASE_START lines on stdout, 2 on stderr (formatted as k6's own structured log lines, e.g. `level=info msg=\"TORTUREU_PHASE_START peak ...\" source=console`).",
-      "Consequence observed directly in the real pipeline: case 1's `at: peak` fault produces status:error, \"fault \\\"dep_slow\\\": load ended before phase \\\"peak\\\" started -- the fault never fired (R-EXE-19)\" -- even though the phase actually started (its marker is visible in the captured stderr) -- because scheduleFaults is listening on a channel fed only from stdout, which never receives it.",
-      "Switching case 1's fault to the t=8s absolute-time escape hatch (which needs no marker) does let Run proceed past fault scheduling, confirming the marker channel is the specific point of failure."
-    ],
-    "consequence": "R-EXE-19 does fail the run loudly rather than silently proceeding as if the fault had applied, which is the honest behavior the codebase intends elsewhere -- but the practical effect is that no phase-anchored fault in this corpus (case 1 as designed, and every other case using `at: peak` or similar) can currently be exercised at all. Only the t= escape hatch reaches assertion evaluation, where defect A then takes over.",
-    "owner": "internal/run/load.go (scanMarkers reads cmd.StdoutPipe() only) and/or internal/k6 (script does not force --log-output=stdout or route console output through the stdout-based marker protocol). Out of this task's edit scope. Reported, not patched."
-  },
-
-  "cases_run": {
-    "case1_no_timeout": {
-      "run_1": {"status": "error", "error": "load generator failed: exit status 99 (pre-fix baseline)"},
-      "run_2_post_fix": {"status": "error", "error": "fault scheduling failed: fault \"dep_slow\": load ended before phase \"peak\" started -- the fault never fired (R-EXE-19)", "root_cause": "defect B"},
-      "diagnostic_with_t_anchor": {
-        "note": "not part of the committed corpus -- a throwaway torture.yaml with at: t=8s instead of at: peak, used only to get past defect B and see what happens next",
-        "status": "fail",
-        "findings": 2,
-        "observed_p95_ms": 1.99,
-        "threshold": "p(95)<1000",
-        "result": "{\"ok\": false} despite p95 well under threshold -- defect A reproduces even with a real fault scheduled"
-      }
-    },
-    "case8_control": {
-      "run_1_wrong_base_url": {"status": "error", "note": "used the host-published port instead of the SUT's own container-internal port; fixed by editing torture.yaml, not internal/run"},
-      "run_2_post_fix": {"status": "fail", "findings": 2, "observed_p95_ms": 0.99, "threshold": "p(95)<500", "root_cause": "defect A"},
-      "run_3_flaky": {"status": "error", "error": "load generator failed: exit status 137 (looks like an OOM-kill inside the shared, heavily-loaded sandbox VM -- not reproduced consistently, not attributed to TortureU)"},
-      "run_4_loose_threshold": {"status": "fail", "findings": 2, "observed_p95_ms": 41.0, "threshold": "p(95)<5000", "root_cause": "defect A -- loosening the threshold 10x changed nothing"}
-    }
-  },
-
-  "cases_2_to_7": "not built. Both defects are structural: A means every control-like run shows a false breach regardless of threshold value, and B means every phase-anchored fault (the corpus's intended design) never fires at all. Building six more fixtures would reproduce one or both of these two already-diagnosed bugs six more times without adding information about attribution accuracy specifically.",
+  "cases_2_to_7": "not built this round. Case 1, as specified by BENCHMARKS.md ('HTTP client with no timeout'), is the corpus's canonical example of a custom-service dependency, and defect C means it cannot currently be exercised regardless of fixture design. Per the coordinator's branching instruction, stopping to report rather than building six more fixtures on top of an unresolved third defect.",
 
   "metrics": {
-    "detection": "unmeasured -- confounded by defect A (a real defect and no defect both produce identical universal breakage) and defect B (a phase-anchored fault never actually fires, so 'detection' of the planted defect in case 1 as designed cannot occur at all)",
-    "attribution": "partially observable but not meaningful: when exactly one fault is scheduled and the run reaches assertion evaluation (only possible via the t= escape hatch, bypassing defect B), Cause.Fault is populated with the correct fault name -- but this happens unconditionally whenever any finding exists, real or spurious (defect A), so it is not evidence of genuine attribution accuracy",
-    "candidates": "unmeasured -- never reached a state where a genuine finding (as opposed to defect A's spurious ones) could be inspected for its candidate list",
-    "false_positive_on_control": "1 (non-zero) -- case 8 produced 2 findings in every run that reached assertion evaluation (3 of 4 attempts), with root cause conclusively identified as defect A, not TortureU's own attribution/detection logic. Reported plainly per the task brief: this is the number that decides whether the attribution claim is real, and right now it is not zero."
+    "detection": "0/1 measurable so far -- case 1's planted defect cannot be detected because the fault never reaches it (defect C). Case 8 correctly detects nothing (correct, since it has no defect).",
+    "attribution": "unmeasured -- no genuine detection occurred yet to attribute.",
+    "candidates": "unmeasured for the same reason. Also still expected to be empty for case 1 even if detection worked: internal/run/findings.go's clientKnobPatterns has no entry for net/http (noted in round 1), and detect.Detect never adds a custom service to sys.Deps at all (noted in round 1) -- so buildCandidates would return nil regardless.",
+    "false_positive_on_control": "0 across 8 consecutive runs. This is the number that matters most, and it is clean."
   }
 }

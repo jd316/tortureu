@@ -1,0 +1,42 @@
+[
+  {
+    "run": 1,
+    "status": "pass",
+    "findings": 0
+  },
+  {
+    "run": 2,
+    "status": "pass",
+    "findings": 0
+  },
+  {
+    "run": 3,
+    "status": "pass",
+    "findings": 0
+  },
+  {
+    "run": 4,
+    "status": "pass",
+    "findings": 0
+  },
+  {
+    "run": 5,
+    "status": "pass",
+    "findings": 0
+  },
+  {
+    "run": 6,
+    "status": "pass",
+    "findings": 0
+  },
+  {
+    "run": 7,
+    "status": "pass",
+    "findings": 0
+  },
+  {
+    "run": 8,
+    "status": "pass",
+    "findings": 0
+  }
+]
