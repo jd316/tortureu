@@ -23,6 +23,17 @@ func loadRegistry(path string) (*doctor.Registry, error) {
 	return doctor.LoadEmbeddedRegistry()
 }
 
+// sortByDomainThenID gives a deterministic, stable order to a slice of
+// coverage entries: domain, then tool id.
+func sortByDomainThenID(entries []doctor.CoverageEntry) {
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Domain != entries[j].Domain {
+			return entries[i].Domain < entries[j].Domain
+		}
+		return entries[i].Tool.ID < entries[j].Tool.ID
+	})
+}
+
 // buildDoctorReport renders the resilience audit and registry coverage
 // (R-CLI-3) as one human-readable report.
 //
@@ -66,12 +77,16 @@ func buildDoctorReport(findings []doctor.Finding, reg *doctor.Registry, sys *det
 	entries := doctor.Evaluate(reg, sys)
 	domains := map[string]bool{}
 	covered := map[string]bool{}
+	var driven []doctor.CoverageEntry
 	var suggestions []doctor.CoverageEntry
 	for _, e := range entries {
 		domains[e.Domain] = true
 		if e.Applies {
 			covered[e.Domain] = true
-			if e.Tool.Tier == "delegate" || e.Tool.Tier == "know" {
+			switch e.Tool.Tier {
+			case "drive":
+				driven = append(driven, e)
+			case "delegate", "know":
 				suggestions = append(suggestions, e)
 			}
 		}
@@ -93,12 +108,26 @@ func buildDoctorReport(findings []doctor.Finding, reg *doctor.Registry, sys *det
 	}
 	b.WriteString("\n")
 
-	sort.Slice(suggestions, func(i, j int) bool {
-		if suggestions[i].Domain != suggestions[j].Domain {
-			return suggestions[i].Domain < suggestions[j].Domain
-		}
-		return suggestions[i].Tool.ID < suggestions[j].Tool.ID
-	})
+	sortByDomainThenID(driven)
+	sortByDomainThenID(suggestions)
+
+	// R-SCOPE-3: drive is the tier that is the product (k6, Toxiproxy,
+	// stress-ng, pgbench, WireMock, Schemathesis, cgroups, signals — the
+	// clock-synchronized execution no other surveyed tool provides
+	// off-Kubernetes) and it belongs in its own section, not folded into
+	// "SUGGESTIONS": we do not suggest these, we run them. A drive entry
+	// whose how: names a verb not yet implemented in v0 still renders via
+	// CoverageEntry.String()'s "· planned" / "(verb ... not implemented)"
+	// annotation (R-SCOPE-4 in the other direction: claiming we drive
+	// something we cannot run today would be the same error inverted).
+	b.WriteString("DRIVEN BY TORTUREU (executed on one clock, folded into the verdict)\n")
+	if len(driven) == 0 {
+		b.WriteString("  (none)\n")
+	}
+	for _, e := range driven {
+		fmt.Fprintf(&b, "  %s   (trigger: %s)\n", e.String(), e.Tool.When)
+	}
+	b.WriteString("\n")
 
 	b.WriteString("SUGGESTIONS (delegate: config generated and handed off · know: named only — neither executed directly by tortureu; R-SCOPE-4)\n")
 	if len(suggestions) == 0 {

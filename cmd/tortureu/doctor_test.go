@@ -17,6 +17,7 @@ func fixtureRegistry() *doctor.Registry {
 		Domains: []doctor.Domain{
 			{ID: "load", Name: "Load generation", Tools: []doctor.Tool{
 				{ID: "k6", Tier: "drive", When: "always", How: "tortureu run <scenario>"},
+				{ID: "vegeta", Tier: "drive", When: "always", How: "tortureu smoke", Planned: "smoke"},
 				{ID: "locust", Tier: "delegate", When: "lang:python", How: "tortureu emit locust", Planned: "emit"},
 			}},
 			{ID: "chaos-k8s", Name: "Kubernetes chaos", Tools: []doctor.Tool{
@@ -47,6 +48,73 @@ func TestDoctorLabelsKnowTierSuggestionsWithTierAndTrigger(t *testing.T) {
 	}
 	if !strings.Contains(report, "trigger: platform:k8s") {
 		t.Errorf("suggestion missing trigger condition (R-CLI-3):\n%s", report)
+	}
+}
+
+// spec: R-SCOPE-3
+//
+// The gap this fixes: doctor named delegate and know entries but never
+// drive — the tier that IS the product (k6, Toxiproxy, stress-ng, pgbench,
+// ...). A user could learn what tortureu hands off and what it merely
+// names, but never what it actually executes. R-SCOPE-3 requires one front
+// door to all three declared depths; this asserts all three actually
+// appear for a stack that triggers one of each.
+func TestDoctorReportsAllThreeTiers(t *testing.T) {
+	sys := &detect.System{Lang: "python", Coverage: detect.Coverage{K8s: true}}
+	report := buildDoctorReport(nil, fixtureRegistry(), sys)
+
+	if !strings.Contains(report, "DRIVEN BY TORTUREU") {
+		t.Errorf("report has no drive-tier section:\n%s", report)
+	}
+	if !strings.Contains(report, "[drive] load/k6") {
+		t.Errorf("report does not name a drive-tier tool:\n%s", report)
+	}
+	if !strings.Contains(report, "[delegate") && !strings.Contains(report, "load/locust") {
+		t.Errorf("report does not name a delegate-tier tool:\n%s", report)
+	}
+	if !strings.Contains(report, "[know] chaos-k8s/chaosmesh") {
+		t.Errorf("report does not name a know-tier tool:\n%s", report)
+	}
+}
+
+// spec: R-SCOPE-4
+//
+// A drive entry whose how: names a verb not implemented in v0 (here
+// vegeta -> `tortureu smoke`, a stub) must still be labelled "· planned"
+// and disclose the unimplemented verb — claiming tortureu drives something
+// it cannot run today would be the same misrepresentation R-SCOPE-4
+// forbids for delegate/know, just inverted.
+func TestDoctorLabelsPlannedDriveEntryAsNotYetRunnable(t *testing.T) {
+	report := buildDoctorReport(nil, fixtureRegistry(), &detect.System{})
+	if !strings.Contains(report, "[drive · planned] load/vegeta") {
+		t.Errorf("planned drive entry not labelled as planned:\n%s", report)
+	}
+	if !strings.Contains(report, `verb "smoke" not implemented in v0`) {
+		t.Errorf("planned drive entry does not disclose the unimplemented verb:\n%s", report)
+	}
+	// And the entry that does work today must not carry the same
+	// annotation — the two stay distinguishable.
+	if strings.Contains(report, "[drive · planned] load/k6") {
+		t.Errorf("k6 (a working verb) incorrectly labelled as planned:\n%s", report)
+	}
+}
+
+// spec: R-SCOPE-3
+//
+// A domain with no tool matching the detected system must stay absent from
+// both the DRIVEN and SUGGESTIONS sections — it is still named under
+// "uncovered domains" (R-CLI-3), but must not be padded into a section
+// with a placeholder or an inapplicable entry.
+func TestDoctorDomainWithNoMatchingToolsStaysAbsentNotPadded(t *testing.T) {
+	sys := &detect.System{} // no python, no k8s, no openapi: nothing in
+	// "contracts" or "chaos-k8s" applies.
+	report := buildDoctorReport(nil, fixtureRegistry(), sys)
+
+	if strings.Contains(report, "contracts/") {
+		t.Errorf("an inapplicable domain's tool was padded into the report:\n%s", report)
+	}
+	if !strings.Contains(report, "uncovered domains:") || !strings.Contains(report, "contracts") {
+		t.Errorf("the inapplicable domain must still be named as uncovered:\n%s", report)
 	}
 }
 
