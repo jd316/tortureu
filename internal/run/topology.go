@@ -477,3 +477,74 @@ func (a ComposeTopologyApplier) Apply(composePath string, top egress.Topology, e
 	}
 	return nil
 }
+
+// TeardownDisabled force-removes the container(s) Apply disabled via the
+// tortureu-disabled profile (R-EXE-20's rename trick) for every
+// internalHosts target — run.go's Run calls this (duck-typed, see its own
+// doc comment on teardownTopology) on every exit path after Apply
+// succeeds, success or failure alike (R-EXE-5).
+//
+// `docker compose down` — with or without this package's own overlay file
+// — does not reliably remove a profile-gated service that is already
+// running from an earlier `up`: confirmed empirically (outside this
+// package, against real `docker compose`) that a service made
+// profile-disabled by an override file, while already running from a
+// previous plain `up` (exactly what happens between one `tortureu run` and
+// the next: the default reset command's own `docker compose up -d --wait`
+// starts the dependency undisabled, before this package's overlay ever
+// exists), is left alone by `down` the same way `up` leaves
+// out-of-profile-scope services alone — the container keeps running,
+// holding its port, straight into the next run. An E1 finding: this is the
+// "a failed run poisons the next one" failure class this package already
+// fixed once for its own test suite (ProxyControlPort's doc comment),
+// reappearing through a different mechanism for real users, not just this
+// package's tests.
+//
+// The fix compose itself provides for exactly this: passing --profile
+// tortureu-disabled activates the disabling profile for this one
+// invocation, so compose's own filtering includes (rather than excludes)
+// the disabled service and can actually reach it. Scoped to just the
+// disabled service(s) by name (`rm -f -s -v <service>...`), not a
+// wholesale `down` of the whole stack — the rest of the run's containers
+// are Reset's responsibility to cycle at the start of the next run, per
+// R-CFG-20/21; this only cleans up the one specific leak this mechanism
+// itself creates.
+//
+// A no-op (nil error) when there are no internalHosts, or when Apply's
+// overlay file is not present — nothing was disabled, so nothing to
+// remove; this matters because run.go may call this even when Apply never
+// actually reached the internal-host branch of its own logic for a given
+// run, or was never called at all in a test exercising a different path.
+func (a ComposeTopologyApplier) TeardownDisabled(composePath string, internalHosts []string) error {
+	if len(internalHosts) == 0 {
+		return nil
+	}
+	if _, err := os.Stat(a.overlayPath()); err != nil {
+		return nil
+	}
+	absPath, err := filepath.Abs(composePath)
+	if err != nil {
+		return err
+	}
+
+	seen := map[string]bool{}
+	var services []string
+	for _, h := range internalHosts {
+		name := hostnameOf(h)
+		if !seen[name] {
+			seen[name] = true
+			services = append(services, name)
+		}
+	}
+	if len(services) == 0 {
+		return nil
+	}
+	sort.Strings(services)
+
+	args := append([]string{"compose", "--profile", tortureuDisabledProfile, "-f", absPath, "-f", a.overlayPath(), "rm", "-f", "-s", "-v"}, services...)
+	cmd := exec.Command(a.bin(), args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("run: topology: teardown disabled service(s) %v: %s %v: %w: %s", services, a.bin(), args, err, out)
+	}
+	return nil
+}

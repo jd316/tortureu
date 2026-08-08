@@ -36,6 +36,24 @@ func (f *fakeTopology) Apply(composePath string, top egress.Topology, externalHo
 	return f.err
 }
 
+// fakeTopologyWithTeardownDisabled additionally implements the duck-typed
+// TeardownDisabled interface run.go looks for (see ComposeTopologyApplier's
+// real implementation), so a test can prove Run wires it into teardownAll
+// without needing a real Docker daemon.
+type fakeTopologyWithTeardownDisabled struct {
+	fakeTopology
+	teardownCalls        int
+	teardownComposePath  string
+	teardownInternalHost []string
+}
+
+func (f *fakeTopologyWithTeardownDisabled) TeardownDisabled(composePath string, internalHosts []string) error {
+	f.teardownCalls++
+	f.teardownComposePath = composePath
+	f.teardownInternalHost = internalHosts
+	return nil
+}
+
 // fakeLoadHandle is a no-op LoadHandle: nothing on any channel unless the
 // test sends it.
 type fakeLoadHandle struct {
@@ -326,6 +344,80 @@ func TestRun_LoadStartFailureSetsErrorReason(t *testing.T) {
 	if !strings.Contains(v.Error, "k6 not found") {
 		t.Errorf("Error = %q, want it to name the actual cause (k6 missing), not a generic failure message", v.Error)
 	}
+}
+
+// spec: R-EXE-5
+// spec: R-EXE-20
+//
+// An E1 finding: R-EXE-20's rename trick disables an internal dependency's
+// original service via an unused compose profile, but `docker compose
+// down` (confirmed empirically, outside this package) does not reliably
+// remove a profile-gated service already running from an earlier `up` —
+// leaking a still-running container and its port into the next run. That
+// is the exact "a failed run poisons the next one" class this package
+// already fixed once for its own test suite, reappearing for real
+// `tortureu run` users. This proves Run wires the cleanup
+// (ComposeTopologyApplier.TeardownDisabled, duck-typed) into teardownAll
+// on BOTH the success path and a failure path partway through the run —
+// the failure path is the one that would have been missed by only calling
+// teardown at the very end, which is exactly why several `return fail(...)`
+// sites needed their own teardownAll() call added alongside this fix.
+func TestRun_TeardownDisabledCalledOnSuccessAndFailurePaths(t *testing.T) {
+	newCfgWithInternalFault := func() *config.Config {
+		cfg := minimalConfig()
+		cfg.Egress.Hosts["postgres:5432"] = config.EgressHost{Class: "internal"}
+		cfg.Faults = []config.Fault{{
+			Name: "pg_slow", At: "t=0s", Target: "postgres:5432",
+			Verb: "latency", Inject: map[string]any{"latency": "300ms"},
+		}}
+		return cfg
+	}
+	sys := detect.System{EgressClass: map[string]string{"postgres:5432": "internal"}}
+
+	t.Run("success path", func(t *testing.T) {
+		topo := &fakeTopologyWithTeardownDisabled{}
+		handle := newFakeLoadHandle()
+		handle.done <- LoadResult{SummaryJSON: []byte(`{"metrics":{}}`)}
+
+		v := Run(newCfgWithInternalFault(), sys, Deps{
+			Reset:    &fakeResetter{},
+			Topology: topo,
+			Load:     &fakeLoadRunner{handle: handle},
+			Applier:  &fakeApplier{},
+		}, Options{})
+
+		if v.Status != verdict.StatusPass {
+			t.Fatalf("Status = %q, want pass (verdict: %+v)", v.Status, v)
+		}
+		if topo.teardownCalls != 1 {
+			t.Errorf("TeardownDisabled calls = %d, want exactly 1", topo.teardownCalls)
+		}
+		if len(topo.teardownInternalHost) != 1 || topo.teardownInternalHost[0] != "postgres:5432" {
+			t.Errorf("TeardownDisabled internalHosts = %v, want [postgres:5432]", topo.teardownInternalHost)
+		}
+	})
+
+	t.Run("failure path partway through the run", func(t *testing.T) {
+		// Apply succeeds (so the disabled service actually exists), but the
+		// load generator fails to start — a failure between Apply and a
+		// normal finish, exactly the window teardownAll was previously
+		// missing from at several call sites.
+		topo := &fakeTopologyWithTeardownDisabled{}
+
+		v := Run(newCfgWithInternalFault(), sys, Deps{
+			Reset:    &fakeResetter{},
+			Topology: topo,
+			Load:     &fakeLoadRunner{err: errors.New("k6 not found")},
+			Applier:  &fakeApplier{},
+		}, Options{})
+
+		if v.Status != verdict.StatusError {
+			t.Fatalf("Status = %q, want error", v.Status)
+		}
+		if topo.teardownCalls != 1 {
+			t.Errorf("TeardownDisabled calls = %d, want exactly 1 — a failure partway through the run must still clean up the disabled service, not just a clean finish", topo.teardownCalls)
+		}
+	})
 }
 
 // spec: R-EXE-20

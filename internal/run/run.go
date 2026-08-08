@@ -224,12 +224,37 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 		teardownExpiring = f
 		teMu.Unlock()
 	}
+	// teardownTopology is reassigned once Topology.Apply succeeds (below),
+	// the same lazily-armed pattern as teardownExpiring: nothing to tear
+	// down before Apply runs, so it starts as a no-op. It removes any
+	// service R-EXE-20's rename trick disabled via an unused compose
+	// profile — an E1 finding showed `docker compose down` (with or without
+	// this package's own overlay) does not reliably remove a profile-gated
+	// service that was already running from an earlier `up`, leaking a
+	// still-running, still-port-bound container into the next run. That is
+	// the exact "a failed run poisons the next one" failure class this
+	// package already fixed once for its own test suite (see
+	// ProxyControlPort's doc comment) reappearing through a different
+	// mechanism for real `tortureu run` users, so it goes through the same
+	// teardownAll every other cleanup obligation already does — every exit
+	// path, not just the success one (R-EXE-5).
+	var topoMu sync.Mutex
+	teardownTopology := func() {}
+	setTeardownTopology := func(f func()) {
+		topoMu.Lock()
+		teardownTopology = f
+		topoMu.Unlock()
+	}
 	teardownAll := func() {
 		manager.Teardown() // R-EXE-5
 		teMu.Lock()
 		f := teardownExpiring
 		teMu.Unlock()
 		f()
+		topoMu.Lock()
+		tf := teardownTopology
+		topoMu.Unlock()
+		tf()
 	}
 
 	// R-EXE-16: a signal must tear everything down no matter when it
@@ -327,7 +352,22 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 	}
 	internalHosts := internalNetworkFaultTargets(cfg.Faults, classes)
 	if err := deps.Topology.Apply(cfg.Target.Compose, top, externalHosts, internalHosts); err != nil {
+		teardownAll()
 		return fail("apply egress topology", err)
+	}
+	// Apply succeeded: arm the disabled-service cleanup for every remaining
+	// exit path (see teardownTopology's doc comment above). Duck-typed
+	// (like EnsureProxies/SetSUTContainer below) so fakeTopology-based
+	// tests — the overwhelming majority — are unaffected; only
+	// ComposeTopologyApplier implements it.
+	if td, ok := deps.Topology.(interface {
+		TeardownDisabled(composePath string, internalHosts []string) error
+	}); ok {
+		setTeardownTopology(func() {
+			if err := td.TeardownDisabled(cfg.Target.Compose, internalHosts); err != nil {
+				addWarning(v, fmt.Sprintf("teardown of disabled dependency container(s) failed: %v", err))
+			}
+		})
 	}
 	if preparer, ok := deps.Applier.(interface{ EnsureProxies(map[string]string) error }); ok {
 		targets := map[string]string{}
@@ -340,6 +380,7 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 			}
 		}
 		if err := preparer.EnsureProxies(targets); err != nil {
+			teardownAll()
 			return fail("configure egress proxy", err)
 		}
 	}
@@ -361,6 +402,7 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 	if setter, ok := deps.Load.(interface{ SetSUTContainer(string) }); ok {
 		sutContainer, err := discoverSUTContainer(cfg.Target.Service)
 		if err != nil {
+			teardownAll()
 			return fail("locate SUT container for the load generator's network attachment", err)
 		}
 		setter.SetSUTContainer(sutContainer)
@@ -368,6 +410,7 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 
 	script, err := k6.Compile(cfg)
 	if err != nil {
+		teardownAll()
 		return fail("compile k6 script", err)
 	}
 	if av, ok := abortedEarly(); ok {
@@ -382,6 +425,7 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 		// first. K6Runner already turns that into an actionable message
 		// (wrapStartError, load.go); other LoadRunner implementations'
 		// errors pass through as-is, still wrapped with what step failed.
+		teardownAll()
 		return fail("start load generator", err)
 	}
 	schedDone, expiringTeardown := scheduleFaults(cfg.Faults, handle.Markers(), started, manager, deps.Applier, deps.QueueApplier, deps.MockApplier, classes)

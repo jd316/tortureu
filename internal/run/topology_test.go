@@ -1,6 +1,7 @@
 package run
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -194,6 +195,91 @@ func TestComposeTopologyApplier_RewritesDependsOnToBackendNameForInternalHost(t 
 	}
 	if strings.Contains(section, "\n      redis:\n") {
 		t.Errorf("checkout-api's merged depends_on = %q, still references the disabled original \"redis\" — merging (rather than replacing) depends_on is exactly what leaves an undefined-service reference behind", section)
+	}
+}
+
+// spec: R-EXE-20
+//
+// An E1 finding: R-EXE-20's rename trick disables an internal dependency's
+// original service via an unused compose profile, but a profile-disabled
+// service is not reliably removed by `docker compose down` — it leaked a
+// container and its port into the next case's run. E1 worked around it in
+// its own harness; the leak is this package's, because it reproduces
+// identically for a real `tortureu run` user running twice in a row: the
+// default reset command's own `docker compose up -d --wait` (run before
+// Apply ever sees the overlay) starts the dependency undisabled, and
+// nothing in the ordinary `down` path ever reaches it again once Apply's
+// overlay disables it.
+//
+// This test reproduces that exact sequence for real, against a real Docker
+// daemon: a vanilla `up` (no overlay — standing in for Reset's own command,
+// which never mentions the overlay it doesn't yet know exists) starts
+// "redis" undisabled; Apply then disables it via the profile and creates
+// the backend clone; TeardownDisabled is asserted to remove the leaked
+// "redis" container specifically, while leaving the rest of the stack
+// (sut, backend) running — proving this is a scoped cleanup for the one
+// leak this mechanism itself creates, not a wholesale teardown of
+// Reset's own responsibility.
+func TestComposeTopologyApplier_TeardownDisabledRemovesLeakedContainer(t *testing.T) {
+	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
+		t.Skip("docker compose not available")
+	}
+
+	suffix := uniqueSuffix("tdt")
+	dir := t.TempDir()
+	composePath := filepath.Join(dir, "docker-compose.yml")
+	compose := fmt.Sprintf("name: %sproj\nservices:\n  sut:\n    image: alpine:3.20\n    command: [\"sleep\", \"120\"]\n  redis:\n    image: redis:7-alpine\n", suffix)
+	if err := os.WriteFile(composePath, []byte(compose), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	overlayPath := filepath.Join(os.TempDir(), "tortureu-topology-overlay-"+suffix+".yaml")
+
+	sutContainer := suffix + "proj-sut-1"
+	redisContainer := suffix + "proj-redis-1"
+	backendContainer := suffix + "proj-redis-tortureu-backend-1"
+	t.Cleanup(func() {
+		exec.Command("docker", "compose", "-f", composePath, "-f", overlayPath, "--profile", tortureuDisabledProfile, "down", "-v").Run()
+		forceRemoveContainers(sutContainer, redisContainer, backendContainer)
+	})
+
+	// Step 1: the "before Apply ever runs" state — a plain `up`, exactly
+	// what Reset's own default command does, using only the base compose
+	// file (it has no idea the overlay path even exists yet).
+	if out, err := exec.Command("docker", "compose", "-f", composePath, "up", "-d", "--wait").CombinedOutput(); err != nil {
+		t.Fatalf("vanilla up: %v: %s", err, out)
+	}
+	if got := containerState(t, redisContainer, "{{.State.Running}}"); got != "true" {
+		t.Fatalf("redis container not running after the vanilla up: %q", got)
+	}
+
+	// Step 2: Apply, exactly as Run calls it, with redis as an
+	// internal-class fault target.
+	top := egress.BuildTopology(suffix+"_sut", suffix+"_egress", suffix+"-proxy")
+	applier := ComposeTopologyApplier{OverlayPath: overlayPath}
+	if err := applier.Apply(composePath, top, nil, []string{"redis:6379"}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	// Confirm the leak actually reproduces before asserting the fix: the
+	// original redis container from step 1 is still running, untouched by
+	// Apply's own `up` (which excludes it via the disabling profile).
+	if got := containerState(t, redisContainer, "{{.State.Running}}"); got != "true" {
+		t.Fatalf("redis container = %q after Apply, want still running (reproducing the leak) — if this fails, the leak this test exists to catch may no longer reproduce the same way", got)
+	}
+
+	// Step 3: the fix.
+	if err := applier.TeardownDisabled(composePath, []string{"redis:6379"}); err != nil {
+		t.Fatalf("TeardownDisabled: %v", err)
+	}
+
+	if _, err := exec.Command("docker", "inspect", redisContainer).CombinedOutput(); err == nil {
+		t.Errorf("container %s still exists after TeardownDisabled — the leaked disabled service was not removed", redisContainer)
+	}
+	// Scoped, not wholesale: the rest of the stack must still be running.
+	if got := containerState(t, sutContainer, "{{.State.Running}}"); got != "true" {
+		t.Errorf("sut container = %q after TeardownDisabled, want still running — this must not tear down the whole stack, only the leaked disabled service", got)
+	}
+	if got := containerState(t, backendContainer, "{{.State.Running}}"); got != "true" {
+		t.Errorf("backend container = %q after TeardownDisabled, want still running", got)
 	}
 }
 
