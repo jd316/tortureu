@@ -3,6 +3,7 @@ package doctor_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jdb316/tortureu/internal/detect"
@@ -285,6 +286,7 @@ func newClient() *http.Client {
 }
 `)
 	sys := &detect.System{
+		SUT: "api",
 		Deps: []detect.Dep{
 			// No Clients: exactly the case a lockfile-only view of net/http
 			// can never populate.
@@ -296,14 +298,79 @@ func newClient() *http.Client {
 	if f.Library != "net/http" {
 		t.Fatalf("Library = %q, want %q", f.Library, "net/http")
 	}
-	if f.DepName != "dep" {
-		t.Fatalf("DepName = %q, want %q — this is what internal/run matches a fault's target against", f.DepName, "dep")
+	// The finding is a property of the SUT's own code (which host an
+	// http.Client calls is not knowable from its construction site
+	// alone — R-AUD-5), so it is attributed to sys.SUT, never to an
+	// arbitrary dependency.
+	if f.DepName != "api" {
+		t.Fatalf("DepName = %q, want %q (sys.SUT) — a net/http finding is a property of the SUT, not any one dependency", f.DepName, "api")
 	}
 	if !f.Determined {
 		t.Fatalf("expected timeout to be determined from the http.Client{} construction site, got %+v", f)
 	}
 	if f.Present {
 		t.Fatalf("expected timeout to be reported absent — no Client.Timeout/ResponseHeaderTimeout/TLSHandshakeTimeout set in source, got %+v", f)
+	}
+}
+
+// spec: R-AUD-4
+func TestNetHTTPFindingDoesNotNameAnUnrelatedDependencyAsItsExperiment(t *testing.T) {
+	// Regression for a field-verified bug: a compose stack with a Go
+	// service using &http.Client{} (no timeout) alongside a postgres
+	// dependency previously attached the http finding to "db" (the
+	// postgres dependency) and told the user to run a latency fault on
+	// postgres to prove an HTTP client's deadline exists — postgres has
+	// nothing to do with net/http. Which host an http.Client calls is not
+	// knowable from its construction site (R-AUD-5), so naming any
+	// dependency as the experiment target would be a guess; a wrong
+	// experiment teaches the user something false, which is worse than
+	// none (R-AUD-4).
+	dir := writeGoFile(t, `
+package main
+
+import "net/http"
+
+func newClient() *http.Client {
+	return &http.Client{}
+}
+`)
+	sys := &detect.System{
+		SUT: "api",
+		Deps: []detect.Dep{
+			{Name: "db", Type: "postgresql", Clients: []string{"github.com/jackc/pgx/v5"}},
+		},
+	}
+
+	findings := doctor.Audit(dir, sys)
+
+	var httpFindings int
+	for _, f := range findings {
+		if f.Library != "net/http" {
+			continue
+		}
+		httpFindings++
+		if f.DepName == "db" {
+			t.Fatalf("net/http finding attributed to %q (the postgres dependency) — must be attributed to the SUT, not a database it does not talk to: %+v", f.DepName, f)
+		}
+		if f.DepName != "api" {
+			t.Fatalf("DepName = %q, want %q (sys.SUT)", f.DepName, "api")
+		}
+		if strings.Contains(f.Experiment, "on db") || strings.Contains(f.Experiment, " db ") {
+			t.Fatalf("Experiment names the unrelated postgres dependency: %q", f.Experiment)
+		}
+		if !strings.Contains(f.Experiment, "not determined") {
+			t.Fatalf("Experiment should say the target host cannot be determined from source, got %q", f.Experiment)
+		}
+	}
+	if httpFindings == 0 {
+		t.Fatal("expected at least one net/http finding")
+	}
+
+	// One finding per check (timeout, retry), not one per dependency —
+	// there is only one SUT, so re-checking net/http per dependency would
+	// just duplicate the same finding.
+	if httpFindings != 2 {
+		t.Fatalf("got %d net/http findings, want exactly 2 (timeout + retry, reported once each)", httpFindings)
 	}
 }
 

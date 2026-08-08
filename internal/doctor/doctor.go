@@ -78,15 +78,20 @@ var faultForCheck = map[Check]string{
 // the bounded construction site doctor's own table knows for that client's
 // type (R-AUD-5) — never at dependencies known only from a compose image,
 // never at arbitrary control flow, and never at a library outside the
-// table. For a dependency with no lockfile-sourced client, it still checks
-// for Go's net/http (TBD-10): net/http is stdlib, so it never appears in a
-// go.mod require line and R-DET-5 can never see it, but R-AUD-5 permits the
-// audit itself to read source at a known construction site — finding
-// http.Client{ there is the evidence, independent of any manifest. A
-// dependency with neither yields no finding; that is honest, not a gap
-// (R-AUD-6 only requires "not determined" be said when a known library was
-// checked and couldn't be resolved, not that every dependency get a
-// finding).
+// table.
+//
+// It separately, and at most once, checks for Go's net/http (TBD-10):
+// net/http is stdlib, so it never appears in a go.mod require line and
+// R-DET-5 can never attach it to any dependency's Clients, but R-AUD-5
+// permits the audit itself to read source at a known construction site —
+// finding http.Client{ there is the evidence, independent of any manifest.
+// This check is not run per-dependency and not attributed to one: which
+// host an http.Client talks to is exactly the control-flow question
+// R-AUD-5 forbids following, so the finding is attributed to sys.SUT (the
+// service whose source it was found in) instead of guessing a dependency,
+// and its experiment says the target cannot be determined rather than
+// naming one at random (a wrong experiment is worse than none — see
+// experimentFor's doc comment).
 //
 // Findings are always hints (R-AUD-3): this is a static check; only a run
 // proves anything. Where inspection cannot determine a setting, the
@@ -97,37 +102,38 @@ func Audit(dir string, sys *detect.System) []Finding {
 		return findings
 	}
 	for _, dep := range sys.Deps {
-		if len(dep.Clients) > 0 {
-			library := dep.Clients[0]
-			findings = append(findings, buildFinding(dep, dep.Type, library, CheckTimeout, inspectTimeout(dir, dep.Type)))
-			findings = append(findings, buildFinding(dep, dep.Type, library, CheckRetry, inspectRetry(dir, dep.Type)))
+		if len(dep.Clients) == 0 {
 			continue
 		}
-		if !siteHasEvidence(dir, "http") {
-			continue // no evidence net/http is used anywhere: silence, not a guess either way
-		}
-		findings = append(findings, buildFinding(dep, "http", "net/http", CheckTimeout, inspectTimeout(dir, "http")))
-		findings = append(findings, buildFinding(dep, "http", "net/http", CheckRetry, inspectRetry(dir, "http")))
+		library := dep.Clients[0]
+		findings = append(findings, buildFinding(dep.Name, dep.Type, library, CheckTimeout, inspectTimeout(dir, dep.Type)))
+		findings = append(findings, buildFinding(dep.Name, dep.Type, library, CheckRetry, inspectRetry(dir, dep.Type)))
 	}
+
+	if siteHasEvidence(dir, "http") {
+		findings = append(findings, buildFinding(sys.SUT, "http", "net/http", CheckTimeout, inspectTimeout(dir, "http")))
+		findings = append(findings, buildFinding(sys.SUT, "http", "net/http", CheckRetry, inspectRetry(dir, "http")))
+	}
+
 	return findings
 }
 
 // buildFinding renders an inspectResult into a Finding, wording the hint
-// according to R-AUD-6's three-way outcome. siteType names the
-// goSourceSites entry inspection actually used — dep.Type for a
-// lockfile-sourced client, or the fixed "http" for net/http — since the two
-// can differ (a dependency's own detected type says nothing about which
-// stdlib library the SUT happens to use to reach it).
-func buildFinding(dep detect.Dep, siteType, library string, check Check, res inspectResult) Finding {
+// according to R-AUD-6's three-way outcome. depName is who the finding is
+// about (a dependency's name for a lockfile-sourced client, or the SUT's
+// own name for the net/http check, which is a property of the SUT's code,
+// not of any one dependency); siteType names the goSourceSites entry
+// inspection actually used.
+func buildFinding(depName, siteType, library string, check Check, res inspectResult) Finding {
 	f := Finding{
-		DepName:    dep.Name,
+		DepName:    depName,
 		DepType:    siteType,
 		Library:    library,
 		Check:      check,
 		Level:      LevelHint,
 		Determined: res.determined,
 		Present:    res.determined && res.present,
-		Experiment: experimentFor(check, dep),
+		Experiment: experimentFor(check, siteType, depName),
 	}
 
 	noun := "a timeout"
@@ -141,25 +147,42 @@ func buildFinding(dep detect.Dep, siteType, library string, check Check, res ins
 			"not determined whether %s is configured for %s client %s: %s",
 			noun, siteType, library, res.reason)
 	case res.present:
-		f.Hint = fmt.Sprintf("%s confirmed configured for %s client %s", noun, siteType, library)
+		f.Hint = fmt.Sprintf("%s is confirmed configured for %s client %s", noun, siteType, library)
 	default:
-		f.Hint = fmt.Sprintf("%s not configured for %s client %s", noun, siteType, library)
+		f.Hint = fmt.Sprintf("%s is not configured for %s client %s", noun, siteType, library)
 	}
 	return f
 }
 
-// experimentFor names the fault (R-AUD-4) that would prove or disprove the
-// finding for check against dep: e.g. a missing-timeout finding on the
-// Postgres client names the exact `latency` fault against postgres that
-// would demonstrate the consequence.
-func experimentFor(check Check, dep detect.Dep) string {
+// experimentFor names the fault (R-AUD-4) that would prove or disprove a
+// finding: e.g. a missing-timeout finding on the Postgres client names the
+// exact `latency` fault against postgres that would demonstrate the
+// consequence.
+//
+// The "http" siteType is the one exception: R-AUD-5 forbids following
+// control flow, so which host an http.Client actually calls is not
+// knowable from its construction site alone. Naming a dependency here
+// anyway would be worse than naming none — the coordinator's own field
+// test found a latency-on-postgres experiment attached to an unrelated
+// net/http finding, which teaches a false negative if the user runs it and
+// (rightly) sees nothing. R-AUD-4 only requires the experiment be named
+// when it can be; here it says plainly that it cannot.
+func experimentFor(check Check, siteType, depName string) string {
 	verb := faultForCheck[check]
+	if siteType == "http" {
+		switch check {
+		case CheckTimeout:
+			return "fault: latency on the host this client calls — target not determined from source (R-AUD-5); a slow response from whichever host it calls would prove whether a request deadline exists"
+		case CheckRetry:
+			return "fault: down on the host this client calls — target not determined from source (R-AUD-5); an outage of whichever host it calls would prove whether retries are capped, back off, and jitter"
+		}
+	}
 	switch check {
 	case CheckTimeout:
-		return fmt.Sprintf("fault: %s on %s — a slow dependency proves whether a request deadline exists", verb, dep.Name)
+		return fmt.Sprintf("fault: %s on %s — a slow dependency proves whether a request deadline exists", verb, depName)
 	case CheckRetry:
-		return fmt.Sprintf("fault: %s on %s — an outage proves whether retries are capped, back off, and jitter", verb, dep.Name)
+		return fmt.Sprintf("fault: %s on %s — an outage proves whether retries are capped, back off, and jitter", verb, depName)
 	default:
-		return fmt.Sprintf("fault: %s on %s", verb, dep.Name)
+		return fmt.Sprintf("fault: %s on %s", verb, depName)
 	}
 }
