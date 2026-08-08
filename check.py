@@ -161,6 +161,19 @@ ok(bool(re.search(r'- \*\*TBD-\d+\*\*', spec_txt2)), "R-PROC-4: TBD entries exis
 # requirements this file gates directly (its own ok() messages naming an R-id)
 gated = set(re.findall(r'R-[A-Z0-9]+-\d+', open(__file__).read())) & reqs
 traced = cited.keys() | gated
+
+# ── Meta-gate: a requirement not verified by a test or by this file MUST be accounted for in
+# SPEC.md §13 with its verification method. Otherwise "unverified" silently absorbs both
+# "cannot be tested" and "nobody got round to it", which is the distinction §13 exists to keep.
+# Bound §13 at the next heading. Splitting to end-of-file made anything appended below it count
+# as accounted-for — caught by this gate's own negative control, which is what they are for.
+_m13 = re.search(r'^## 13\..*?(?=^## |\Z)', spec_txt2, re.M | re.S)
+sec13 = _m13.group(0) if _m13 else ''
+unaccounted = sorted(r for r in (reqs - cited.keys() - gated) if r not in sec13)
+ok(not unaccounted,
+   "every unverified requirement is accounted for in SPEC §13"
+   + (f" — unaccounted: {unaccounted}" if unaccounted else ""))
+
 print(f"\n     traceability: {len(traced)}/{len(reqs)} requirements verified"
       f" ({100*len(traced)//len(reqs)}%) — {len(cited)} by a Go test, {len(gated - cited.keys())} by check.py alone")
 print(f"     (citation detail follows; not completeness):"
