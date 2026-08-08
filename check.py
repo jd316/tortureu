@@ -289,6 +289,18 @@ for line in res.splitlines():
     claimed = [c.strip() for c in line.split('|') if c.strip() in ('drive', 'delegate', 'know')]
     if name in tier_of and claimed and claimed[0] != tier_of[name]:
         conflicts.append(f"{name}: RESEARCH says {claimed[0]}, registry says {tier_of[name]}")
+# BENCHMARKS.md cites result JSON by link. benchmarks/results/ is gitignored, so a plain
+# `git add` on one silently does nothing and the doc ends up citing evidence a reader cannot
+# open — a claim without a source, which is the one thing that file exists to avoid. Each
+# cited path must actually be tracked (force-added).
+import subprocess
+tracked = set(subprocess.run(['git', 'ls-files', 'benchmarks/results/'],
+                             capture_output=True, text=True).stdout.split())
+missing = [p for p in sorted(set(re.findall(r'\((benchmarks/results/[^)]+)\)', open('BENCHMARKS.md').read())))
+           if p not in tracked]
+ok(not missing, "every benchmark result BENCHMARKS.md links to is tracked in git"
+   + (f" — untracked: {missing}" if missing else ""))
+
 ok(not conflicts, "RESEARCH per-tool tiers agree with registry.yaml"
    + (f" — {conflicts}" if conflicts else ""))
 
