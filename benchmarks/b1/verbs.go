@@ -26,13 +26,22 @@ import (
 
 const pingIterations = 40
 
+// jitterTargetStddev is R-EXE-24's derived expectation for `jitter: 50ms`:
+// Toxiproxy's latency toxic adds a UNIFORM random offset in [-jitter,
+// +jitter], not Gaussian noise with stddev==jitter, so the actually-produced
+// stddev of the delay is jitter/sqrt(3) ~= 28.87ms, not 50ms. BENCHMARKS.md's
+// tolerance row and SPEC's R-EXE-24 both state the expectation this way now
+// (corrected from an initial B1 run that measured 27.95ms against a
+// mistaken sigma==jitter assumption and wrongly reported it as a MISS).
+var jitterTargetStddev = 50.0 / math.Sqrt(3)
+
 // runLatencyJitter measures both the latency and jitter table rows from one
 // shared stack (they are the same Toxiproxy "latency" toxic with different
 // attributes, and torture.example.yaml itself only ever writes them
 // together: `inject: { latency: 300ms, jitter: 50ms }`).
 func runLatencyJitter() (latency Result, jitter Result) {
 	latency = Result{Verb: "latency", Requested: "+300ms", Tolerance: "±10ms (p50 delta)"}
-	jitter = Result{Verb: "jitter", Requested: "σ=50ms", Tolerance: "±15% (stddev of delta)"}
+	jitter = Result{Verb: "jitter", Requested: fmt.Sprintf("uniform ±50ms -> stddev ~= %.2fms (j/sqrt(3), R-EXE-24)", jitterTargetStddev), Tolerance: "±15% (stddev of delta, vs the uniform-distribution target)"}
 
 	res := withStack("lat", true, "", func(s *b1Stack) Result {
 		baseline, err := s.pingSamples(pingIterations)
@@ -87,12 +96,12 @@ func runLatencyJitter() (latency Result, jitter Result) {
 				deltaStats := computeStats(deltas)
 				jitter.Stats = &afterStats
 				jitter.Measured = fmt.Sprintf("stddev of delta = %.2fms", deltaStats.Stddev)
-				jitterPct := math.Abs(deltaStats.Stddev-50) / 50 * 100
+				jitterPct := math.Abs(deltaStats.Stddev-jitterTargetStddev) / jitterTargetStddev * 100
+				jitter.note("R-EXE-24: Toxiproxy's jitter is a UNIFORM offset in [-jitter,+jitter], so the target is jitter/sqrt(3) = %.2fms, not the raw 50ms parameter. Measured stddev=%.2fms vs target %.2fms (%.1f%% off, tolerance ±15%%).", jitterTargetStddev, deltaStats.Stddev, jitterTargetStddev, jitterPct)
 				if jitterPct <= 15 {
 					jitter.Verdict = "pass"
 				} else {
 					jitter.Verdict = "miss"
-					jitter.note("Toxiproxy's own jitter implementation adds a UNIFORM random offset in [-jitter,+jitter] (a plain uniform(-50,50) alone would have stddev ~28.9ms, not 50ms), and any negative computed delay clamps to zero, skewing the distribution further and lowering the effective stddev even more — this is not a translate.go defect, it is what Toxiproxy itself delivers for \"jitter\" given correct numeric input. Measured stddev=%.2fms vs requested 50ms (%.1f%% off, tolerance ±15%%).", deltaStats.Stddev, jitterPct)
 				}
 			}
 		}
@@ -122,7 +131,7 @@ func runLatencyJitter() (latency Result, jitter Result) {
 		}
 		latency.Secondary = &secLatency
 
-		secJitter := Result{Verb: "jitter", Requested: "σ=50ms (numeric ms, bypassing the unit-string gap)", Tolerance: "±15% (stddev of delta)"}
+		secJitter := Result{Verb: "jitter", Requested: fmt.Sprintf("uniform ±50ms -> stddev ~= %.2fms (j/sqrt(3), numeric ms, bypassing the unit-string gap)", jitterTargetStddev), Tolerance: "±15% (stddev of delta, vs the uniform-distribution target)"}
 		fJit := config.Fault{Name: "jit_secondary", Target: echoTarget, Verb: "latency", Inject: map[string]any{"latency": 0, "jitter": 50}}
 		if tr, err := s.applyFault(fJit); err != nil {
 			secJitter.Verdict = "unmeasured"
@@ -144,13 +153,11 @@ func runLatencyJitter() (latency Result, jitter Result) {
 				deltaStats := computeStats(deltas)
 				secJitter.Stats = &st
 				secJitter.Measured = fmt.Sprintf("stddev of delta = %.2fms", deltaStats.Stddev)
-				pct := math.Abs(deltaStats.Stddev-50) / 50 * 100
+				pct := math.Abs(deltaStats.Stddev-jitterTargetStddev) / jitterTargetStddev * 100
+				secJitter.note("R-EXE-24: with latency=0, any negative computed delay clamps to zero, which can pull the measured stddev further from the j/sqrt(3) target than the combined latency+jitter case does. Measured stddev=%.2fms vs target %.2fms (%.1f%% off, tolerance ±15%%).", deltaStats.Stddev, jitterTargetStddev, pct)
 				secJitter.Verdict = "miss"
 				if pct <= 15 {
 					secJitter.Verdict = "pass"
-				}
-				if pct > 15 {
-					secJitter.note("Toxiproxy's own jitter implementation adds a UNIFORM random offset in [-jitter,+jitter] (a plain uniform(-50,50) alone would have stddev ~28.9ms, not 50ms), and with latency=0 any negative computed delay clamps to zero, skewing the distribution further and lowering the effective stddev even more — none of this is a translate.go defect, it is what Toxiproxy itself delivers for \"jitter\" even given perfect numeric input. Measured stddev=%.2fms vs requested 50ms (%.1f%% off, tolerance ±15%%).", deltaStats.Stddev, pct)
 				}
 			}
 		}
@@ -314,11 +321,16 @@ func runDown() Result {
 	return r
 }
 
-// pauseKillOutcome runs the shared pause/kill background-pinger protocol:
-// launch a detached pinger inside the client container, let it establish a
+// pauseKillOutcome runs a TCP-observable background-pinger protocol: launch
+// a detached pinger inside the client container, let it establish a
 // baseline, apply the fault at a known wall-clock instant, let it run a
 // while longer, then read back every ping attempt's outcome and classify
-// what happened strictly after the fault was applied.
+// what happened strictly after the fault was applied. Despite the name
+// (kept for the "pause" and "kill" cases it originally covered together),
+// this is now only used by runPause: R-EXE-25 established that `kill`'s
+// specified effect (SIGKILL delivered, exit 137) is not observable at the
+// client's TCP connection at all — see runKill, which reads the container's
+// own exit status instead.
 func pauseKillOutcome(verb string, requested, expectOutcome string, tolerance string) Result {
 	r := Result{Verb: verb, Requested: requested, Tolerance: tolerance}
 	res := withStack(verb, false, "", func(s *b1Stack) Result {
@@ -411,8 +423,69 @@ func runPause() Result {
 	return pauseKillOutcome("pause", "no response, conn held open (SIGSTOP-equivalent freeze)", "timeout", "exact (client sees timeout not RST)")
 }
 
+// runKill measures `kill` at the signal + exit-code layer (R-EXE-25), not
+// the client-visible TCP layer the original tolerance table assumed. B1's
+// first run measured a graceful TCP close (io.EOF) rather than an RST after
+// `docker kill`, and internal/run's owner investigated and confirmed this is
+// standard Linux socket teardown, not a defect: SIGKILL to a container's
+// PID 1 releases its file descriptors, which closes an idle, fully-drained
+// socket with an orderly FIN, never an abortive RST — a real client-visible
+// reset needs Toxiproxy's network-layer "reset_peer" toxic instead. R-EXE-25
+// now specifies `kill`/`graceful` as distinct at the signal/exit-code layer
+// (SIGKILL/137 vs SIGTERM/0), so that is what this measures: whether the
+// echo container's process actually received SIGKILL and exited 137, read
+// via `docker inspect` before Teardown's undo (`docker start`) restarts it.
 func runKill() Result {
-	return pauseKillOutcome("kill", "conn reset (SIGKILL)", "reset", "exact (client sees RST)")
+	r := Result{Verb: "kill", Requested: "SIGKILL delivered, exit 137", Tolerance: "exact (signal + exit code, not client RST — see R-EXE-25)"}
+	res := withStack("kill", false, "", func(s *b1Stack) Result {
+		f := config.Fault{Name: "kill_test", Target: s.echoContainer, Verb: "kill", Inject: map[string]any{"kill": true}}
+		tr, aerr := s.applyFault(f)
+		r.Translated = tr
+		if aerr != nil {
+			r.Verdict = "miss"
+			r.note("Apply failed: %v", aerr)
+			return Result{}
+		}
+
+		var status, exitCode string
+		waitErr := waitFor(5*time.Second, func() error {
+			st, err := dockerInspect(s.echoContainer, "{{.State.Status}}")
+			if err != nil {
+				return err
+			}
+			status = st
+			if st != "exited" {
+				return fmt.Errorf("container not yet exited (status=%q)", st)
+			}
+			return nil
+		})
+		if ec, eerr := dockerInspect(s.echoContainer, "{{.State.ExitCode}}"); eerr == nil {
+			exitCode = ec
+		}
+		// Read the container's own record of what killed it BEFORE Teardown
+		// runs its undo (`docker start`), which would otherwise reset
+		// .State back to "running" and erase the very evidence being
+		// measured.
+		s.manager.Teardown()
+
+		if waitErr != nil {
+			r.Verdict = "unmeasured"
+			r.note("container never reached exited status within 5s after SIGKILL: %v (last observed status=%q, exit code=%q)", waitErr, status, exitCode)
+			return Result{}
+		}
+		r.Measured = fmt.Sprintf("status=%s exit_code=%s", status, exitCode)
+		if status == "exited" && exitCode == "137" {
+			r.Verdict = "pass"
+		} else {
+			r.Verdict = "miss"
+			r.note("expected status=exited exit_code=137 (128+SIGKILL), observed status=%q exit_code=%q", status, exitCode)
+		}
+		return Result{}
+	})
+	if res.Verdict == "unmeasured" && r.Verdict == "" {
+		r.Verdict, r.Notes = "unmeasured", res.Notes
+	}
+	return r
 }
 
 func runCPU() Result {

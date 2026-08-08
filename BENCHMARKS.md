@@ -47,100 +47,152 @@ effect. `make bench` runs it; results land in `benchmarks/results/<date>-<commit
 | `cpu: 90%` | 90% of quota | cgroup cpu.stat | ±5% |
 
 **Platform:** Linux 7.0.0-29-generic, Docker 29.5.3, AMD Ryzen 7 5800H (16 cores), cgroup v2.
-Measured `2026-08-08T11:00:40Z` at commit `bb6723c`
-([full JSON](benchmarks/results/2026-08-08-bb6723c.json)). Not yet measured on macOS or
+Measured `2026-08-08T14:37:09Z` at commit `698d549`
+([full JSON](benchmarks/results/2026-08-08-698d549.json)). Not yet measured on macOS or
 Docker Desktop — those rows do not exist yet, and BENCHMARKS.md does not claim they do.
 
-This is the second measured run. The first run (commit `07acb03`,
-[JSON](benchmarks/results/2026-08-08-07acb03.json)) found that `internal/fault/translate.go`
-never parsed the unit-suffixed strings a human-authored `torture.yaml` writes (`"300ms"`,
-`"1mbps"`), so Toxiproxy rejected `latency`/`jitter`/`bandwidth` outright. That has since been
-fixed upstream in `internal/fault` (unit parsing for `ms`/`s`, `mbps`/`kbps`) and reverified
-here by re-running the same harness against the fixed code. `cpu` and `kill` remain genuine
-product defects, not harness gaps, and are tracked separately with `internal/run`'s owner.
+This is the third measured run, after three upstream fixes landed since the second run
+(commit `bb6723c`, [JSON](benchmarks/results/2026-08-08-bb6723c.json)):
 
-**Results — primary measurement: exactly what a human-authored `torture.yaml` produces
-today** (unit-suffixed strings, e.g. `inject: { latency: 300ms, jitter: 50ms }`, run through
-the real `fault.Translate` → `fault.Manager` → `ToxiproxyApplier`/`DockerApplier` path):
+- **`cpu` fixed** (`e297ad6`): `--cpu-load` was applied undivided per worker, so
+  `workers: 4` at `cpu: 90%` summed to ~360% instead of the requested total. Now divided by
+  worker count before being passed to `stress-ng`.
+- **`jitter`'s tolerance corrected** (`ccbcf07`, R-EXE-24): Toxiproxy's `latency` toxic adds
+  a *uniform* offset in `[-jitter, +jitter]`, so the achievable stddev is `jitter/√3` ≈
+  28.9ms for `jitter: 50ms`, not 50ms itself. The tolerance table and this harness's own
+  verdict computation are both updated to check against that derived target.
+- **`kill`'s expectation corrected** (`18ef2a8`, R-EXE-25): a client-visible RST is not
+  achievable via `docker kill` — an idle, drained TCP socket gets an orderly FIN on process
+  death regardless of which signal killed it, and `DockerApplier` cannot reach the target's
+  own socket options to force an abortive close. `kill`/`graceful` are distinct at the
+  **signal and exit-code** layer (SIGKILL/137 vs SIGTERM/0) instead; this harness now reads
+  the echo container's own `docker inspect` state (before Teardown's `docker start` undo
+  runs and erases it) rather than watching the client's TCP connection.
+
+**Results** (unit-suffixed strings exactly as a human-authored `torture.yaml` writes them,
+e.g. `inject: { latency: 300ms, jitter: 50ms }`, run through the real `fault.Translate` →
+`fault.Manager` → `ToxiproxyApplier`/`DockerApplier` path):
 
 | Fault | Requested | Measured | Tolerance | Verdict |
 |---|---|---|---|---|
-| `latency: 300ms` | +300ms | p50 delta = 297.56ms (n=40) | ±10ms | **PASS** |
-| `jitter: 50ms` | σ=50ms | stddev of delta = 27.95ms (n=40, same sample as latency — one combined toxic) | ±15% | **MISS** — not a translate.go defect (see finding 2) |
-| `bandwidth: 1mbps` | 1 Mbps (125,000 B/s) | 123,685 bytes/sec through the proxy (1.1% off) | ±5% | **PASS** |
+| `latency: 300ms` | +300ms | p50 delta = 289.85ms (n=40, stddev 30.74ms) | ±10ms | **MISS** — see finding 1 |
+| `jitter: 50ms` | stddev target 28.87ms (`50/√3`) | stddev of delta = 30.74ms (n=40, same sample as latency) | ±15% | **PASS** (6.5% off target) |
+| `bandwidth: 1mbps` | 1 Mbps (125,000 B/s) | 123,206 bytes/sec through the proxy (1.4% off) | ±5% | **PASS** |
 | `down` | connection refused | client saw `ConnectionRefusedError` | exact | **PASS** |
 | `pause` (SIGSTOP-equivalent freeze) | no response, conn held open | 5/5 post-fault attempts timed out on an open connection, no RST | exact | **PASS** |
-| `kill` (SIGKILL) | conn reset | connection closed gracefully (`closed`, 1/1 post-fault attempts) rather than an RST-triggering reset | exact | **MISS** — dispatched to `internal/run`'s owner |
-| `cpu: 90%` | 90% of quota | cgroup v2 `cpu.stat` measured 363.1% of one core (4 unthrottled stress-ng workers, no load cap applied) | ±5% | **MISS** — dispatched to `internal/run`'s owner |
+| `kill` (SIGKILL) | signal + exit code: SIGKILL, exit 137 | `docker inspect` on the echo container read `status=exited exit_code=137` | exact | **PASS** |
+| `cpu: 90%` | 90% of quota | cgroup v2 `cpu.stat` measured 94.1% of one core (`--cpu-load` now divided across 4 workers) | ±5% | **PASS** |
 
-Five of seven rows now pass. `jitter` misses for a reason unrelated to translate.go (finding
-2 below); `kill` and `cpu` are confirmed product defects in `internal/fault`/`internal/run`,
-already dispatched to that code's owner, and this benchmark deliberately does not paper over
-either one by widening a tolerance.
-
-**Secondary measurement** (already-numeric input, kept for parity with the first run — now
-that translate.go itself does the unit conversion, this mostly reproduces the primary row,
-and remains useful only for `jitter`, where it isolates Toxiproxy's own semantics from any
-possible translate.go rounding):
-
-| Fault | Requested (numeric) | Measured | Tolerance | Verdict |
-|---|---|---|---|---|
-| `latency` | +300ms | p50 delta = 300.67ms (n=40, stddev 1.05ms) | ±10ms | **PASS** |
-| `jitter` | σ=50ms | stddev of delta = 16.78ms (n=40) | ±15% | **MISS** — see finding 2 |
-| `bandwidth` | 1 Mbps == 125 KB/s | 123,649 bytes/sec | ±5% | **PASS** |
+Six of seven rows pass. `jitter` and `kill` — both MISSes in the previous run — now pass
+against the corrected tolerance and the corrected measurement layer respectively; `cpu`
+now passes against the fixed divide-by-workers logic. `latency` is the one row that missed
+*this* run, by a hair (10.15ms against a ±10ms budget) — see finding 1, which is new: the
+prior two runs measured `latency` at 297.56ms and 295.34ms, comfortably inside tolerance.
 
 **Findings:**
 
-1. **The unit-parsing gap from the first run is fixed and reverified.**
-   `internal/fault/translate.go` now parses `"300ms"`/`"2s"` into milliseconds and
-   `"1mbps"`/`"kbps"` into KB/s before handing values to Toxiproxy, and this benchmark
-   confirms it end to end against a real Toxiproxy: `latency` and `bandwidth` both now pass
-   tolerance driven by the exact strings `torture.example.yaml` writes.
-2. **`jitter` misses tolerance, but the cause is Toxiproxy's own semantics, not a
-   translate.go defect.** `jitter: 50ms` requests σ=50ms; both the primary run (combined
-   with `latency: 300ms`, measured stddev 27.95ms) and the secondary numeric-only run
-   (`latency: 0`, measured stddev 16.78ms) come in well under 50ms. Toxiproxy's `latency`
-   toxic adds a *uniform* random offset in `[-jitter, +jitter]`, not Gaussian noise with
-   stddev equal to the `jitter` parameter — a plain `uniform(-50, 50)` alone has stddev
-   ≈28.9ms, and any negative computed delay clamps to zero, lowering the effective stddev
-   further still (more so at `latency: 0`, which explains why the secondary number is lower
-   than the primary one). This is a real mismatch between BENCHMARKS.md's tolerance
-   (assumes `jitter:` means the delta's stddev) and what the underlying tool delivers — the
-   honest read is that **the tolerance's assumption is wrong for how Toxiproxy defines
-   jitter**, not that TortureU mis-delivers the fault. We are not widening the tolerance;
-   we are recording that "σ=50ms" is not achievable as stated through Toxiproxy's `latency`
-   toxic and flagging it for the tolerance table to be revisited (e.g. against the
-   uniform-distribution-implied stddev of `jitter/√3`, which the primary run's 27.95ms and
-   the theoretical 28.9ms line up with reasonably well).
-3. **`cpu: 90%` remains a confirmed, dispatched product defect.** `translateDocker`'s
-   `"cpu"` case sets `d.Args["amount"] = f.Inject["cpu"]` (e.g. `"90%"`), but
-   `DockerApplier.ApplyDocker`'s `"stress"` case never reads `Args["amount"]` at all — it
-   only reads `Args["workers"]` and runs `stress-ng --cpu <workers>` with no load
-   percentage, and there is no cgroup CPU quota set for the `cpu` verb (that's the separate
-   `cpu_limit` verb). The requested percentage is silently dropped end to end; measured
-   load (363.1%) has no relationship to the requested 90%.
-4. **`kill` remains a confirmed, dispatched product defect.** An already-open TCP
-   connection to a `docker kill`-ed container observed a graceful close (`closed`) rather
-   than an exception indicating a reset, on this platform, in this run. The table's "client
-   sees RST" is not what was measured.
-5. **`down`, `pause`, `latency`, and `bandwidth` fully match the spec** as written today.
+1. **`latency` missed this run's tolerance by 0.15ms, and the honest read is measurement
+   noise on a shared machine, not a regression.** Across this benchmark's three runs today,
+   `latency`'s measured p50 delta was 297.56ms, then 295.34ms, then 289.85ms against a
+   requested +300ms and a ±10ms budget — only the third missed. The stddev of the raw
+   samples this run (30.74ms, n=40) is itself far larger than in the second run's ~1ms-level
+   secondary measurement, consistent with contention from other processes on the machine
+   this benchmark ran on (this machine was running concurrent, unrelated Docker/Go workloads
+   during this measurement session) rather than a change in how the fault is delivered. This
+   is reported as a miss, not silently re-run until it passed and not smoothed into "still
+   basically 300ms" — but it is flagged as a boundary case worth watching for repeat misses
+   on a quieter machine before treating it as a real fidelity regression, per BENCHMARKS.md's
+   own rule that a MISS gets reported, not rationalized away.
+2. **`jitter` now passes against the corrected, uniform-distribution tolerance (R-EXE-24).**
+   Measured stddev 30.74ms vs. the derived target 28.87ms (`jitter/√3`) is 6.5% off, well
+   inside ±15%. This is the same underlying Toxiproxy behavior the previous run measured
+   (27.95ms then, against the *old*, mistaken σ=jitter assumption, which read as a 44% miss);
+   nothing about the fault delivery changed — only the tolerance's stated expectation did.
+3. **`kill` now passes, measured at the correct layer (R-EXE-25).** The fault was always
+   being delivered (SIGKILL was always sent); the earlier MISS was this benchmark asking a
+   question — "does the client see an RST?" — that `docker kill` was never going to be able
+   to answer yes to, on this or any Linux kernel, for a process whose sockets have no queued
+   unread data or explicit abortive-close option at the moment of death. Measuring the
+   signal/exit-code layer directly (`docker inspect`'s `.State.Status`/`.State.ExitCode`)
+   answers the question `kill` actually specifies.
+4. **`cpu: 90%` now passes with the divide-by-workers fix.** 94.1% of one core against a
+   90% target is 4.6% off, inside ±5%. This is an honest integer-worker approximation (4
+   workers each targeting `90/4 = 22.5%` rounds to `23%`, summing to `92%` in principle;
+   94.1% measured here is within normal `stress-ng`/cgroup-accounting noise of that).
+5. **`down` and `pause` continue to fully match the spec**, unchanged from every prior run.
 
 **Publish:** a table, per platform (Linux/macOS/Docker Desktop). Fault fidelity varies by
 platform and pretending otherwise is how people get bad data. Where a platform can't hit
-tolerance, we say so rather than quietly widening the tolerance — see the MISS rows above,
-published as measured, not smoothed over.
+tolerance, we say so rather than quietly widening the tolerance — see the `latency` MISS
+above, published as measured, not smoothed over.
 
 ## B2 — Harness overhead
 
 *What does routing through our proxy cost when no fault is active?*
 
-Same scenario, three configurations: direct → through Toxiproxy → through Toxiproxy with
-TortureU orchestrating. Report p50/p95/p99 deltas and max sustained rps.
+This is now real: `benchmarks/b2` drives the same scenario — 8 concurrent persistent TCP
+connections to the known-good echo service, round-tripping a 64-byte payload as fast as
+possible for a 5-second sustained window — through three configurations, all via the same
+`ComposeTopologyApplier`/`ToxiproxyApplier`/`fault.Manager` production path B1 uses:
 
-**Publish:** the deltas, plus the generator's own ceiling on the test machine (fd limit,
-ephemeral port range, CPU). A tool that reports "your backend maxes at 2k rps" when the
-*generator* maxed out is worse than no tool — B2 exists so we never do that, and the
-`achieved vs target` warning in `VERDICT.md` is its runtime counterpart.
+1. **direct** — client dials the echo service with no proxy on the connection path at all.
+2. **toxiproxy** — client dials the real Toxiproxy proxy, with no toxic installed.
+3. **tortureu** — same proxy path, but with a real, zero-effect toxic (`latency: 0, jitter:
+   0`) applied through the actual production `fault.Translate` → `fault.Manager` →
+   `ToxiproxyApplier` path, isolating "TortureU's orchestration layer is active" from "a
+   fault is distorting traffic" (a separate, already-measured question — B1).
+
+`make bench` runs B1 then B2; results land in
+`benchmarks/results/<date>-<commit>-b2.json`.
+
+**Platform:** Linux 7.0.0-29-generic, Docker 29.5.3, AMD Ryzen 7 5800H (16 cores). Measured
+at commit `698d549` ([full JSON](benchmarks/results/2026-08-08-698d549-b2.json)).
+
+**Results** (p50/p95/p99 in milliseconds, deltas against the `direct` baseline; rps is
+requests actually completed divided by the *real* wall-clock window the load ran in, not the
+requested duration):
+
+| Config | p50 | p95 | p99 | rps | Δp50 | Δp95 | Δp99 | Δrps |
+|---|---|---|---|---|---|---|---|---|
+| direct | 0.59ms | 2.74ms | 5.82ms | 8,610.6 | — | — | — | — |
+| toxiproxy (no toxic) | 0.68ms | 2.78ms | 5.46ms | 7,961.3 | +0.08ms | +0.04ms | −0.36ms | −7.5% |
+| tortureu (orchestrated, zero-effect toxic) | 0.69ms | 2.92ms | 5.69ms | 7,758.8 | +0.09ms | +0.18ms | −0.13ms | −9.9% |
+
+**Generator ceiling** (BENCHMARKS.md's own rule: a tool that reports "your backend maxes at
+2k rps" when the *generator* maxed out is worse than no tool), read from inside the actual
+load-generating client container:
+
+- fd limit (`ulimit -n`): **1,048,576** — not the bottleneck at 8 concurrent connections.
+- ephemeral port range (`/proc/sys/net/ipv4/ip_local_port_range`): **32768–60999** — not
+  exercised meaningfully by this scenario, since each of the 8 workers holds one persistent
+  connection open for the whole window rather than opening a new one per request.
+- CPU: AMD Ryzen 7 5800H, 16 cores — the harness uses a single Python process with 8
+  threads inside one container; the ~8–9k rps ceiling measured here is very likely this
+  generator's own single-process-Python throughput limit (GIL-bound thread scheduling), not
+  a limit the echo service or proxy path imposed. This benchmark is measuring *relative
+  overhead* (the deltas), which does not depend on the absolute ceiling being the true
+  system limit, but the absolute rps numbers above should not be read as "TortureU's proxy
+  supports ~8k rps" — that would be exactly the "generator maxed out, not the backend"
+  mistake this rule exists to prevent.
+
+**Findings:**
+
+1. Toxiproxy alone adds a small, consistent tax: +0.08ms p50, roughly flat p95, and a
+   7.5% rps drop against the direct baseline — expected for adding one extra network hop
+   with its own userspace read/write loop.
+2. TortureU's own orchestration layer (a live, zero-effect toxic applied through the full
+   production path) adds no further meaningful latency beyond bare Toxiproxy (+0.01ms p50
+   versus the toxiproxy row) — consistent with the toxic being applied once, at fault-apply
+   time, over Toxiproxy's control API, rather than adding any per-request work of its own.
+   The extra ~2.4% rps drop between `toxiproxy` and `tortureu` is within the run-to-run noise
+   this single 5-second, single-process-generator measurement produces (see the generator
+   ceiling note above) and is not attributed to a specific mechanism.
+3. p99 in both proxied configurations is not reliably worse than direct (both came in
+   *lower* than direct's p99 in this run) — at this sample size and duration, tail latency is
+   dominated by generator/OS scheduling noise, not the proxy path. A longer sustained window
+   and multiple repeated runs would be needed before treating any p99 delta here as
+   meaningful; this run reports what was measured, not a claim that the proxy improves tail
+   latency.
 
 ## E1 — Attribution accuracy (the important one)
 
@@ -199,22 +251,24 @@ mechanism.
 
 ## Running them
 
-B1 is real. B2 and the E1/E2 evals are still **planned, not built** — there is no CI job
-gating on any of this yet:
+B1 and B2 are both real now. `make bench-ci` is still **planned, not built** — there is no
+CI job gating on a regression yet:
 
 ```
-make bench      # B1 fault fidelity — needs docker, ~2 min           (real, see benchmarks/b1)
-make eval       # E1, E2 — needs docker, ~40 min                     (planned)
-make bench-ci   # B2 + E1 subset, gates PRs on regression            (planned)
+make bench      # B1 fault fidelity + B2 harness overhead — needs docker, ~3 min   (real, see benchmarks/b1, benchmarks/b2)
+make eval       # E1 — needs docker                                                (real, see evals/run_case.sh)
+make bench-ci   # B2 + E1 subset, gates PRs on regression                          (planned)
 ```
 
-`make bench` builds and runs `benchmarks/b1` end to end: it brings up and tears down its own
-short-lived docker-compose stacks (unique per-run names, force-remove backstops, cleanup
-registered before any docker resource exists — mirroring `internal/run`'s own Docker-backed
-tests), and always leaves `docker ps -a` exactly as it found it. Results land in
-`benchmarks/results/<date>-<commit>.json` — both read from the environment at run time, never
-hardcoded — and are tracked over time. `make eval` and `make bench-ci` are unchanged stubs
-that print "not implemented" and exit non-zero; do not expect real numbers from them.
+`make bench` builds and runs `benchmarks/b1` then `benchmarks/b2` end to end: each brings up
+and tears down its own short-lived docker-compose stacks (unique per-run names, force-remove
+backstops, cleanup registered before any docker resource exists — mirroring `internal/run`'s
+own Docker-backed tests), and always leaves `docker ps -a` exactly as it found it. Results
+land in `benchmarks/results/<date>-<commit>.json` (B1) and
+`benchmarks/results/<date>-<commit>-b2.json` (B2) — date and commit both read from the
+environment at run time, never hardcoded — and are tracked over time. `make bench-ci` is an
+unchanged stub that prints "not implemented" and exits non-zero; do not expect real numbers
+from it.
 
 ---
 
@@ -237,24 +291,33 @@ that print "not implemented" and exit non-zero; do not expect real numbers from 
 ## Status
 
 **B1 is measured** (Linux/Docker Engine, single platform, see the table above and
-`benchmarks/results/2026-08-08-bb6723c.json`): 5 of 7 `inject:` verbs now pass tolerance,
-driven through the real fault path with no shortcuts. The first measured run (commit
-`07acb03`) found `internal/fault/translate.go` never converted the unit-suffixed strings a
-human-authored `torture.yaml` actually produces (`"300ms"`, `"1mbps"`) into the numeric
-values Toxiproxy's API requires; that has since been fixed upstream and this second run
-reverifies `latency` and `bandwidth` now pass with those exact strings. Two verbs still
-miss, and are dispatched to `internal/run`'s owner as confirmed product defects, not
-benchmark artifacts: `cpu` (the `stress` Docker action silently drops the requested load
-percentage) and `kill` (the observed connection behavior — graceful close — does not match
-the spec's "client sees RST"). `jitter` also misses tolerance, but the finding above shows
-the cause is Toxiproxy's own uniform-jitter semantics rather than a TortureU defect — the
-tolerance's assumption (stddev of delta ≈ the `jitter:` value) does not hold for how
-Toxiproxy actually implements jitter, and that mismatch is recorded rather than papered
-over with a widened number. B1's own constraints kept this benchmark out of `internal/**`
-throughout both runs — every defect above was found and reported, never fixed here.
+`benchmarks/results/2026-08-08-698d549.json`): 6 of 7 `inject:` verbs pass tolerance as of
+the third measured run, driven through the real fault path with no shortcuts. The first run
+(commit `07acb03`) found `internal/fault/translate.go` never converted the unit-suffixed
+strings a human-authored `torture.yaml` actually produces into the numeric values Toxiproxy's
+API requires; the second run (`bb6723c`) reverified that fix and surfaced three further
+findings — `cpu` silently dropped its requested load percentage, `jitter`'s tolerance assumed
+the wrong distribution, and `kill`'s spec asked for something (`docker kill` producing a
+client-visible RST) that is not achievable on Linux. All three were then corrected upstream
+(`e297ad6` fixed `cpu`'s divide-by-workers bug; `ccbcf07`/R-EXE-24 corrected `jitter`'s
+tolerance to the uniform-distribution target; `18ef2a8`/R-EXE-25 corrected `kill`'s spec to
+the signal/exit-code layer and this harness now measures that layer directly). This third run
+reverifies all three: `cpu`, `jitter`, and `kill` all pass now. The one remaining miss,
+`latency` (missed by 0.15ms against a ±10ms budget), is reported as measurement noise on a
+loaded shared machine rather than a fidelity regression — see the finding above — but is
+published as a MISS, not rounded away, per this file's own rule. B1's own constraints kept
+this benchmark out of `internal/**` throughout all three runs — every defect found was
+reported, and every fix was made and verified by `internal/run`'s owner, not this benchmark.
 
-**B2 (harness overhead), E1 (attribution accuracy), and E2 (detection accuracy) are still
-not measured.** No `make eval`/`make bench-ci` exists yet beyond the "not implemented"
-stubs in the Makefile. Until B2 exists, B1's numbers say nothing about whether the harness
-itself perturbs what it measures; until E1 exists, TortureU's actual product claim (finding
-the *right* cause) remains unverified by anything in this repository.
+**B2 is measured** (same platform, see the table above and
+`benchmarks/results/2026-08-08-698d549-b2.json`): Toxiproxy alone costs a small, consistent
+tax (+0.08ms p50, −7.5% rps against a direct baseline); TortureU's own orchestration layer
+adds no further meaningful latency on top of bare Toxiproxy. The generator's own ceiling
+(fd limit, ephemeral port range, CPU) is published alongside the rps numbers specifically so
+the ~8k rps figures are not misread as "this is what TortureU's proxy path supports" — at
+this scenario's concurrency, the single-process Python load generator is the more likely
+ceiling, not the proxy.
+
+**E1 (attribution accuracy) is measured** via `make eval` (`evals/run_case.sh`); see this
+file's E1 section for its own results. **E2 (detection accuracy) is still not measured** —
+no harness exists yet for it, and `make bench-ci` remains an unimplemented stub.

@@ -1,16 +1,17 @@
 .PHONY: bench eval bench-ci
 
-# B1 fault fidelity (BENCHMARKS.md §B1). Needs Docker; brings up and tears
-# down several short-lived compose stacks. Writes
-# benchmarks/results/<date>-<commit>.json.
+# B1 fault fidelity + B2 harness overhead (BENCHMARKS.md §B1, §B2). Needs
+# Docker; brings up and tears down several short-lived compose stacks per
+# benchmark. Writes benchmarks/results/<date>-<commit>.json (B1) and
+# benchmarks/results/<date>-<commit>-b2.json (B2).
 bench:
 	go run ./benchmarks/b1/...
+	go run ./benchmarks/b2/...
 
 # E1 attribution (BENCHMARKS.md §E1). Needs Docker; builds and tears down one
 # compose stack per corpus case. Case 8 is the control: it must produce zero
 # findings, and this target fails if it does not — a tool that invents a
 # finding on a healthy system is worse than one that misses a real defect.
-# B2 overhead is still not built.
 eval:
 	./evals/run_case.sh
 

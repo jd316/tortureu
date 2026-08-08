@@ -102,6 +102,15 @@ func forceRemoveNetworks(names ...string) {
 	}
 }
 
+// dockerInspect runs `docker inspect -f <format> <container>` and returns
+// the trimmed output — used by the kill measurement (R-EXE-25) to read the
+// container's own recorded exit status/code directly, rather than inferring
+// it from client-visible TCP behavior.
+func dockerInspect(container, format string) (string, error) {
+	out, err := exec.Command("docker", "inspect", "-f", format, container).Output()
+	return strings.TrimSpace(string(out)), err
+}
+
 // dockerExec runs `docker exec <container> args...` and returns combined
 // output.
 func dockerExec(container string, args ...string) (string, error) {
