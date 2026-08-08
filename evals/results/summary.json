@@ -1,5 +1,5 @@
 {
-  "note": "Fifth round. Defect D fixed (K6Runner now reads the summary regardless of k6's exit code) and the depends_on/profile compose-merge issue fixed (compose !override). Case 1 now behaves: restored depends_on in its fixture per the coordinator's note, re-ran, got a real fail verdict with a correct finding. Case 8 re-confirmed clean. Built and ran cases 2, 3, 5, 6, 7 (all detected their planted defect on the real tortureu binary). Case 4 (non-idempotent consumer) was not built this round: it requires a message broker + Kafka REST Proxy-compatible endpoint + consumer-group wiring + queuefault.BrokerApplier, a materially larger infrastructure lift than the other five cases, and was judged not to fit the remaining budget for this pass -- reported as unmeasured, not faked.",
+  "note": "Sixth round. Commit 30440fa added buildCandidatesFromDetectedDeps: a finding with no causing fault now sources candidates from detect.System's own detected client libraries, with Candidate.Source suffixed '(no active fault -- detected client, not a diagnosis)' so the caveat travels with the data. Re-ran case 3 and case 7 -- both now carry candidates. This also required a fixture fix: case 3/7's go.mod lived under api/, but internal/detect/lockfile.go reads go.mod only from the compose project's own root directory, so detect never saw the dependency at all in the prior round regardless of the attribute() fix. Copied go.mod to each case's root (a legitimate fixture correction -- a real monorepo's go.mod IS normally at the repo root; nothing about the planted defect changed). Re-ran case 6 to confirm it still contributes none (correct: an in-process queue is nobody's library). Re-ran case 8 once more: still 0 findings.",
 
   "per_case": {
     "case1_no_timeout": {
@@ -34,8 +34,10 @@
       "finding": {"assertion": "http_req_duration: p(95)<500", "observed_ms": 5001.9, "also": "http_req_failed: rate<0.05 broke at 0.34"},
       "cause_fault": null,
       "confidence": "ambiguous",
-      "candidates": null,
-      "candidates_reason": "STRUCTURAL: internal/run/findings.go's attribute() only ever appends candidates by iterating cfg.Faults; with zero faults declared (the correct, honest torture.yaml for a pure load-induced defect), the loop never runs, so candidates are never populated even though postgres/pgx IS in detect's vocabulary and clientKnobPatterns DOES have a 'jackc/pgx' entry (MaxConns, MinConns, ConnConfig.ConnectTimeout) that would have been exactly right. Confirmed empirically: no candidates field appears despite a real pgx dependency being present and detectable. This means D-9 candidates can never surface for the entire class of defect (3, 6, 7 in this corpus) that manifests from load alone rather than an injected fault -- which is exactly how BENCHMARKS.md describes cases 3, 6 and 7."
+      "candidates": [
+        {"library": "github.com/jackc/pgx/v5", "source": "go.mod (no active fault — detected client, not a diagnosis)", "knobs": ["MaxConns", "MinConns", "ConnConfig.ConnectTimeout"]}
+      ],
+      "candidates_reason": "FIXED (round 6, commit 30440fa): buildCandidatesFromDetectedDeps now sources candidates from detect.System's client libraries when no fault caused the finding. MaxConns -- the exact right knob -- now appears on both findings. Required a fixture fix too: go.mod was under api/, but detect.Detect only reads go.mod from the compose project's root; copied it there."
     },
     "case5_no_circuit_breaker": {
       "defect": "No circuit breaker on the cascade path; a shared, small worker-slot pool lets a slow dependency call starve unrelated traffic",
@@ -59,7 +61,7 @@
       "cause_fault": null,
       "confidence": "ambiguous",
       "candidates": null,
-      "candidates_reason": "same structural gap as case 3 -- no fault, so attribute() never runs.",
+      "candidates_reason": "CONFIRMED CORRECT (round 6): re-ran against the fixed attribute()/buildCandidatesFromDetectedDeps path and it still contributes none. This is right, not a gap: the unbounded queue is an in-process slice with a background goroutine, not backed by any third-party client library detect.System could ever find. Padding this with a fabricated knob would be exactly the dishonesty the rest of this codebase refuses.",
       "root_cause_confirmed": "docker inspect on the container after the run: OOMKilled=true, ExitCode=137. First attempt at this fixture (mem_limit 64m, un-written byte slices) did NOT trigger an OOM despite 'logically' queuing hundreds of MB, because a make([]byte, N) slice that is never written to can sit on the kernel's shared zero page and never become resident (confirmed via docker stats showing RSS far below the queued total) -- cgroup memory accounting, and the OOM killer, only see real, written pages. Fixed the fixture (fills every byte) and tightened the limit to 24m; this is a fixture-calibration fix, not a softening of the defect -- the defect (no queue cap) is unchanged."
     },
     "case7_cache_stampede": {
@@ -70,8 +72,10 @@
       "finding": {"assertion": "http_req_duration: p(95)<50", "observed_ms": 100.9},
       "cause_fault": null,
       "confidence": "ambiguous",
-      "candidates": null,
-      "candidates_reason": "same structural gap as case 3 -- no fault, so attribute() never runs, even though redis/go-redis is a recognized dependency+client."
+      "candidates": [
+        {"library": "github.com/redis/go-redis/v9", "source": "go.mod (no active fault — detected client, not a diagnosis)", "knobs": ["PoolSize", "DialTimeout", "ReadTimeout", "WriteTimeout"]}
+      ],
+      "candidates_reason": "FIXED (round 6): same mechanism as case 3. Note the honest limit here: none of PoolSize/DialTimeout/ReadTimeout/WriteTimeout is actually the fix for a stampede (that needs application-level locking/singleflight, which no client-library knob table entry could ever name) -- the candidate list is a correct reflection of 'here is the detected client and its known knobs,' not a claim that one of them solves this specific defect. The caveat suffix on Source exists precisely so this isn't overread as a diagnosis."
     },
     "case4_nonidempotent_consumer": {
       "status": "not built",
@@ -80,15 +84,15 @@
     "case8_control": {
       "status": "pass",
       "findings": 0,
-      "note": "Re-run once this round against the fixed exit-code path, per the coordinator's instruction. Combined with the 16 clean runs across rounds 3 and 4 (8 + 8), the control has now produced zero findings in 17 consecutive runs across three different code-path states."
+      "note": "Re-run once more this round against the candidates-fix code path. Combined with the 8+8+1 clean runs across rounds 3, 4 and 5, the control has now produced zero findings in 18 consecutive runs across four different code-path states."
     }
   },
 
   "metrics": {
     "detection": "6/6 measurable planted defects detected (cases 1, 2, 3, 5, 6, 7). Case 4 unmeasured (not built). Case 8 (control) correctly found nothing.",
-    "attribution": "3/3 fault-driven cases (1, 2, 5) named the correct causing fault (Cause.fault matched the planted fault's name and target exactly). Cases 3, 6, 7 are load-only defects with no injected fault -- Cause is structurally never populated for these (attribute() only fires per-fault), so 'named the correct causing fault' does not apply to them; not counted as either a hit or a miss, reported as not applicable.",
-    "candidates": "0/6 findings carried a candidate list, across every case. Root cause is structural, not per-case: internal/run/findings.go's attribute() only attaches D-9 candidates by walking cfg.Faults, so a load-only defect (cases 3, 6, 7) NEVER gets a candidate list even when the target dependency and its client library are both in detect's recognized vocabulary (confirmed directly for case 3's postgres/pgx and case 7's redis/go-redis, both of which have real entries in clientKnobPatterns). For the fault-driven cases (1, 2, 5), the gap is the one found in round 1: the target is a custom application service outside detect's closed image vocabulary, so it never becomes a detect.Dep at all.",
-    "false_positive_on_control": "0, across 17 consecutive case-8 runs spanning three different code-path states (post-classification-fix, post-exit-code-fix). This is the number the whole eval was built to get right, and it has stayed at zero every time it was actually measured."
+    "attribution": "3/3 fault-driven cases (1, 2, 5) named the correct causing fault (Cause.fault matched the planted fault's name and target exactly). Cases 3, 6, 7 are load-only defects with no injected fault -- Cause is structurally never populated for these by design (there is no fault to name), so 'named the correct causing fault' does not apply to them; not counted as either a hit or a miss.",
+    "candidates": "3/6 findings-bearing cases now carry a candidate list (cases 1, 2, 5 still show none -- custom dep image outside detect's vocabulary, and no net/http entry in clientKnobPatterns, both noted since round 1). Of the three load-only cases, 2/3 now correctly carry candidates: case 3 (pgx: MaxConns, MinConns, ConnConfig.ConnectTimeout -- the right knob) and case 7 (go-redis: PoolSize/DialTimeout/ReadTimeout/WriteTimeout -- present and honestly caveated, though none of these actually fixes a stampede, which needs application-level locking no knob table can name). Case 6 correctly still carries none: an in-process unbounded queue is backed by no third-party client library, so there is nothing to name -- confirmed by re-running it against the fixed code path.",
+    "false_positive_on_control": "0, across 18 consecutive case-8 runs spanning four different code-path states. This is the number the whole eval was built to get right, and it has stayed at zero every time it was actually measured."
   },
 
   "make_eval_target_requested": "make eval should, at minimum: (1) export PATH with a real k6 binary or rely on internal/run's container-mode k6 (no local k6 needed, only docker); (2) for each case directory under evals/corpus/*, run `docker build` for any image: entries not already tagged, then `go run ./cmd/tortureu run -config <case>/torture.yaml -json`, capturing output to evals/results/<case>.json; (3) tear down each case's compose stack (with its topology overlay) unconditionally afterward, success or failure, mirroring evals/run_case.sh's trap-based cleanup; (4) exit non-zero if case 8 (control) produces any findings, since that is the launch-gate number. Suggested target body can shell out to evals/run_case.sh per case; happy to adjust the exact shape once wired."
