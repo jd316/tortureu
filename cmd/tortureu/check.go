@@ -66,7 +66,17 @@ func runCheckContracts(args []string, stdout, stderr io.Writer) int {
 				return 2
 			}
 		}
-		results = append(results, contracts.CheckOpenAPI(true, *baseline, spec))
+		base := *baseline
+		if contracts.Available(contracts.OASDiff) {
+			resolved, cleanup, rerr := contracts.ResolveOpenAPIBaseline(base, spec)
+			if rerr != nil {
+				fmt.Fprintf(stderr, "tortureu check contracts: %v\n", rerr)
+				return 2
+			}
+			defer cleanup()
+			base = resolved
+		}
+		results = append(results, contracts.CheckOpenAPI(true, base, spec))
 	} else {
 		results = append(results, contracts.CheckOpenAPI(false, "", ""))
 	}
@@ -75,7 +85,20 @@ func runCheckContracts(args []string, stdout, stderr io.Writer) int {
 	if *protoDir != "" {
 		pd = *protoDir
 	}
-	results = append(results, contracts.CheckProto(sys.Coverage.Proto, *baseline, pd))
+	if sys.Coverage.Proto {
+		base := *baseline
+		if contracts.Available(contracts.Buf) {
+			resolved, rerr := contracts.ResolveProtoBaseline(base, pd)
+			if rerr != nil {
+				fmt.Fprintf(stderr, "tortureu check contracts: %v\n", rerr)
+				return 2
+			}
+			base = resolved
+		}
+		results = append(results, contracts.CheckProto(true, base, pd))
+	} else {
+		results = append(results, contracts.CheckProto(false, "", ""))
+	}
 
 	return renderCheckResults(results, stdout, stderr)
 }

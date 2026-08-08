@@ -237,8 +237,8 @@ domains:
     name: Contract & compatibility
     coverage: delegate
     tools:
-      - { id: oasdiff,   tier: delegate, when: "spec:openapi", how: "tortureu check contracts", note: "cheap, high signal, seconds to run", planned: check }
-      - { id: buf-breaking, tier: delegate, when: "spec:proto", how: "tortureu check contracts", note: "protobuf compat; mechanical", planned: check }
+      - { id: oasdiff,   tier: delegate, when: "spec:openapi", how: "tortureu check contracts", note: "cheap, high signal, seconds to run" }
+      - { id: buf-breaking, tier: delegate, when: "spec:proto", how: "tortureu check contracts", note: "protobuf compat; mechanical" }
       - { id: pact,      tier: know,     when: "spec:openapi|spec:proto", how: "pact-broker can-i-deploy", note: "most-adopted CDC tool, but a whole workflow of its own" }
       - { id: spring-cloud-contract, tier: know, when: "lang:java", how: "mvn verify" }
 
