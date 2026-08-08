@@ -102,7 +102,17 @@ run_one_case() {
   fi
 
   rm -f "$overlay"
-  (cd "$case_dir" && "$TORTUREU_BIN" run -config torture.yaml -json) >"$out" 2>"$errout"
+  if [ -x "$case_dir/run.sh" ]; then
+    # Cases needing more than a plain `tortureu run` (live dependencies the
+    # orchestrator's own -broker-url/-prom-url flags need host reach to,
+    # which DC-2 topology enforcement removes -- see case 4's run.sh for
+    # the full finding) bring their own runner. It owns its case's
+    # cleanup; the generic cleanup() above still runs afterward as a
+    # backstop but should find nothing left to do.
+    "$case_dir/run.sh" "$TORTUREU_BIN" "$out" "$errout"
+  else
+    (cd "$case_dir" && "$TORTUREU_BIN" run -config torture.yaml -json) >"$out" 2>"$errout"
+  fi
   local rc=$?
   local status findings
   status="$(python3 -c "import json,sys

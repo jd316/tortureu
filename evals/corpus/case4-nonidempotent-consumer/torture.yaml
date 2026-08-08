@@ -1,0 +1,78 @@
+version: 0
+
+target:
+  compose: ./docker-compose.yml
+  service: checkout-api
+  base_url: http://localhost:8080
+
+egress:
+  default: deny
+  # "orders" is a Kafka/Redpanda topic name, not a network host -- but
+  # config.Parse's fault-target validation only accepts the SUT's own
+  # service name or a key declared here (a purely syntactic check with no
+  # access to detect.System), so a queue-fault target has to be declared
+  # here regardless of verb. internal/run's own queuefault routing
+  # (scheduler.go's routePassedOver) never consults this classification
+  # for poison_pill/duplicate -- unlike error_rate, which is validated
+  # against class: mock -- so the class value itself is inert for this
+  # fault; it exists only to satisfy the parser.
+  hosts:
+    orders: { class: internal }
+    # redpanda:8082 (Pandaproxy) is referenced by checkout-api's own
+    # REDPANDA_PROXY env var but is not a compose service in this fixture
+    # (see docker-compose.yml's and run.sh's header comments for why) --
+    # detect.detectExternalHosts flags any env-referenced host that isn't
+    # an in-compose service as an external, unclassified host by default
+    # (R-DET-4), which DC-2's default-deny then aborts the run over.
+    # Classified internal here because that is what it is architecturally,
+    # even though this fixture stands it up outside compose.
+    redpanda:8082: { class: internal }
+
+reset:
+  command: docker compose down -v && docker compose up -d --wait
+
+load:
+  engine: k6
+  model: arrival_rate
+  stages:
+    - phase: ramp_up
+      to: 10rps
+      over: 5s
+    - phase: peak
+      hold: 10rps
+      for: 40s
+
+  scenarios:
+    - name: order
+      weight: 100
+      flow:
+        - { method: POST, path: /order }
+
+faults:
+  # duplicate: 1.0 -- every record the fault's own shadow consumer reads
+  # gets re-published once. A strong, unambiguous rate rather than a
+  # subtle one: the point of this case is whether TortureU's verdict layer
+  # can express "the same message was processed twice" AT ALL (a
+  # correctness defect, not a latency one), not how sensitive it is at the
+  # margin. Fired early in a long peak phase and given a short duration so
+  # there are many seconds of continued, undisturbed load afterward for
+  # checkout-api's own (slow, polling) consumer loop to catch up on and
+  # count the redelivered copies before the run ends and the final promql
+  # query fires -- BrokerApplier's own redelivery loop polls every 500ms
+  # and checkout-api's poll loop long-polls for up to 1s per cycle, so the
+  # round trip from "duplicate published" to "counted" is not instant.
+  - name: order_duplicate
+    at: peak
+    for: 5s
+    target: orders
+    inject: { duplicate: 1.0 }
+
+# k6 cannot see this defect at all: every /order POST still returns 202
+# whether or not the message is later processed twice, so no threshold on
+# request duration or failure rate would ever break. This is the one
+# corpus case whose defect is correctness under redelivery, not latency or
+# error rate -- promql: is the only assert form that can express "the
+# consumer's side effect ran more times than the producer's request
+# count", by comparing two counters this SUT's own /metrics exposes.
+assert:
+  - promql: 'orders_processed_total <= orders_received_total'

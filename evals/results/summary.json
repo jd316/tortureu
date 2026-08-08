@@ -1,91 +1,54 @@
 {
-  "note": "Seventh and final round. Commit 956c8cd added a net/http entry to internal/run/findings.go's clientKnobPatterns (Client.Timeout, Transport.ResponseHeaderTimeout, Transport.DialContext, Transport.TLSHandshakeTimeout, Transport.MaxIdleConnsPerHost). Commit addcee5 taught internal/detect to read manifests from each compose service's own build context, not just the project root, via a new detectServiceManifests + Dep.ClientRefs. Restored fixtures to their natural per-service go.mod layout (removed the project-root go.mod workaround from case 3 and case 7). Re-ran the whole corpus via `make eval` (now wired to evals/run_case.sh, rewritten this round into a full corpus runner with a case-8 gate). Finding, reported rather than routed around: cases 1, 2 and 5 still carry no candidates, for a reason neither commit reaches -- see case1_no_timeout below.",
+  "note": "Eighth and final round: case 4 (non-idempotent consumer) built and detected. The corpus is now complete -- all 8 cases built and measured, none faked or skipped.",
 
-  "per_case": {
-    "case1_no_timeout": {
-      "defect": "HTTP client with no timeout",
-      "status": "fail",
-      "detected": true,
-      "finding": {"assertion": "http_req_duration: p(95)<1000"},
-      "cause_fault": "dep_slow",
-      "candidates": null,
-      "candidates_STILL_missing_why": "Verified directly (a throwaway program linking internal/detect against this fixture's compose file, run and discarded -- not committed): detect.System.Deps is empty for this stack; the only entry is a Gaps line, 'unrecognized image e1-case1-dep:latest (service dep) -- classify it in torture.yaml'. Two independent reasons compound: (1) 'dep' is a custom image outside detect's closed R-DET-9 vocabulary (postgres*/redis*/kafka*/etc.), so it never becomes a detect.Dep at all -- unchanged by either of this round's commits, since both only add to what a RECOGNIZED dependency's client library can be. depForTarget(deps, \"dep:9090\") returns nil regardless of what's in clientKnobPatterns. (2) Independently, even a recognized target's manifest scan could never have surfaced net/http anyway: internal/detect/lockfile.go's goClientPatterns table (the list of import-path -> R-DET-9-type mappings that gates what a manifest scan can attach a Dep) has no net/http entry, and go.mod's own \"require\" lines never list a stdlib package like net/http in the first place -- confirmed empirically for checkout-api's own (empty, no requires) go.mod. The new net/http row lives only in internal/run/findings.go's clientKnobPatterns (what knobs to name once a client is already known), not in internal/detect's own recognition table (whether net/http can be discovered as a client at all). Both gaps are structural, in internal/detect and internal/run respectively, both out of this task's edit scope. Reported, not fixed."
+  "case4_nonidempotent_consumer": {
+    "defect": "Non-idempotent consumer: applies its side effect (an in-memory counter increment) for every message it reads off a Redpanda topic, with no per-message dedup check at all.",
+    "fault": "duplicate: 1.0 on target 'orders' (a topic name, not a host:port), at: peak for: 5s -- internal/queuefault's BrokerApplier, driving Redpanda's Pandaproxy (Kafka REST Proxy v2-compatible) over plain HTTP, exactly as internal/applier/broker_applier.go documents.",
+    "status": "fail",
+    "detected": true,
+    "assert_form_used": "promql: 'orders_processed_total <= orders_received_total' -- the ONLY assert form that could express this defect. k6 thresholds cannot see it at all: every POST /order still returns 202 whether or not the message is later processed twice, so no duration/failure-rate threshold would ever break. sql: reads as permanently unevaluated (no SQL execution path exists in v0, confirmed by reading internal/run/findings.go's evaluateSQLAsserts). promql: is fully evaluable given a live Prometheus and -prom-url -- confirmed by reading internal/run/findings.go's evaluatePromqlAsserts, which only reports 'not evaluated' when the querier is nil.",
+    "finding": {"assertion": "promql: orders_processed_total <= orders_received_total", "observed": "no results (condition did not hold)"},
+    "cause_fault": "order_duplicate",
+    "cause_target": "orders",
+    "confidence": "correlated",
+    "candidates": null,
+    "candidates_reason": "Same structural gap as poison_pill/duplicate always hits: buildCandidates(fault, deps, lang) looks up depForTarget(deps, f.Target) by exact Dep.Address match, which is always host:port-shaped for every other fault verb -- but queuefault.Translate uses f.Target as a bare topic name (Topic: f.Target), which can never match a Dep.Address. This means D-9 candidates are structurally impossible for poison_pill/duplicate findings specifically, regardless of whether the underlying broker (Redpanda here, a recognized image type) is itself detected -- a narrower, more specific version of the case 1/2/5 gap. Reported, not patched (out of scope).",
+    "repeat_runs": "3/3 clean detections across repeat runs, confirming this isn't a fluke.",
+
+    "reachability_finding": {
+      "title": "internal/applier.BrokerApplier and internal/run.HTTPPromQuerier have no equivalent to K6Runner's DC-2 container-mode fix",
+      "severity": "structural, affects -broker-url and -prom-url as documented CLI flags against any DC-2-enforced target",
+      "detail": "Round 2 of this eval found and got fixed: K6Runner (a host process) could never reach a compose service once ComposeTopologyApplier moved it exclusively onto the internal:true SUT network -- fixed by running k6 as a container joined to the SUT's own network namespace. BrokerApplier and HTTPPromQuerier are BOTH plain net/http calls made directly from the orchestrator's own host process (never containerized), with no equivalent join-the-namespace mechanism. Confirmed directly this round: -broker-url http://localhost:<port> against a compose-managed Redpanda got connection-refused/EOF once topology enforcement moved it onto tortureu_sut, exactly mirroring round 1's original finding. Since round 1's fix was applied only to K6Runner, this gap was never noticed until a case (this one) actually needed a live broker or a live Prometheus reachable from the orchestrator itself.",
+      "workaround_used_for_this_measurement": "evals/corpus/case4-nonidempotent-consumer/run.sh runs Redpanda and Prometheus as standalone containers this script manages directly (never declared in docker-compose.yml, so ComposeTopologyApplier's overlay never touches them), each on a dedicated user-defined bridge network with a host-published port, then additionally connected to tortureu_sut once that network exists (with a DNS alias for Redpanda, so checkout-api resolves 'redpanda' exactly as it would a compose-managed service). This is test-harness engineering to make a measurement possible, not evidence the underlying gap doesn't exist: a user running `tortureu run -broker-url ... -prom-url ...` against their own plain docker-compose.yml, with no such hand-built dual-homing, would hit the same connection failure this workaround exists to route around."
     },
-    "case2_retry_storm": {
-      "defect": "Retry with no cap or backoff",
-      "status": "fail",
-      "detected": true,
-      "finding": {"assertion": "http_req_failed: rate<0.5"},
-      "cause_fault": "dep_down",
-      "candidates": null,
-      "candidates_reason": "same compound gap as case 1 (custom dep image + net/http undetectable via manifest scanning)."
-    },
-    "case3_pool_exhaustion": {
-      "defect": "Connection pool of 5 (pgxpool.MaxConns) behind load needing far more concurrency",
-      "fault": "none -- load-only defect",
-      "status": "fail",
-      "detected": true,
-      "finding": {"assertion": "http_req_duration: p(95)<500 and http_req_failed: rate<0.05, both broken"},
-      "cause_fault": null,
-      "candidates": [
-        {"library": "github.com/jackc/pgx/v5", "knobs": ["MaxConns", "MinConns", "ConnConfig.ConnectTimeout"]}
-      ],
-      "candidates_reason": "Confirmed working with the fixture's NATURAL layout this round: go.mod lives under api/ (its real build context), not the project root -- detectServiceManifests (addcee5) finds it there directly, no workaround needed. MaxConns is exactly BENCHMARKS.md's own stated right answer for this case."
-    },
-    "case5_no_circuit_breaker": {
-      "defect": "No circuit breaker on the cascade path",
-      "status": "fail",
-      "detected": true,
-      "finding": {"assertion": "http_req_duration: p(95)<1000"},
-      "cause_fault": "dep_slow",
-      "candidates": null,
-      "candidates_reason": "same compound gap as case 1.",
-      "cascade_confirmed_live": "(from round 5) curled /health, which calls no dependency, from inside the SUT's network namespace during the fault window: 5.37s response -- direct proof of cascade, not just case 1 repeated."
-    },
-    "case6_unbounded_queue": {
-      "defect": "Unbounded in-memory queue drained far slower than it fills",
-      "fault": "none -- load-only defect",
-      "status": "fail",
-      "detected": true,
-      "finding": {"assertion": "http_req_failed: rate<0.05 broken"},
-      "cause_fault": null,
-      "candidates": null,
-      "candidates_reason": "Correctly still none, re-confirmed this round: an in-process unbounded queue is backed by no third-party client library, so detect.System has nothing to find and nothing honest to name.",
-      "fixture_note": "Tightened this round for reliability: the original 24m mem_limit was flaky (a 1MB-per-item queue oscillated at ~98% memory under GC pressure rather than reliably crossing the OOM threshold -- Go's GC, reclaiming already-drained slices as pressure rose, sometimes kept the process just under the cgroup limit). Raised the chunk size to 4MB and tightened mem_limit to 12m; 3/3 repeat runs now reliably OOM-kill (confirmed via docker inspect .State.OOMKilled=true each time). This is a reliability fix to the fixture's calibration, not a change to the planted defect (still an uncapped queue with no backpressure)."
-    },
-    "case7_cache_stampede": {
-      "defect": "Cache-aside read with a short TTL and no stampede protection",
-      "fault": "none -- load-only defect",
-      "status": "fail",
-      "detected": true,
-      "finding": {"assertion": "http_req_duration: p(95)<50 broken, observed ~100ms"},
-      "cause_fault": null,
-      "candidates": [
-        {"library": "github.com/redis/go-redis/v9", "knobs": ["PoolSize", "DialTimeout", "ReadTimeout", "WriteTimeout"]}
-      ],
-      "candidates_reason": "Confirmed working with the fixture's natural layout this round (go.mod under api/, no workaround). Honestly limited: none of these knobs actually fixes a stampede (that needs application-level locking/singleflight, which no client-library knob table could ever name) -- Candidate.Source carries the '(no active fault -- detected client, not a diagnosis)' caveat precisely so this isn't overread."
-    },
-    "case4_nonidempotent_consumer": {
-      "status": "not built",
-      "reason": "Needs a message broker, a Kafka REST Proxy-compatible endpoint, consumer-group semantics, and -broker-url wiring -- materially more infrastructure than the other five cases. Out of every round's budget so far. Unmeasured, not faked."
-    },
-    "case8_control": {
-      "status": "pass",
-      "findings": 0,
-      "note": "Re-run once more this round via `make eval`. 19 consecutive clean runs across five different code-path states now, and this run was driven by the actual make eval target for the first time."
-    }
+
+    "secondary_findings_from_building_this_fixture": [
+      "Pandaproxy's own auto-create-topic-on-first-produce path hung for 5+ seconds per attempt rather than failing fast or succeeding quickly, in this Redpanda version/config -- pre-creating the topic explicitly (via rpk) sidesteps it entirely. Not a TortureU defect (Redpanda's own behavior), but worth recording since it shaped the fixture.",
+      "config.Parse's fault-target validation (`knownTargets`) is purely syntactic -- built only from the SUT's own service name and torture.yaml's own declared egress.hosts keys, with no access to detect.System -- so a queue-fault's topic-shaped target has to be declared in egress.hosts even though internal/run's own queuefault routing never actually consults that classification for poison_pill/duplicate (unlike error_rate, which IS checked against class: mock). The declaration is required to pass the parser and then entirely inert. Not a bug -- config.Parse cannot see detect.System's output by design -- but a real rough edge for anyone writing a queue-fault torture.yaml."
+    ]
+  },
+
+  "per_case_recap": {
+    "case1_no_timeout": {"defect": "HTTP client with no timeout", "detected": true, "cause_fault": "dep_slow", "candidates": "none -- custom dep image outside detect's vocabulary, and net/http undetectable via manifest scanning (no goClientPatterns entry, stdlib never appears in go.mod)"},
+    "case2_retry_storm": {"defect": "Retry with no cap or backoff", "detected": true, "cause_fault": "dep_down", "candidates": "none -- same compound gap as case 1"},
+    "case3_pool_exhaustion": {"defect": "Connection pool of 5 (pgx), real postgres, load-only", "detected": true, "cause_fault": null, "candidates": "pgx: MaxConns, MinConns, ConnConfig.ConnectTimeout -- MaxConns is BENCHMARKS.md's own stated right answer"},
+    "case4_nonidempotent_consumer": {"defect": "Non-idempotent consumer, real Redpanda, duplicate fault", "detected": true, "cause_fault": "order_duplicate", "candidates": "none -- queue-fault targets are topic names, which can never match a Dep.Address"},
+    "case5_no_circuit_breaker": {"defect": "No circuit breaker / cascade", "detected": true, "cause_fault": "dep_slow", "candidates": "none -- same compound gap as case 1", "cascade_confirmed_live": "curled /health (no dep call) from inside the SUT's netns during the fault window: 5.37s response"},
+    "case6_unbounded_queue": {"defect": "Unbounded in-memory queue, OOM under sustained load", "detected": true, "cause_fault": null, "candidates": "correctly none -- in-process queue, no client library exists"},
+    "case7_cache_stampede": {"defect": "Cache stampede on TTL expiry, real redis, load-only", "detected": true, "cause_fault": null, "candidates": "go-redis: PoolSize/DialTimeout/ReadTimeout/WriteTimeout, honestly caveated (none actually fixes a stampede)"},
+    "case8_control": {"defect": "none (control)", "detected": false, "findings": 0, "note": "0 findings across 20 consecutive runs spanning six code-path states now, the last two via make eval itself"}
   },
 
   "metrics": {
-    "detection": "6/6 measurable planted defects detected (cases 1,2,3,5,6,7). Case 4 unmeasured (not built). Case 8 (control) correctly found nothing.",
-    "attribution": "3/3 fault-driven cases (1,2,5) named the correct causing fault exactly. Cases 3,6,7 are load-only by design -- no fault exists to attribute, not counted as a hit or a miss.",
-    "candidates": "2/6 findings-bearing cases carry a candidate list: case 3 (pgx -- MaxConns, the exactly-right knob) and case 7 (go-redis, present and honestly caveated). Cases 1, 2, 5 still carry none, for a compound, now precisely diagnosed reason: their target is a custom application image outside detect's closed vocabulary (so it never becomes a detect.Dep), AND independently, net/http can never be discovered as a client via manifest scanning at all (it is stdlib, never appears in a go.mod require line, and internal/detect's own goClientPatterns recognition table -- distinct from internal/run's knob table -- has no net/http entry either). Case 6 correctly carries none (in-process queue, no client library exists to find).",
-    "false_positive_on_control": "0, across 19 consecutive case-8 runs spanning five different code-path states, the last one via `make eval` itself. Never non-zero once actually measured."
+    "detection": "7/7 planted defects detected (all cases 1-7 now built and measured). Case 8 (control) correctly found nothing. The corpus is complete.",
+    "attribution": "4/4 fault-driven cases (1, 2, 4, 5) named the correct causing fault exactly (Cause.fault and Cause.target both matched the planted fault). Cases 3, 6, 7 are load-only by design -- no fault exists to attribute, not counted as a hit or a miss.",
+    "candidates": "2/7 findings-bearing cases carry a candidate list: case 3 (pgx -- MaxConns, the exactly-right knob) and case 7 (go-redis, present and honestly caveated). Cases 1, 2, 4, 5 carry none -- three distinct, precisely diagnosed structural reasons, all reported rather than routed around: (a) a custom application image outside detect's closed vocabulary never becomes a detect.Dep (cases 1, 2, 5); (b) net/http can never be discovered as a client via manifest scanning regardless of vocabulary, since it's stdlib and never appears in a go.mod require line, and internal/detect's own recognition table has no net/http entry either (cases 1, 2, 5); (c) a queue-fault's topic-shaped target can never match a Dep.Address, which is always host:port-shaped (case 4). Case 6 correctly carries none (in-process queue, no client library exists to find).",
+    "false_positive_on_control": "0, across 20 consecutive case-8 runs spanning six different code-path states. Never non-zero once actually measured."
   },
 
   "make_eval": {
-    "status": "wired and verified end to end this round",
-    "what_it_does": "evals/run_case.sh (rewritten this round): builds the real tortureu binary, builds each case's pre-built dependency image (case 1/2/5's `dep` service) if not already tagged, runs every evals/corpus/case*/torture.yaml through the real binary, tears down each case's compose stack (base + whatever topology overlay ComposeTopologyApplier wrote) unconditionally -- plus a project-name-prefixed container sweep and a network sweep, added this round after `make eval`'s own first real run leaked a profile-disabled container and its published port, breaking the next case -- and exits non-zero if case 8 produced any findings.",
-    "verified": "Ran `make eval` three times this round while stabilizing cleanup: run 1 (before the sweep fix) left case 1's disabled-profile 'dep' container running, which then broke case 2 on port 9090 (status:aborted, reset:failed) -- a real, reportable `docker compose down` gap (profile-disabled services aren't reliably removed by `down` either, mirroring the earlier `up`-side profile/depends_on bug). Runs 2 and 3, after the sweep fix, completed clean: all 7 built cases ran, case 8 passed with 0 findings, exit 0, and `docker ps -a`/`docker network ls` showed nothing left over. Also verified the gate itself fires: fed the exit-code logic a synthetic case8 result with 2 findings and confirmed it prints FAIL and exits 1."
+    "status": "wired, complete, and verified end to end with all 7 built cases plus the control",
+    "what_it_does": "evals/run_case.sh: builds the real tortureu binary, builds each case's pre-built dependency image, runs every evals/corpus/case*/torture.yaml through the real binary (delegating to a case's own run.sh when present -- only case 4 needs one, for its standalone Redpanda/Prometheus dance), tears down every case's compose stack and any standalone containers unconditionally, and exits non-zero if case 8 produced any findings.",
+    "verified": "Full `make eval` run this round: all 7 built cases ran and detected their planted defect, case 8 passed with 0 findings, exit 0, and docker ps -a / docker network ls showed nothing left over afterward."
   }
 }
