@@ -52,7 +52,7 @@ domains:
     tools:
       - { id: k6-grpc,   tier: drive,    when: "spec:proto",  how: "tortureu run",            note: "gRPC via k6 module" }
       - { id: k6-ws,     tier: drive,    when: "dep:websocket", how: "tortureu run",          note: "long-lived conns = fd exhaustion class" }
-      - { id: pgbench,   tier: drive,    when: "dep:postgresql", how: "tortureu run --db-load", note: "saturate the DB independent of the app" }
+      - { id: pgbench,   tier: drive,    when: "dep:postgresql", how: "tortureu run --db-load", planned: "run --db-load", note: "saturate the DB independent of the app" }
       - { id: ghz,       tier: delegate, when: "spec:proto",  how: "tortureu emit ghz", planned: emit }
       - { id: sysbench,  tier: delegate, when: "dep:mysql",   how: "tortureu emit sysbench", planned: emit }
       - { id: memtier,   tier: delegate, when: "dep:redis",   how: "tortureu emit memtier",   note: "richer than redis-benchmark", planned: emit }
@@ -146,7 +146,7 @@ domains:
     name: API fuzzing / property testing
     coverage: drive
     tools:
-      - { id: schemathesis, tier: drive, when: "spec:openapi", how: "tortureu run --fuzz",    note: "cheapest 500-finder that exists" }
+      - { id: schemathesis, tier: drive, when: "spec:openapi", how: "tortureu run --fuzz",    planned: "run --fuzz", note: "cheapest 500-finder that exists" }
       - { id: restler,   tier: delegate, when: "spec:openapi", how: "tortureu emit restler",  note: "stateful: infers request SEQUENCES", planned: emit }
       - { id: dredd,     tier: know,     when: "spec:openapi", how: "dredd api.yaml <url>",   note: "overlaps schemathesis" }
       - { id: hypothesis, tier: know,    when: "lang:python", how: "in-process",              note: "property testing belongs in the app's suite" }
@@ -256,8 +256,8 @@ domains:
     name: Orchestration & CI
     coverage: drive
     tools:
-      - { id: github-actions, tier: drive, when: always,      how: "tortureu init --ci",      note: "exit codes 0-4 are the contract (VERDICT.md §2)" }
-      - { id: gitlab-ci, tier: delegate, when: always,        how: "tortureu init --ci gitlab" }
+      - { id: github-actions, tier: drive, when: always,      how: "tortureu init --ci",      planned: "init --ci", note: "exit codes 0-4 are the contract (VERDICT.md §2)" }
+      - { id: gitlab-ci, tier: delegate, when: always,        how: "tortureu init --ci gitlab", planned: "init --ci" }
       - { id: testkube,  tier: know,     when: "platform:k8s", how: "testkube run",           note: "closest structural competitor; cluster-only. our wedge is local-first" }
       - { id: argo-workflows, tier: know, when: "platform:k8s", how: "argo submit" }
 

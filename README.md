@@ -41,7 +41,7 @@ FAIL  checkout-spike  280s
   ✗ http_req_duration: p(95)<500 -> 4218ms
     caused by  pg_slow (postgres:5432)  [confidence: correlated]
 
-    look at:  jackc/pgx MaxConns, ConnConfig.ConnectTimeout
+    look at:  github.com/jackc/pgx/v5 MaxConns, MinConns, ConnConfig.ConnectTimeout
 
   ✓ http_req_failed: rate<0.01     0.003
 

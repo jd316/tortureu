@@ -195,12 +195,23 @@ ok(not orphans, "every internal package has a caller" + (f" — UNWIRED: {orphan
 # and a header naming `tortureu suggest`, which is not a verb at all. Telling someone to run a
 # command that cannot run is the documentation form of "built but unreachable".
 IMPLEMENTED = {'init', 'run', 'doctor'}
+# Flags a how: may name. Verb-level checking is not enough: `tortureu run --db-load` passes a
+# verb check and still tells a user to pass a flag that does not exist.
+REAL_FLAGS = set()
+for _f in glob.glob('cmd/tortureu/*.go'):
+    REAL_FLAGS |= set(re.findall(r'flag\w*\.\w+Var?\(\s*&?\w*\s*,\s*"([\w-]+)"', open(_f).read()))
+    REAL_FLAGS |= set(re.findall(r'\.(?:String|Bool|Int|Float64)\(\s*"([\w-]+)"', open(_f).read()))
 mis = []
 for d in reg['domains']:
     for t in d['tools']:
         m = re.match(r'tortureu (\w+)', str(t['how']))
         if m and m.group(1) not in IMPLEMENTED and 'planned' not in t:
             mis.append(f"{d['id']}/{t['id']} -> {t['how']}")
+            continue
+        if m and 'planned' not in t:
+            for flag in re.findall(r'--([\w-]+)', str(t['how'])):
+                if flag not in REAL_FLAGS:
+                    mis.append(f"{d['id']}/{t['id']} -> --{flag} is not a real flag")
 ok(not mis, "every registry `how:` names a working verb or is marked planned"
    + (f" — unmarked: {mis[:3]}" if mis else ""))
 
