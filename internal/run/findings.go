@@ -11,13 +11,15 @@ import (
 	"github.com/jdb316/tortureu/internal/verdict"
 )
 
-// confidenceFor implements as much of the R-VER-3 table as this package can
-// honestly claim: `caused` requires traces spanning the fault window, and no
-// trace-ingestion pipeline exists anywhere in the built packages yet (no
-// package here parses spans or joins them to a fault window), so this
-// package never emits `caused` — doing so would be inventing a capability
-// SPEC.md requires evidence for for and reporting it as fact (R-PROC-2/4).
-// That gap is escalated in the Task 7 report rather than papered over here.
+// confidenceFor implements the fault-count half of the R-VER-3 table: what
+// can be said from TortureU's own side of the wire, with no cooperation
+// from the target. `caused` is deliberately not reachable from here — it
+// requires traces spanning the fault window, which is evidence only the
+// target's telemetry can supply — so it is applied afterwards, by
+// applyTraceChain (trace.go), and only when a chain was actually built from
+// real ingested spans (R-VER-13, R-VER-14). A finding whose traces could
+// not be read keeps whatever this function returned, which is exactly what
+// every finding carried before ingestion existed.
 //
 // `correlated` requires exactly one fault active in the breach window; this
 // package does not have per-metric breach timestamps from k6's aggregate
@@ -549,6 +551,10 @@ func evaluateThresholds(metrics map[string]any, faults []config.Fault, sys detec
 				},
 			}
 			attribute(&finding, faults, sys.Deps, auditFindings, sys.Lang)
+			// R-VER-13/R-VER-14: a real causal chain, and the `caused`
+			// confidence it earns, when (and only when) spans covering the
+			// fault target can actually be read.
+			applyTraceChain(&finding, sys)
 			findings = append(findings, finding)
 		}
 	}
@@ -594,6 +600,7 @@ func evaluatePromqlAsserts(asserts []config.AssertEntry, querier PromQuerier, fa
 			Broke:      verdict.Broke{Assertion: assertion, Observed: observed},
 		}
 		attribute(&finding, faults, sys.Deps, auditFindings, sys.Lang)
+		applyTraceChain(&finding, sys)
 		findings = append(findings, finding)
 	}
 	return passed, findings
