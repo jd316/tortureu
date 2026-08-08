@@ -88,6 +88,48 @@ func TestBuildInitOutputIsAcceptedByConfigParse(t *testing.T) {
 	if len(cfg.Assert) == 0 {
 		t.Error("starter assert: is empty — R-CFG-19 forbids this, and it is exactly the failure this requirement exists to prevent")
 	}
+	// A parse that only checks "err == nil" accepts an empty string for a
+	// required field — that is exactly how an empty target.service slipped
+	// through before. Assert the actual value, not just that Parse liked it.
+	if cfg.Target.Service != "checkout-api" {
+		t.Errorf("target.service = %q, want %q", cfg.Target.Service, "checkout-api")
+	}
+}
+
+// spec: R-CLI-4
+//
+// When detection finds no build: service, buildInit must not write an
+// empty (but present) service: field — that parses as non-empty YAML
+// syntax while still failing config.Parse's emptiness check, and worse,
+// looks like a complete file. It must instead leave the field out (a
+// comment, like the unclassified-host convention above) and surface the
+// gap, both in the file and via Gaps.
+func TestBuildInitWithNoDetectedSUTDoesNotWriteEmptyServiceField(t *testing.T) {
+	sys := &detect.System{} // SUT genuinely empty: no build: service found
+	out := buildInit(sys, "./docker-compose.yml")
+	content := string(out.YAML)
+
+	if strings.Contains(content, "service: \n") || strings.Contains(content, "service:\n") {
+		t.Errorf("wrote an empty service: field instead of omitting it:\n%s", content)
+	}
+
+	_, err := config.Parse(out.YAML)
+	if err == nil {
+		t.Fatal("config.Parse accepted a file with no target.service at all; want it to reject with a clear error, not silently pass")
+	}
+	if !strings.Contains(err.Error(), "target.service") {
+		t.Errorf("config.Parse error = %q, want it to name target.service", err.Error())
+	}
+
+	found := false
+	for _, g := range out.Gaps {
+		if strings.Contains(g, "no system under test detected") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("gaps = %v, want the missing SUT surfaced", out.Gaps)
+	}
 }
 
 // spec: R-CLI-4

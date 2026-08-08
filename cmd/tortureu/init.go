@@ -58,7 +58,28 @@ func buildInit(sys *detect.System, composePath string) initOutput {
 	b.WriteString("# (R-CLI-4): it runs, it asserts something conservative, and it is meant to be\n")
 	b.WriteString("# edited into a scenario that reflects what this service actually does.\n\n")
 	b.WriteString("version: 0\n\n")
-	fmt.Fprintf(&b, "target:\n  compose: %s\n  service: %s\n\n", composePath, sys.SUT)
+
+	var gaps []string
+	b.WriteString("target:\n")
+	fmt.Fprintf(&b, "  compose: %s\n", composePath)
+	if sys.SUT != "" {
+		fmt.Fprintf(&b, "  service: %s\n\n", sys.SUT)
+	} else {
+		// R-CLI-4: never write an empty required field. `service: ` with
+		// nothing after it is syntactically a present, empty YAML value —
+		// config.Parse's own emptiness check would then reject it with a
+		// plain "target.service is required" (fine, and no worse than
+		// today), but a blank field that still visually looks like a
+		// filled-in file is exactly the "looks complete but isn't" failure
+		// this requirement exists to prevent. Detection found no compose
+		// service with build: (R-DET-2/8): there is genuinely nothing to
+		// name, so the key is left out entirely — commented, not blank —
+		// and the gap is surfaced the same way an unclassified host is
+		// (in the file, and on stdout via the Gaps list), not guessed.
+		b.WriteString("  # no system under test detected — no compose service declares build:.\n")
+		b.WriteString("  # name it yourself: service: <compose-service-name> (see R-DET-8)\n\n")
+		gaps = append(gaps, "no system under test detected: no compose service declares build: — target.service must be set by hand")
+	}
 
 	var hosts []string
 	for h := range sys.EgressClass {
@@ -66,7 +87,6 @@ func buildInit(sys *detect.System, composePath string) initOutput {
 	}
 	sort.Strings(hosts)
 
-	var gaps []string
 	b.WriteString("egress:\n  default: deny\n  hosts:\n")
 	for _, h := range hosts {
 		if sys.EgressClass[h] == "internal" {

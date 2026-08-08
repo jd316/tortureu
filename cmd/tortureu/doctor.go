@@ -38,12 +38,16 @@ func loadRegistry(path string) (*doctor.Registry, error) {
 // registry's `when:`) (R-SCOPE-4, R-CLI-3): doctor is what makes the
 // delegate/know tiers reachable (R-SCOPE-3 — one front door to all three
 // depths), so it must never let a named-not-executed tool read as
-// something tortureu runs today. A tool whose `how:` names a verb not yet
-// implemented in v0 (registry.yaml's `planned:` marker, internal/doctor's
-// Tool.Planned) is labelled "· planned" and its `how:` is annotated inline,
-// the same rendering internal/doctor.CoverageEntry.String() already uses —
-// mirrored here rather than called, since this report also needs the
-// trigger condition CoverageEntry.String() does not print.
+// something tortureu runs today.
+//
+// The tier/planned/how rendering itself is not reimplemented here: it
+// calls doctor.CoverageEntry.String(), the one place that rule is defined
+// (R-VER-9's "one document, one renderer" reasoning applied to this
+// report). A prior version duplicated that formatting, and a break
+// deliberately introduced into internal/doctor's formatter to prove the
+// drift passed CI here while failing there — two paths for one rule. Only
+// the trigger condition, which String() does not print, is appended
+// afterward.
 func buildDoctorReport(findings []doctor.Finding, reg *doctor.Registry, sys *detect.System) string {
 	var b strings.Builder
 
@@ -101,15 +105,7 @@ func buildDoctorReport(findings []doctor.Finding, reg *doctor.Registry, sys *det
 		b.WriteString("  (none)\n")
 	}
 	for _, e := range suggestions {
-		tier := e.Tool.Tier
-		how := e.Tool.How
-		if e.Tool.Planned != "" {
-			// R-SCOPE-4: a planned entry must never read as runnable today
-			// — the verb its how: names does not work yet in this binary.
-			tier += " · planned"
-			how = fmt.Sprintf("%s (verb %q not implemented in v0)", how, e.Tool.Planned)
-		}
-		fmt.Fprintf(&b, "  [%s] %s/%s: %s   (trigger: %s)\n", tier, e.Domain, e.Tool.ID, how, e.Tool.When)
+		fmt.Fprintf(&b, "  %s   (trigger: %s)\n", e.String(), e.Tool.When)
 	}
 
 	return b.String()
