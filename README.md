@@ -2,8 +2,8 @@
 
 **Load testing tells you it got slow. TortureU tells you which dependency did it.**
 
-One CLI that drives load and fault injection **on the same clock**, against your local
-`docker-compose` stack, and returns a single verdict naming what broke and why.
+One CLI that drives load and fault injection on the same clock **against a local
+`docker-compose` stack — no Kubernetes** — and returns a single verdict naming what broke and why.
 
 > **Status: alpha.** The core works and is proven against real Docker: load and faults on one
 > clock, topological egress isolation, fault interception on internal dependencies, and a verdict
@@ -21,7 +21,12 @@ slower, a 20-connection pool drained, retries with no backoff tripled the load, 
 seconds. No load generator shows you that, because none of them can make Postgres slow *while*
 generating load.
 
-Chaos tools can inject the fault — but they need Kubernetes. Nothing lets you say this on a laptop:
+Chaos tools can inject the fault — but they need Kubernetes. Grafana's own `xk6-disruptor` puts
+fault injection inside a k6 test, on k6's clock, which is the right idea — and it targets
+Kubernetes Pods and Services. Chaos Mesh, Litmus and Testkube need a cluster too. Toxiproxy runs
+anywhere but has no scheduler, so you drive it by hand.
+
+Nothing lets you say this against a compose file on a laptop:
 
 ```yaml
 load:
