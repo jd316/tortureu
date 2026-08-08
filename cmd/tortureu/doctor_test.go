@@ -17,9 +17,13 @@ func fixtureRegistry() *doctor.Registry {
 		Domains: []doctor.Domain{
 			{ID: "load", Name: "Load generation", Tools: []doctor.Tool{
 				{ID: "k6", Tier: "drive", When: "always", How: "tortureu run <scenario>"},
+				{ID: "locust", Tier: "delegate", When: "lang:python", How: "tortureu emit locust", Planned: "emit"},
 			}},
 			{ID: "chaos-k8s", Name: "Kubernetes chaos", Tools: []doctor.Tool{
 				{ID: "chaosmesh", Tier: "know", When: "platform:k8s", How: "kubectl apply -f chaosengine.yaml"},
+			}},
+			{ID: "contracts", Name: "Contract testing", Tools: []doctor.Tool{
+				{ID: "oasdiff", Tier: "delegate", When: "spec:openapi", How: "oasdiff breaking old.yaml new.yaml"},
 			}},
 		},
 	}
@@ -43,6 +47,59 @@ func TestDoctorLabelsKnowTierSuggestionsWithTierAndTrigger(t *testing.T) {
 	}
 	if !strings.Contains(report, "trigger: platform:k8s") {
 		t.Errorf("suggestion missing trigger condition (R-CLI-3):\n%s", report)
+	}
+}
+
+// spec: R-SCOPE-3
+//
+// The gap this fixes: doctor's suggestions previously only ever printed
+// know-tier entries, so a `tortureu doctor` user never learned that a
+// delegate-tier tool (config generated and handed off, e.g. Locust) applied
+// to their stack — "all in one place" held for two of the three declared
+// depths and silently dropped the third. A delegate entry that applies must
+// now appear in the report.
+func TestDoctorIncludesApplicableDelegateTierSuggestion(t *testing.T) {
+	sys := &detect.System{Lang: "python", Coverage: detect.Coverage{K8s: false}}
+	report := buildDoctorReport(nil, fixtureRegistry(), sys)
+	if !strings.Contains(report, "load/locust") {
+		t.Errorf("delegate-tier suggestion missing from report:\n%s", report)
+	}
+	if !strings.Contains(report, "trigger: lang:python") {
+		t.Errorf("delegate suggestion missing trigger condition:\n%s", report)
+	}
+}
+
+// spec: R-SCOPE-4
+//
+// A planned entry (its how: names a verb — here "emit" — not implemented
+// in v0) must be labelled distinctly and must not read as something a user
+// can run today: this is the specific failure mode the fix must avoid
+// while making delegate tools visible at all — "invisible" must not become
+// "mis-instructing".
+func TestDoctorLabelsPlannedDelegateSuggestionAsNotYetRunnable(t *testing.T) {
+	sys := &detect.System{Lang: "python"}
+	report := buildDoctorReport(nil, fixtureRegistry(), sys)
+	if !strings.Contains(report, "[delegate · planned] load/locust") {
+		t.Errorf("planned delegate suggestion not labelled as planned:\n%s", report)
+	}
+	if !strings.Contains(report, `verb "emit" not implemented in v0`) {
+		t.Errorf("planned suggestion does not disclose the unimplemented verb:\n%s", report)
+	}
+}
+
+// spec: R-SCOPE-3, R-SCOPE-4
+//
+// A delegate entry with no planned: marker (its how: verb already works)
+// must render as plain [delegate], not [delegate · planned] — the two must
+// stay distinguishable.
+func TestDoctorLabelsRunnableDelegateSuggestionWithoutPlannedMarker(t *testing.T) {
+	sys := &detect.System{Coverage: detect.Coverage{OpenAPI: true}}
+	report := buildDoctorReport(nil, fixtureRegistry(), sys)
+	if !strings.Contains(report, "[delegate] contracts/oasdiff") {
+		t.Errorf("runnable delegate suggestion missing or mislabelled:\n%s", report)
+	}
+	if strings.Contains(report, "oasdiff") && strings.Contains(report, "contracts/oasdiff: oasdiff breaking old.yaml new.yaml (verb") {
+		t.Errorf("runnable delegate suggestion incorrectly annotated as planned:\n%s", report)
 	}
 }
 

@@ -33,11 +33,17 @@ func loadRegistry(path string) (*doctor.Registry, error) {
 // system at all (SPEC.md does not further subdivide "uncovered", so this is
 // the literal reading: nothing in the registry currently applies).
 //
-// Every know-tier line that applies is a suggestion, and every suggestion
-// carries both its tier and its trigger condition (the registry's `when:`)
-// (R-SCOPE-4, R-CLI-3): doctor is what makes the delegate/know tiers
-// reachable, so it must never let a named-not-executed tool read as
-// something tortureu runs.
+// Every delegate- or know-tier line that applies is a suggestion, and every
+// suggestion carries both its tier and its trigger condition (the
+// registry's `when:`) (R-SCOPE-4, R-CLI-3): doctor is what makes the
+// delegate/know tiers reachable (R-SCOPE-3 — one front door to all three
+// depths), so it must never let a named-not-executed tool read as
+// something tortureu runs today. A tool whose `how:` names a verb not yet
+// implemented in v0 (registry.yaml's `planned:` marker, internal/doctor's
+// Tool.Planned) is labelled "· planned" and its `how:` is annotated inline,
+// the same rendering internal/doctor.CoverageEntry.String() already uses —
+// mirrored here rather than called, since this report also needs the
+// trigger condition CoverageEntry.String() does not print.
 func buildDoctorReport(findings []doctor.Finding, reg *doctor.Registry, sys *detect.System) string {
 	var b strings.Builder
 
@@ -61,7 +67,7 @@ func buildDoctorReport(findings []doctor.Finding, reg *doctor.Registry, sys *det
 		domains[e.Domain] = true
 		if e.Applies {
 			covered[e.Domain] = true
-			if e.Tool.Tier == "know" {
+			if e.Tool.Tier == "delegate" || e.Tool.Tier == "know" {
 				suggestions = append(suggestions, e)
 			}
 		}
@@ -90,12 +96,20 @@ func buildDoctorReport(findings []doctor.Finding, reg *doctor.Registry, sys *det
 		return suggestions[i].Tool.ID < suggestions[j].Tool.ID
 	})
 
-	b.WriteString("SUGGESTIONS (know-tier — named, not executed; R-SCOPE-4)\n")
+	b.WriteString("SUGGESTIONS (delegate: config generated and handed off · know: named only — neither executed directly by tortureu; R-SCOPE-4)\n")
 	if len(suggestions) == 0 {
 		b.WriteString("  (none)\n")
 	}
 	for _, e := range suggestions {
-		fmt.Fprintf(&b, "  [%s] %s/%s: %s   (trigger: %s)\n", e.Tool.Tier, e.Domain, e.Tool.ID, e.Tool.How, e.Tool.When)
+		tier := e.Tool.Tier
+		how := e.Tool.How
+		if e.Tool.Planned != "" {
+			// R-SCOPE-4: a planned entry must never read as runnable today
+			// — the verb its how: names does not work yet in this binary.
+			tier += " · planned"
+			how = fmt.Sprintf("%s (verb %q not implemented in v0)", how, e.Tool.Planned)
+		}
+		fmt.Fprintf(&b, "  [%s] %s/%s: %s   (trigger: %s)\n", tier, e.Domain, e.Tool.ID, how, e.Tool.When)
 	}
 
 	return b.String()
