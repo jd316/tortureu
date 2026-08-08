@@ -30,9 +30,21 @@ ok(len(ids) == len(set(ids)), f"{len(ids)} tool ids, all unique")
 ok(all(all(k in t for k in ('tier', 'when', 'how')) for d in reg['domains'] for t in d['tools']),
    "every tool has tier/when/how")
 
+# RESEARCH.md states each tier's size twice — a table row and a bullet — and both are hand-written.
+# This check was once `f"| {v} |" in res`, which is not bound to its tier: any table row anywhere
+# carrying the number passed it, and the bullets drifted to 26/33/78 against an actual 30/34/90
+# without the gate noticing. Both representations are now matched against their own tier.
 tiers = {t: sum(1 for d in reg['domains'] for x in d['tools'] if x['tier'] == t)
          for t in ('drive', 'delegate', 'know')}
-ok(all(f"| {v} |" in res for v in tiers.values()), f"RESEARCH tier counts match registry {tiers}")
+stale = []
+for t, v in tiers.items():
+    row = next((l for l in res.splitlines() if l.startswith(f"| **{t}** |")), "")
+    if f"| {v} |" not in row:
+        stale.append(f"table row for {t} does not say {v}")
+    if f"- **{v} `{t}`**" not in res:
+        stale.append(f"bullet for {t} does not say {v}")
+ok(not stale, "RESEARCH tier counts match registry, in both the table and the bullets"
+   + (f" — stale: {stale}" if stale else f" {tiers}"))
 
 # D-3: every predicate must be derivable from compose + lockfile, and unambiguously parsed
 preds = {p for d in reg['domains'] for t in d['tools'] for p in str(t['when']).split('|')}
@@ -239,6 +251,14 @@ REAL_FLAGS = set()
 for _f in glob.glob('cmd/tortureu/*.go'):
     REAL_FLAGS |= set(re.findall(r'flag\w*\.\w+Var?\(\s*&?\w*\s*,\s*"([\w-]+)"', open(_f).read()))
     REAL_FLAGS |= set(re.findall(r'\.(?:String|Bool|Int|Float64)\(\s*"([\w-]+)"', open(_f).read()))
+# `tortureu emit <tool>` needs its argument checked too, not just the verb: clearing an
+# entry's `planned:` marker otherwise "passes" for any emitter that was never registered,
+# which is the exact claim this check exists to prevent. Registered emitters are read from
+# the Register() calls, so this cannot drift from the code.
+REGISTERED_EMITTERS = set()
+for _f in glob.glob('internal/emit/*.go'):
+    REGISTERED_EMITTERS |= set(re.findall(r'\bRegister\(\s*"([\w-]+)"', open(_f).read()))
+
 mis = []
 for d in reg['domains']:
     for t in d['tools']:
@@ -246,12 +266,31 @@ for d in reg['domains']:
         if m and m.group(1) not in IMPLEMENTED and 'planned' not in t:
             mis.append(f"{d['id']}/{t['id']} -> {t['how']}")
             continue
+        em = re.match(r'tortureu emit ([\w-]+)', str(t['how']))
+        if em and 'planned' not in t and em.group(1) not in REGISTERED_EMITTERS:
+            mis.append(f"{d['id']}/{t['id']} -> emit {em.group(1)} is not a registered emitter")
         if m and 'planned' not in t:
             for flag in re.findall(r'--([\w-]+)', str(t['how'])):
                 if flag not in REAL_FLAGS:
                     mis.append(f"{d['id']}/{t['id']} -> --{flag} is not a real flag")
 ok(not mis, "every registry `how:` names a working verb or is marked planned"
    + (f" — unmarked: {mis[:3]}" if mis else ""))
+
+# A per-tool tier stated in RESEARCH.md's table must agree with registry.yaml, which is what the
+# CLI actually reads. Two rows (locust, wrk2) contradicted it — a doc telling a reader a tool is
+# co-executed when the CLI only hands off its config is the same false claim as an unreachable verb.
+tier_of = {t['id']: t['tier'] for d in reg['domains'] for t in d['tools']}
+conflicts = []
+for line in res.splitlines():
+    m = re.match(r'\| \*\*([^*|]+)\*\* \|', line)
+    if not m:
+        continue
+    name = m.group(1).strip().lower().replace(' ', '-')
+    claimed = [c.strip() for c in line.split('|') if c.strip() in ('drive', 'delegate', 'know')]
+    if name in tier_of and claimed and claimed[0] != tier_of[name]:
+        conflicts.append(f"{name}: RESEARCH says {claimed[0]}, registry says {tier_of[name]}")
+ok(not conflicts, "RESEARCH per-tool tiers agree with registry.yaml"
+   + (f" — {conflicts}" if conflicts else ""))
 
 planned = sum(1 for d in reg['domains'] for t in d['tools'] if 'planned' in t)
 print(f"     registry: {planned} entries marked planned (verb not implemented in v0)")

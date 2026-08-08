@@ -233,12 +233,25 @@ func TestSysbench_UsesDetectedDependencyAndLoadProfile(t *testing.T) {
 
 func TestSysbench_NoDetectedDependency_ReportsRatherThanGuessing(t *testing.T) {
 	cfg := mustParse(t, loadFixture)
+	// Two distinct causes, two distinct reports: a nil *detect.System means
+	// detection never ran, which must not be reported as the user's compose
+	// file lacking a mysql.
 	out, err := Sysbench(cfg, nil)
 	if err != nil {
 		t.Fatalf("Sysbench: %v", err)
 	}
-	if !strings.Contains(out, "no mysql dependency was detected") {
-		t.Errorf("expected an explicit not-detected report, got:\n%s", out)
+	if !strings.Contains(out, "could not be detected") {
+		t.Errorf("expected an undetected-system report, got:\n%s", out)
+	}
+	detected, err := Sysbench(cfg, &detect.System{})
+	if err != nil {
+		t.Fatalf("Sysbench: %v", err)
+	}
+	if !strings.Contains(detected, "no mysql dependency was detected") {
+		t.Errorf("expected an explicit not-detected report, got:\n%s", detected)
+	}
+	if strings.Contains(detected, "docker run") {
+		t.Errorf("expected no command without a detected dependency, got:\n%s", detected)
 	}
 	if strings.Contains(out, "docker run") {
 		t.Errorf("expected no command without a detected dependency, got:\n%s", out)
@@ -270,12 +283,25 @@ func TestMemtier_UsesDetectedDependencyAndLoadProfile(t *testing.T) {
 
 func TestMemtier_NoDetectedDependency_ReportsRatherThanGuessing(t *testing.T) {
 	cfg := mustParse(t, loadFixture)
+	// Two distinct causes, two distinct reports: a nil *detect.System means
+	// detection never ran, which must not be reported as the user's compose
+	// file lacking a redis.
 	out, err := Memtier(cfg, nil)
 	if err != nil {
 		t.Fatalf("Memtier: %v", err)
 	}
-	if !strings.Contains(out, "no redis dependency was detected") {
-		t.Errorf("expected an explicit not-detected report, got:\n%s", out)
+	if !strings.Contains(out, "could not be detected") {
+		t.Errorf("expected an undetected-system report, got:\n%s", out)
+	}
+	detected, err := Memtier(cfg, &detect.System{})
+	if err != nil {
+		t.Fatalf("Memtier: %v", err)
+	}
+	if !strings.Contains(detected, "no redis dependency was detected") {
+		t.Errorf("expected an explicit not-detected report, got:\n%s", detected)
+	}
+	if strings.Contains(detected, "docker run") {
+		t.Errorf("expected no command without a detected dependency, got:\n%s", detected)
 	}
 }
 

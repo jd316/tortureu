@@ -7,12 +7,14 @@ One CLI that drives load and fault injection on the same clock **against a local
 
 > **Status: alpha.** The core works and is proven against real Docker: load and faults on one
 > clock, topological egress isolation, fault interception on internal dependencies, and a verdict
-> that names the causing fault. `init`, `run` and `doctor` are real verbs.
+> that names the causing fault. All nine verbs are real — `init`, `run`, `doctor`, `smoke`,
+> `check`, `emit`, `capture`, `replay` — and `mcp` speaks JSON-RPC 2.0 over stdio.
 >
-> **Not yet:** `smoke`, `check`, `emit`, `capture` and `replay` exit 2 (`not implemented in v0`),
-> and `mcp` lists its tool surface without speaking a transport — the five MCP tools exist as a
-> library, not yet as a server. Trace ingestion is absent, so verdicts report `correlated`
-> attribution rather than `caused`. See [`SPEC.md` §12](SPEC.md) for what is deliberately open.
+> **Not yet:** `emit` covers 10 of the delegate-tier tools (`pumba`, `netem`, `iptables`,
+> `gatling`, `locust`, `chaosmesh`, `clockskew`, `fio`, `sysbench`, `memtier`); the remaining
+> entries in `registry.yaml` carry a `planned:` marker and `tortureu doctor` will not tell you to
+> run them. Trace ingestion is absent, so verdicts report `correlated` attribution rather than
+> `caused`. See [`SPEC.md` §12](SPEC.md) for what is deliberately open.
 
 ## The problem
 

@@ -45,6 +45,7 @@ import (
 	"strings"
 
 	"github.com/jdb316/tortureu/internal/config"
+	"github.com/jdb316/tortureu/internal/detect"
 	"github.com/jdb316/tortureu/internal/fault"
 	"gopkg.in/yaml.v3"
 )
@@ -394,4 +395,8 @@ func chaosMeshStressCPU(f config.Fault, d *fault.DockerAction) (string, error) {
 		return "", err
 	}
 	return chaosMeshNoDurationNote(f) + string(out), nil
+}
+
+func init() {
+	Register("chaosmesh", func(cfg *config.Config, _ *detect.System) (string, error) { return ChaosMesh(cfg) }, false)
 }

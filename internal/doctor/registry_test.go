@@ -1,6 +1,8 @@
 package doctor_test
 
 import (
+	"bytes"
+	"os"
 	"strings"
 	"testing"
 
@@ -106,13 +108,29 @@ func TestLoadRegistryRoundTripsThePlannedMarker(t *testing.T) {
 		t.Fatalf("LoadRegistry: %v", err)
 	}
 
-	// locust is marked `planned: emit` in registry.yaml (its how: names a
-	// verb not implemented in v0). The parser must not drop that marker —
-	// it is the only thing that can stop doctor's output from
-	// mis-instructing a user to run a verb that exits 2.
-	locust := findTool(t, reg, "locust")
-	if locust.Planned != "emit" {
-		t.Fatalf("locust.Planned = %q, want %q", locust.Planned, "emit")
+	// The marker is the only thing that can stop doctor's output from
+	// mis-instructing a user to run a verb that exits 2, so the parser must
+	// not drop it. Counted from the file rather than pinned to one tool
+	// name: this test previously named locust, and silently stopped testing
+	// anything the day locust was implemented and its marker cleared.
+	raw, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	want := bytes.Count(raw, []byte("planned:"))
+	if want == 0 {
+		t.Skip("no planned: entries left in registry.yaml — nothing to round-trip")
+	}
+	got := 0
+	for _, d := range reg.Domains {
+		for _, tool := range d.Tools {
+			if tool.Planned != "" {
+				got++
+			}
+		}
+	}
+	if got != want {
+		t.Fatalf("parsed %d planned markers, registry.yaml has %d", got, want)
 	}
 }
 

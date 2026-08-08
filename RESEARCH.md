@@ -39,10 +39,10 @@ The P0/P1/P2/SKIP columns below are **build order within a tier**, not coverage.
 | **k6** | JS (Go core) | AGPL-3 | **P0** | S | drive | Default engine. Open-model `ramping-arrival-rate` = true spike sim. Native Prometheus RW output. Already ships `k6 x agent` / `k6 x mcp` — **do not rebuild that, compose with it.** |
 | **Vegeta** | Go | MIT | **P0** | S | know | Constant-rate smoke check. `tortureu smoke` implements its *model* in-process rather than driving the binary: reaching a DC-2-isolated SUT needs a custom dialer a subprocess cannot use (R-CLI-6). |
 | **Gatling** | Scala/Java/JS | Apache-2 | P1 | M | emit | Highest throughput/generator. JVM lifecycle + report parsing is the cost. |
-| **Locust** | Python | MIT | P1 | M | drive | Python-native teams; distributed master/worker adds lifecycle work. |
+| **Locust** | Python | MIT | P1 | M | delegate | Python-native teams. `tortureu emit locust` generates the locustfile; `HttpUser` is closed-model, so it cannot express R-CFG-6's open model and the emitted file says so. |
 | **JMeter** | XML/Groovy | Apache-2 | P1 | M | emit | Only reason: protocol breadth (JDBC/JMS/LDAP/SOAP/FTP). Thread-per-VU, heavy. |
 | **Artillery** | YAML/JS | MPL-2 | P2 | S | emit | Lambda/Fargate fan-out is the one thing k6 OSS lacks. |
-| **wrk2** | C + Lua | Apache-2 | P2 | S | drive | Correct coordinated-omission handling; niche now that k6 has open model. |
+| **wrk2** | C + Lua | Apache-2 | P2 | S | know | Correct coordinated-omission handling; niche now that k6 has open model. |
 | **oha / bombardier / hey** | Go/Rust | MIT | P2 | S | drive | Redundant with Vegeta. Pick one. |
 | **NBomber** | C#/F# | Apache-2 | P2 | M | emit | .NET shops only. |
 | **Tsung** | Erlang | GPL-2 | SKIP | — | — | Erlang toolchain cost >> value. |
@@ -345,11 +345,11 @@ off. `know` = we name it, say when it applies, point at it. **Every domain has n
 **Verdict: compliant.** 19/19 domains reachable from the CLI. The three tiers are honest about
 *depth* rather than pretending uniform integration:
 
-- **26 `drive`** — everything that must run **on one clock**. Co-execution is the whole product;
+- **30 `drive`** — everything that must run **on one clock**. Co-execution is the whole product;
   these are the only tools where wrapping adds something no vendor can.
-- **33 `delegate`** — real tools, real output, our config. No timing integration because they don't
+- **34 `delegate`** — real tools, real output, our config. No timing integration because they don't
   need it (a contract check is not a load phase).
-- **78 `know`** — `tortureu doctor` / `suggest` name them with a trigger condition. Zero
+- **90 `know`** — `tortureu doctor` names them with a trigger condition. Zero
   integration cost, and this is where the earlier design was genuinely non-compliant: the knowledge
   sat in this document, which a dev in a terminal never reads. `registry.yaml` moves it into the CLI.
 

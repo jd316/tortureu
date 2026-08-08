@@ -62,7 +62,10 @@ func TestEmit_MissingToolArgExitsTwoWithUsage(t *testing.T) {
 func TestEmit_UnknownToolExitsTwoListingSupported(t *testing.T) {
 	path := writeEmitFixture(t)
 	var out, errb bytes.Buffer
-	code := Main([]string{"emit", "-config", path, "gatling"}, &out, &errb)
+	// Deliberately a name no tool will ever claim: this test previously used
+	// "gatling", which silently stopped testing the unknown-tool path the day
+	// a Gatling emitter was registered.
+	code := Main([]string{"emit", "-config", path, "not-a-real-tool"}, &out, &errb)
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}

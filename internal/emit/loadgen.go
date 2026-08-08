@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/jdb316/tortureu/internal/config"
+	"github.com/jdb316/tortureu/internal/detect"
 	"github.com/jdb316/tortureu/internal/fault"
 )
 
@@ -424,4 +425,9 @@ func Locust(cfg *config.Config) (string, error) {
 // paths/JSON bodies torture.yaml carries.
 func pyStr(s string) string {
 	return strconv.Quote(s)
+}
+
+func init() {
+	Register("gatling", func(cfg *config.Config, _ *detect.System) (string, error) { return Gatling(cfg) }, false)
+	Register("locust", func(cfg *config.Config, _ *detect.System) (string, error) { return Locust(cfg) }, false)
 }

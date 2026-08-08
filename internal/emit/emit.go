@@ -10,36 +10,81 @@
 // automated. This is a scope line, not an oversight.
 //
 // Only a defensible subset of the ~30 registry.yaml tools marked
-// `planned: emit` are implemented here: pumba, netem (raw tc), and
-// iptables — the three `faults:` network/container translators the task
-// prioritized highest after load generators. Each covers a distinct,
-// verifiable slice of the fault-verb space and says so in its own output
-// for every verb it does NOT translate, rather than silently narrowing or
-// guessing (see each file's header for exactly which verbs and why).
+// `planned: emit` are implemented. Each covers a distinct, verifiable
+// slice and says so in its own output for every verb it does NOT
+// translate, rather than silently narrowing or guessing (see each file's
+// header for exactly which verbs and why, and what was verified against a
+// real binary versus left explicitly unverified).
+//
+// Emitters register themselves via Register in an init(), rather than
+// being listed in a switch here. Three agents extending this package
+// concurrently each hit the old hardcoded switch and had to stop rather
+// than edit a shared file — that is a design flaw, not three
+// inconveniences, so adding an emitter now touches only its own file.
 package emit
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/jdb316/tortureu/internal/config"
+	"github.com/jdb316/tortureu/internal/detect"
 )
 
-// Tools is every tool name Emit accepts, in the order they were built.
-var Tools = []string{"pumba", "netem", "iptables"}
+// Emitter renders one delegate-tier tool. sys may be nil: several
+// emitters need only torture.yaml, while those that must reach a real
+// dependency address (sysbench, memtier, fio) need detection too and must
+// say so rather than guessing a host or port.
+type Emitter func(cfg *config.Config, sys *detect.System) (string, error)
 
-// Emit generates the config/command for tool from cfg. An unrecognized
-// tool name errors with the list Tools names — never a silent no-op
-// (task instruction).
-func Emit(tool string, cfg *config.Config) (string, error) {
-	switch tool {
-	case "pumba":
-		return Pumba(cfg)
-	case "netem":
-		return Netem(cfg)
-	case "iptables":
-		return IPTables(cfg)
-	default:
-		return "", fmt.Errorf("tortureu emit: unknown tool %q; supported: %s", tool, strings.Join(Tools, ", "))
+type entry struct {
+	fn Emitter
+	// needsSystem records that this emitter cannot work from torture.yaml
+	// alone. Callers use it to skip detection — and to skip reporting a
+	// detection failure — for the emitters that never consult it.
+	needsSystem bool
+}
+
+var registry = map[string]entry{}
+
+// Register adds an emitter. Emitters call this from an init() in their own
+// file so that adding one never requires editing this one.
+func Register(tool string, fn Emitter, needsSystem bool) {
+	if _, dup := registry[tool]; dup {
+		panic("emit: duplicate emitter registered for " + tool)
 	}
+	registry[tool] = entry{fn: fn, needsSystem: needsSystem}
+}
+
+// NeedsSystem reports whether tool requires a *detect.System. An unknown
+// tool needs nothing; Emit reports it as unknown.
+func NeedsSystem(tool string) bool {
+	return registry[tool].needsSystem
+}
+
+// Tools is every tool name Emit accepts, sorted for stable output.
+func Tools() []string {
+	names := make([]string, 0, len(registry))
+	for name := range registry {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func init() {
+	Register("pumba", func(cfg *config.Config, _ *detect.System) (string, error) { return Pumba(cfg) }, false)
+	Register("netem", func(cfg *config.Config, _ *detect.System) (string, error) { return Netem(cfg) }, false)
+	Register("iptables", func(cfg *config.Config, _ *detect.System) (string, error) { return IPTables(cfg) }, false)
+}
+
+// Emit generates the config/command for tool. An unrecognized tool name
+// errors listing what is supported — never a silent no-op (R-CLI-8).
+func Emit(tool string, cfg *config.Config, sys *detect.System) (string, error) {
+	e, ok := registry[tool]
+	if !ok {
+		return "", fmt.Errorf("tortureu emit: unknown tool %q; supported: %s", tool, strings.Join(Tools(), ", "))
+	}
+	return e.fn(cfg, sys)
 }

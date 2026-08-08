@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/jdb316/tortureu/internal/config"
+	"github.com/jdb316/tortureu/internal/detect"
 	"github.com/jdb316/tortureu/internal/emit"
 )
 
@@ -25,7 +26,7 @@ func runEmit(args []string, stdout, stderr io.Writer) int {
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		fmt.Fprintf(stderr, "usage: tortureu emit <tool>\nsupported tools: %s\n", strings.Join(emit.Tools, ", "))
+		fmt.Fprintf(stderr, "usage: tortureu emit <tool>\nsupported tools: %s\n", strings.Join(emit.Tools(), ", "))
 		return 2
 	}
 	tool := rest[0]
@@ -41,7 +42,21 @@ func runEmit(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	out, err := emit.Emit(tool, cfg)
+	// Only the emitters that need a real dependency address (sysbench,
+	// memtier, fio) pay for detection — the rest work from torture.yaml
+	// alone and must not be made to fail with it. When detection is needed
+	// and fails, say so rather than swallowing it: otherwise the emitter
+	// looks like it found no dependency, when it was never told of one.
+	var sys *detect.System
+	if emit.NeedsSystem(tool) {
+		s, derr := detect.Detect(cfg.Target.Compose)
+		sys = s
+		if derr != nil {
+			fmt.Fprintf(stderr, "tortureu emit: could not detect the system from %s: %v\n", cfg.Target.Compose, derr)
+		}
+	}
+
+	out, err := emit.Emit(tool, cfg, sys)
 	if err != nil {
 		fmt.Fprintf(stderr, "tortureu emit: %v\n", err)
 		return 2

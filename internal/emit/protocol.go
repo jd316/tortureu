@@ -338,6 +338,17 @@ func findDep(sys *detect.System, depType string) (detect.Dep, bool) {
 	return detect.Dep{}, false
 }
 
+// noDepNote explains why a dependency-addressed emitter has nothing to
+// emit. A nil sys means detection never ran or failed — reporting that as
+// "no such dependency" would blame the user's compose file for our own
+// missing input, so the two cases say different things.
+func noDepNote(tool string, sys *detect.System, depType string) string {
+	if sys == nil {
+		return fmt.Sprintf("# tortureu emit %s: the system could not be detected, so the %s address is unknown; nothing to emit.\n", tool, depType)
+	}
+	return fmt.Sprintf("# tortureu emit %s: no %s dependency was detected (dep:%s); nothing to emit.\n", tool, depType, depType)
+}
+
 // peakRPS scans load.stages (R-CFG-6..8) for the highest to:/hold: rate
 // (torture.yaml's "<n>rps" grammar, see torture.example.yaml), used as a
 // concurrency proxy for the protocol-load tools below: neither sysbench
@@ -430,7 +441,7 @@ const sysbenchHeader = `#!/usr/bin/env bash
 func Sysbench(cfg *config.Config, sys *detect.System) (string, error) {
 	dep, ok := findDep(sys, "mysql")
 	if !ok {
-		return "# tortureu emit sysbench: no mysql dependency was detected (dep:mysql); nothing to emit.\n", nil
+		return noDepNote("sysbench", sys, "mysql"), nil
 	}
 	_, port := hostPort(dep.Address)
 	if port == "" {
@@ -480,7 +491,7 @@ const memtierHeader = `#!/usr/bin/env bash
 func Memtier(cfg *config.Config, sys *detect.System) (string, error) {
 	dep, ok := findDep(sys, "redis")
 	if !ok {
-		return "# tortureu emit memtier: no redis dependency was detected (dep:redis); nothing to emit.\n", nil
+		return noDepNote("memtier", sys, "redis"), nil
 	}
 	_, port := hostPort(dep.Address)
 	if port == "" {
@@ -502,4 +513,13 @@ func Memtier(cfg *config.Config, sys *detect.System) (string, error) {
 		"memtier_benchmark --server=127.0.0.1 --port=%s --clients=%d --threads=4 --test-time=%d --hide-histogram\n",
 		dep.Name, port, clients, seconds)
 	return b.String(), nil
+}
+
+func init() {
+	// fio, sysbench and memtier need a real dependency address from
+	// detection; they must refuse rather than guess a host or port.
+	Register("fio", Fio, true)
+	Register("sysbench", Sysbench, true)
+	Register("memtier", Memtier, true)
+	Register("clockskew", func(cfg *config.Config, _ *detect.System) (string, error) { return ClockSkew(cfg) }, false)
 }
