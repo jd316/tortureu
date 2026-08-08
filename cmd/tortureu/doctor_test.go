@@ -30,10 +30,21 @@ func fixtureRegistry() *doctor.Registry {
 	}
 }
 
+// fixturePrereqs stands in for a machine with everything present, so tests
+// unrelated to the prerequisite preflight aren't coupled to this test
+// process's real PATH.
+func fixturePrereqs() []PrereqCheck {
+	return []PrereqCheck{
+		{Name: "k6", Found: true, Version: "k6 v0.49.0"},
+		{Name: "docker", Found: true, Version: "Docker version 24.0.0"},
+		{Name: "docker compose", Found: true, Version: "Docker Compose version v2.20.0"},
+	}
+}
+
 // spec: R-CLI-3
 func TestDoctorReportsUncoveredDomains(t *testing.T) {
 	sys := &detect.System{Coverage: detect.Coverage{K8s: false}}
-	report := buildDoctorReport(nil, fixtureRegistry(), sys)
+	report := buildDoctorReport(nil, fixtureRegistry(), sys, fixturePrereqs())
 	if !strings.Contains(report, "uncovered domains: chaos-k8s") {
 		t.Errorf("report did not name the uncovered domain:\n%s", report)
 	}
@@ -42,7 +53,7 @@ func TestDoctorReportsUncoveredDomains(t *testing.T) {
 // spec: R-CLI-3, R-SCOPE-4
 func TestDoctorLabelsKnowTierSuggestionsWithTierAndTrigger(t *testing.T) {
 	sys := &detect.System{Coverage: detect.Coverage{K8s: true}}
-	report := buildDoctorReport(nil, fixtureRegistry(), sys)
+	report := buildDoctorReport(nil, fixtureRegistry(), sys, fixturePrereqs())
 	if !strings.Contains(report, "[know] chaos-k8s/chaosmesh") {
 		t.Errorf("suggestion missing tier label (R-SCOPE-4):\n%s", report)
 	}
@@ -61,7 +72,7 @@ func TestDoctorLabelsKnowTierSuggestionsWithTierAndTrigger(t *testing.T) {
 // appear for a stack that triggers one of each.
 func TestDoctorReportsAllThreeTiers(t *testing.T) {
 	sys := &detect.System{Lang: "python", Coverage: detect.Coverage{K8s: true}}
-	report := buildDoctorReport(nil, fixtureRegistry(), sys)
+	report := buildDoctorReport(nil, fixtureRegistry(), sys, fixturePrereqs())
 
 	if !strings.Contains(report, "DRIVEN BY TORTUREU") {
 		t.Errorf("report has no drive-tier section:\n%s", report)
@@ -85,7 +96,7 @@ func TestDoctorReportsAllThreeTiers(t *testing.T) {
 // it cannot run today would be the same misrepresentation R-SCOPE-4
 // forbids for delegate/know, just inverted.
 func TestDoctorLabelsPlannedDriveEntryAsNotYetRunnable(t *testing.T) {
-	report := buildDoctorReport(nil, fixtureRegistry(), &detect.System{})
+	report := buildDoctorReport(nil, fixtureRegistry(), &detect.System{}, fixturePrereqs())
 	if !strings.Contains(report, "[drive · planned] load/vegeta") {
 		t.Errorf("planned drive entry not labelled as planned:\n%s", report)
 	}
@@ -108,7 +119,7 @@ func TestDoctorLabelsPlannedDriveEntryAsNotYetRunnable(t *testing.T) {
 func TestDoctorDomainWithNoMatchingToolsStaysAbsentNotPadded(t *testing.T) {
 	sys := &detect.System{} // no python, no k8s, no openapi: nothing in
 	// "contracts" or "chaos-k8s" applies.
-	report := buildDoctorReport(nil, fixtureRegistry(), sys)
+	report := buildDoctorReport(nil, fixtureRegistry(), sys, fixturePrereqs())
 
 	if strings.Contains(report, "contracts/") {
 		t.Errorf("an inapplicable domain's tool was padded into the report:\n%s", report)
@@ -128,7 +139,7 @@ func TestDoctorDomainWithNoMatchingToolsStaysAbsentNotPadded(t *testing.T) {
 // now appear in the report.
 func TestDoctorIncludesApplicableDelegateTierSuggestion(t *testing.T) {
 	sys := &detect.System{Lang: "python", Coverage: detect.Coverage{K8s: false}}
-	report := buildDoctorReport(nil, fixtureRegistry(), sys)
+	report := buildDoctorReport(nil, fixtureRegistry(), sys, fixturePrereqs())
 	if !strings.Contains(report, "load/locust") {
 		t.Errorf("delegate-tier suggestion missing from report:\n%s", report)
 	}
@@ -146,7 +157,7 @@ func TestDoctorIncludesApplicableDelegateTierSuggestion(t *testing.T) {
 // "mis-instructing".
 func TestDoctorLabelsPlannedDelegateSuggestionAsNotYetRunnable(t *testing.T) {
 	sys := &detect.System{Lang: "python"}
-	report := buildDoctorReport(nil, fixtureRegistry(), sys)
+	report := buildDoctorReport(nil, fixtureRegistry(), sys, fixturePrereqs())
 	if !strings.Contains(report, "[delegate · planned] load/locust") {
 		t.Errorf("planned delegate suggestion not labelled as planned:\n%s", report)
 	}
@@ -162,7 +173,7 @@ func TestDoctorLabelsPlannedDelegateSuggestionAsNotYetRunnable(t *testing.T) {
 // stay distinguishable.
 func TestDoctorLabelsRunnableDelegateSuggestionWithoutPlannedMarker(t *testing.T) {
 	sys := &detect.System{Coverage: detect.Coverage{OpenAPI: true}}
-	report := buildDoctorReport(nil, fixtureRegistry(), sys)
+	report := buildDoctorReport(nil, fixtureRegistry(), sys, fixturePrereqs())
 	if !strings.Contains(report, "[delegate] contracts/oasdiff") {
 		t.Errorf("runnable delegate suggestion missing or mislabelled:\n%s", report)
 	}
@@ -205,8 +216,60 @@ func TestDoctorResilienceFindingsAreLabelledHints(t *testing.T) {
 	findings := []doctor.Finding{
 		{DepName: "postgres", Check: doctor.CheckTimeout, Level: doctor.LevelHint, Hint: "not configured", Experiment: "fault: latency on postgres"},
 	}
-	report := buildDoctorReport(findings, fixtureRegistry(), sys)
+	report := buildDoctorReport(findings, fixtureRegistry(), sys, fixturePrereqs())
 	if !strings.Contains(report, "hint:") {
 		t.Errorf("finding not labelled as a hint:\n%s", report)
+	}
+}
+
+// spec: closest fit R-CLI-3 (doctor's job is telling a user what their
+// setup can and cannot do) — no SPEC.md requirement names a prerequisite
+// preflight explicitly; see the task report's escalation.
+//
+// This stubs PATH to a directory containing no binaries at all, so k6 is
+// genuinely absent from the real exec.LookPath the check performs — not a
+// mocked-away LookPath, which would prove nothing about whether the check
+// actually detects absence.
+func TestCheckPrerequisitesReportsGenuinelyMissingK6(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	checks := checkPrerequisites()
+
+	var k6 *PrereqCheck
+	for i := range checks {
+		if checks[i].Name == "k6" {
+			k6 = &checks[i]
+		}
+	}
+	if k6 == nil {
+		t.Fatal("checkPrerequisites did not report a k6 entry at all")
+	}
+	if k6.Found {
+		t.Error("k6 reported Found with PATH pointing at an empty directory")
+	}
+	if k6.Hint == "" {
+		t.Error("a missing prerequisite must carry an install hint")
+	}
+}
+
+// spec: closest fit R-CLI-3
+//
+// The rendering side: buildDoctorReport must surface a missing
+// prerequisite by name, with its hint, not silently drop it.
+func TestBuildDoctorReportRendersMissingPrerequisite(t *testing.T) {
+	prereqs := []PrereqCheck{
+		{Name: "k6", Found: false, Hint: "install: https://k6.io/docs/get-started/installation/"},
+		{Name: "docker", Found: true, Version: "Docker version 24.0.0"},
+		{Name: "docker compose", Found: true, Version: "Docker Compose version v2.20.0"},
+	}
+	report := buildDoctorReport(nil, fixtureRegistry(), &detect.System{}, prereqs)
+	if !strings.Contains(report, "[missing] k6") {
+		t.Errorf("report does not flag the missing prerequisite:\n%s", report)
+	}
+	if !strings.Contains(report, "https://k6.io/docs/get-started/installation/") {
+		t.Errorf("report does not carry the install hint:\n%s", report)
+	}
+	if !strings.Contains(report, "[ok] docker") {
+		t.Errorf("report does not confirm a present prerequisite:\n%s", report)
 	}
 }

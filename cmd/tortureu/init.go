@@ -152,5 +152,21 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "  - %s\n", g)
 		}
 	}
+
+	// A machine missing a prerequisite `run` needs (k6, docker, docker
+	// compose) is a fact about this machine, not about the repo, so it is
+	// warned about here rather than written into torture.yaml (which may
+	// be committed and run elsewhere). init still succeeds and writes the
+	// file either way: a config generated on a machine that cannot yet run
+	// it is still useful (R-DET-7's "surfaced, never hidden" reasoning
+	// applied to the same failure mode this task's earlier addendum fixed
+	// for k6-MCP division-of-labor — a known-unknown named up front, not
+	// discovered two steps later at `run`).
+	if missing := missingPrerequisites(checkPrerequisites()); len(missing) > 0 {
+		fmt.Fprintln(stdout, "\nwarnings (this machine is missing what `run` needs):")
+		for _, m := range missing {
+			fmt.Fprintf(stdout, "  - %s: %s\n", m.Name, m.Hint)
+		}
+	}
 	return 0
 }

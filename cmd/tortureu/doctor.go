@@ -34,6 +34,34 @@ func sortByDomainThenID(entries []doctor.CoverageEntry) {
 	})
 }
 
+// renderPrereqs renders a prerequisite preflight (closest fit: R-CLI-3 —
+// doctor's job is telling a user what their setup can and cannot do, and
+// R-AUD-3's "hint, never a failure" spirit — SPEC.md names neither
+// `doctor` nor `init` checking installed tools explicitly; escalated in
+// the task report rather than inventing a requirement id for it).
+//
+// A tool is reported "found" only on exec.LookPath succeeding — never a
+// guessed path — and a missing tool gets an install hint, never a guess at
+// where it might be. This is the up-front check that used to be missing
+// entirely: previously a user only learned k6 wasn't installed after
+// `init` and editing a config, when `run` failed with an adapter error.
+func renderPrereqs(checks []PrereqCheck) string {
+	var b strings.Builder
+	b.WriteString("PREREQUISITES (what this machine can run today)\n")
+	for _, c := range checks {
+		if c.Found {
+			v := c.Version
+			if v == "" {
+				v = "found"
+			}
+			fmt.Fprintf(&b, "  [ok] %s: %s\n", c.Name, v)
+		} else {
+			fmt.Fprintf(&b, "  [missing] %s — %s\n", c.Name, c.Hint)
+		}
+	}
+	return b.String()
+}
+
 // buildDoctorReport renders the resilience audit and registry coverage
 // (R-CLI-3) as one human-readable report.
 //
@@ -59,8 +87,11 @@ func sortByDomainThenID(entries []doctor.CoverageEntry) {
 // drift passed CI here while failing there — two paths for one rule. Only
 // the trigger condition, which String() does not print, is appended
 // afterward.
-func buildDoctorReport(findings []doctor.Finding, reg *doctor.Registry, sys *detect.System) string {
+func buildDoctorReport(findings []doctor.Finding, reg *doctor.Registry, sys *detect.System, prereqs []PrereqCheck) string {
 	var b strings.Builder
+
+	b.WriteString(renderPrereqs(prereqs))
+	b.WriteString("\n")
 
 	b.WriteString("RESILIENCE AUDIT (hints only, R-AUD-3)\n")
 	if len(findings) == 0 {
@@ -167,6 +198,6 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	}
 
 	findings := doctor.Audit(filepath.Dir(*compose), sys)
-	fmt.Fprint(stdout, buildDoctorReport(findings, reg, sys))
+	fmt.Fprint(stdout, buildDoctorReport(findings, reg, sys, checkPrerequisites()))
 	return 0
 }

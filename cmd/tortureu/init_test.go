@@ -187,3 +187,43 @@ func TestInitDoesNotTouchAnotherToolsMCPRegistration(t *testing.T) {
 		t.Errorf("torture.yaml was not written: %v", err)
 	}
 }
+
+// spec: closest fit R-DET-7 (a known-unknown must be surfaced, never
+// hidden) applied to a machine-level fact rather than a repo-level one; no
+// SPEC.md requirement names a prerequisite preflight explicitly — see the
+// task report's escalation.
+//
+// PATH is stubbed to a directory with nothing in it, so k6 (and docker) are
+// genuinely absent via the real exec.LookPath, matching this task's
+// instruction not to mock the check away. init must still succeed and
+// still write the file — a config generated on a machine that cannot yet
+// run it is still useful — and must name the missing tool in its warning.
+func TestInitWarnsAboutMissingPrerequisiteButStillSucceeds(t *testing.T) {
+	dir := t.TempDir()
+	compose := filepath.Join(dir, "docker-compose.yml")
+	if err := os.WriteFile(compose, []byte("services:\n  checkout-api:\n    build: .\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(wd) }()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir()) // no k6, no docker anywhere on PATH
+
+	var out, errb bytes.Buffer
+	code := runInit([]string{"-compose", "docker-compose.yml", "-out", "torture.yaml"}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("runInit failed with a missing prerequisite (exit %d): %s", code, errb.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "torture.yaml")); err != nil {
+		t.Errorf("torture.yaml was not written despite a missing prerequisite: %v", err)
+	}
+	if !strings.Contains(out.String(), "k6") {
+		t.Errorf("stdout does not name the missing prerequisite:\n%s", out.String())
+	}
+}
