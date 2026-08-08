@@ -218,5 +218,23 @@ ok(not mis, "every registry `how:` names a working verb or is marked planned"
 planned = sum(1 for d in reg['domains'] for t in d['tools'] if 'planned' in t)
 print(f"     registry: {planned} entries marked planned (verb not implemented in v0)")
 
+# ── R-LIC-6: every drive-tier tool's licence recorded before its adapter ships. All 28 adapters
+# had shipped with none recorded — and this project's central legal risk is exactly the MIT/AGPL
+# boundary (R-LIC-1/5), so an unrecorded licence on a tool we execute is the gap that matters.
+nolic = [f"{d['id']}/{t['id']}" for d in reg['domains'] for t in d['tools']
+         if t['tier'] == 'drive' and not t.get('licence')]
+ok(not nolic, "R-LIC-6: every drive-tier tool records a licence" + (f" — missing: {nolic}" if nolic else ""))
+
+agpl = [f"{d['id']}/{t['id']}" for d in reg['domains'] for t in d['tools']
+        if t.get('licence') and 'AGPL' in str(t['licence'])]
+print(f"     R-LIC-1 boundary applies to {len(agpl)} AGPL drive-tier tool(s): {', '.join(agpl)}")
+
+# ── R-CLI-2: every CLI verb must be the how: of at least one registry tool, so no verb exists
+# that the catalogue never mentions.
+VERBS = {'init', 'run', 'smoke', 'doctor', 'mcp', 'check', 'emit', 'capture', 'replay'}
+hows = ' '.join(str(t['how']) for d in reg['domains'] for t in d['tools'])
+unnamed = sorted(v for v in VERBS if f'tortureu {v}' not in hows)
+ok(not unnamed, "R-CLI-2: every verb is named by some tool's how:" + (f" — unnamed: {unnamed}" if unnamed else ""))
+
 print(f"\n{len(fails)} failure(s)" if fails else "\nall checks passed")
 sys.exit(1 if fails else 0)
