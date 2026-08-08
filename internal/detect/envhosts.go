@@ -11,16 +11,36 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 )
 
-// bareHostRe matches a scheme-less value that is, in its entirety, a
-// dotted hostname with a plausible TLD (letters only, 2+ chars) and an
-// optional port — e.g. "api.partner.com" or "api.partner.com:8443". It
-// deliberately requires the WHOLE value to match: an env var value that is
-// merely "host-shaped" as a substring (a path, a version string like
-// "3.11.4", a sentence) is not a host, and R-DET-4's discovery must not
-// guess. Plain IPv4-shaped values are intentionally excluded for the same
-// reason: they are indistinguishable from dotted version numbers without
-// reading code, which is out of R-DET-1's bound.
-var bareHostRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}(:[0-9]{1,5})?$`)
+// bareHostStructureRe matches a scheme-less value that is, in its entirety,
+// a dotted token with an optional port — e.g. "api.partner.com",
+// "api.partner.com:8443", but also "config.yaml" or "3.11.4". Structure
+// alone cannot tell a hostname from a filename or a version string, so a
+// match here is only a candidate: commonTLDs below decides whether it's
+// actually a host. It deliberately requires the WHOLE value to match: an
+// env var value that is merely "host-shaped" as a substring (a path, a
+// sentence) is not a host, and R-DET-4's discovery must not guess. Plain
+// IPv4-shaped values fail the commonTLDs check the same way a version
+// string does, since neither ends in a real TLD label.
+var bareHostStructureRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+(:[0-9]{1,5})?$`)
+
+// commonTLDs is a small allowlist of top-level labels that make a
+// structurally host-shaped value look like a genuine internet hostname
+// rather than a filename or a version string.
+//
+// This is a heuristic, not a spec, and it is deliberately narrow: real
+// filenames routinely end in a short alphabetic label too (config.yaml,
+// ca.pem, app.js, schema.sql, Dockerfile.prod), and a permissive check that
+// accepted any letters-only final label misclassified every one of them as
+// an external host — which is worse than missing a real one, since an
+// invented unclassified host aborts every run that has a config file in an
+// env var (nearly all of them). Prefer missing a host over inventing one:
+// an obscure or private TLD not in this list is simply not discovered here,
+// same as any other value this package chooses not to guess about.
+var commonTLDs = map[string]bool{
+	"com": true, "net": true, "org": true, "io": true, "dev": true,
+	"co": true, "app": true, "ai": true, "cloud": true, "tech": true,
+	"systems": true, "services": true, "info": true, "biz": true, "me": true,
+}
 
 // loopbackHosts are never external, regardless of what other checks say.
 var loopbackHosts = map[string]bool{
@@ -51,8 +71,12 @@ func extractHost(value string) (string, bool) {
 		}
 		return host, true
 	}
-	if bareHostRe.MatchString(value) {
-		return value, true
+	if bareHostStructureRe.MatchString(value) {
+		labels := strings.Split(hostOf(value), ".")
+		tld := strings.ToLower(labels[len(labels)-1])
+		if commonTLDs[tld] {
+			return value, true
+		}
 	}
 	return "", false
 }
