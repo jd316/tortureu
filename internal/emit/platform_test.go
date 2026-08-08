@@ -228,17 +228,113 @@ func TestChaosMesh_EmittedDocumentsHaveRequiredCRDFields(t *testing.T) {
 	}
 }
 
-// The header MUST say plainly that this was never applied to or validated
-// against a live cluster — R-CLI-8's honesty standard applied to a target
-// this implementer cannot run.
-func TestChaosMesh_HeaderDisclosesNoLiveClusterValidation(t *testing.T) {
+// spec: R-CLI-8
+// The header MUST state the live-cluster verdict truthfully. Every document
+// this emit produces was applied with kubectl to a kind cluster running Chaos
+// Mesh 2.8.3 and accepted by its admission webhook (see this file's package
+// header for the full record), so the header must name the version it was
+// checked against and MUST NOT still carry the superseded "no cluster was
+// available" caveat — an unearned claim in either direction is the failure
+// R-CLI-8's honesty standard forbids.
+func TestChaosMesh_HeaderStatesLiveClusterVerdict(t *testing.T) {
 	cfg := mustParse(t, platformFixture)
 	out, err := ChaosMesh(cfg)
 	if err != nil {
 		t.Fatalf("ChaosMesh: %v", err)
 	}
-	if !strings.Contains(strings.ToLower(out), "not validated against a live cluster") &&
-		!strings.Contains(strings.ToLower(out), "no chaos mesh install and no kubectl were available") {
-		t.Errorf("expected the header to disclose no live-cluster validation, got:\n%s", out)
+	lower := strings.ToLower(out)
+	for _, want := range []string{"chaos mesh 2.8.3", "kubectl apply", "accepted"} {
+		if !strings.Contains(lower, want) {
+			t.Errorf("expected the header to state the live-cluster verdict (%q), got:\n%s", want, out)
+		}
+	}
+	for _, stale := range []string{
+		"not validated against a live cluster",
+		"no chaos mesh install and no kubectl were available",
+		"never applied to or accepted by a\n# real cluster",
+	} {
+		if strings.Contains(lower, stale) {
+			t.Errorf("header still carries the superseded caveat %q, got:\n%s", stale, out)
+		}
+	}
+}
+
+// spec: R-CLI-8
+// A fault name longer than Kubernetes' 253-character object-name limit must
+// still produce an appliable CRD. Verified against a live cluster: a 254-
+// character metadata.name is rejected outright by the API server
+// ("metadata.name: Invalid value: ...: must be no more than 253 characters"),
+// which would make the emitted document unrunnable — exactly the "tells the
+// user to run something that does not work" defect R-CLI-8 forbids.
+func TestChaosMesh_LongFaultNameFitsKubernetesNameLimit(t *testing.T) {
+	long := strings.Repeat("pg-slow-", 60) // 480 chars, well over the limit
+	cfg := &config.Config{
+		Target: config.Target{Service: "checkout-api"},
+		Faults: []config.Fault{{
+			Name:   long,
+			Target: "checkout-api",
+			Verb:   "latency",
+			For:    "10s",
+			Inject: map[string]any{"latency": "100ms"},
+		}},
+	}
+	out, err := ChaosMesh(cfg)
+	if err != nil {
+		t.Fatalf("ChaosMesh: %v", err)
+	}
+	var found bool
+	for _, doc := range strings.Split(out, "\n---\n") {
+		if !strings.Contains(doc, "apiVersion: chaos-mesh.org") {
+			continue
+		}
+		var parsed struct {
+			Metadata struct {
+				Name string `yaml:"name"`
+			} `yaml:"metadata"`
+		}
+		if err := yaml.Unmarshal([]byte(doc), &parsed); err != nil {
+			t.Fatalf("emitted document is not valid YAML: %v", err)
+		}
+		found = true
+		if n := len(parsed.Metadata.Name); n > 253 {
+			t.Errorf("metadata.name is %d characters; the API server rejects anything over 253", n)
+		}
+		if strings.HasSuffix(parsed.Metadata.Name, "-") || strings.HasPrefix(parsed.Metadata.Name, "-") {
+			t.Errorf("metadata.name %q starts or ends with '-'; not a valid RFC1123 name", parsed.Metadata.Name)
+		}
+	}
+	if !found {
+		t.Fatal("expected an emitted CRD document to check")
+	}
+}
+
+// spec: R-CLI-8
+// PodChaos's pod-kill is one-shot: it kills the pod once, so torture.yaml's
+// "for:" has nothing to bound and the emitted CRD carries no spec.duration.
+// Dropping a duration the user wrote without saying so is exactly the silent
+// narrowing this package forbids, so the document must say it in words.
+func TestChaosMesh_PodKillDisclosesDurationNotCarried(t *testing.T) {
+	cfg := &config.Config{
+		Target: config.Target{Service: "checkout-api"},
+		Faults: []config.Fault{{
+			Name:   "api_kill",
+			Target: "checkout-api",
+			Verb:   "kill",
+			For:    "10s",
+			Inject: map[string]any{"kill": true},
+		}},
+	}
+	out, err := ChaosMesh(cfg)
+	if err != nil {
+		t.Fatalf("ChaosMesh: %v", err)
+	}
+	if !strings.Contains(out, "kind: PodChaos") {
+		t.Fatalf("expected a PodChaos document, got:\n%s", out)
+	}
+	if !strings.Contains(out, "for: 10s") || !strings.Contains(out, "one-shot") {
+		t.Errorf("expected the PodChaos document to disclose that for: 10s is not carried (pod-kill is one-shot), got:\n%s", out)
+	}
+	if strings.Contains(out, "duration:") {
+		t.Errorf("PodChaos pod-kill must not carry a spec.duration, got:\n%s", out)
 	}
 }
