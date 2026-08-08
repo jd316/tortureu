@@ -121,8 +121,12 @@ func TestEvaluateThresholds_ReadsRealK6SummaryShapeNotNestedUnderValues(t *testi
 	for _, p := range passed {
 		byAssertion[p.Assertion] = p.Observed
 	}
-	if got := byAssertion["http_req_duration: p(95)<2000"]; got != "0.5715169999999999ms" {
-		t.Errorf("p(95) observed = %q, want the real flat-shape value with ms appended", got)
+	// R-VER-15: read from the real flat shape, carrying its unit and rounded
+	// to significant figures. This asserted "0.5715169999999999ms" before,
+	// which is the float's full expansion — VERDICT.md §1 and §4 both show a
+	// value a reader can scan.
+	if got := byAssertion["http_req_duration: p(95)<2000"]; got != "0.571517ms" {
+		t.Errorf("p(95) observed = %q, want the flat-shape value, rounded, with ms", got)
 	}
 	if got := byAssertion["http_req_failed: rate<0.5"]; got != "0" {
 		t.Errorf("rate observed = %q, want the real \"value\" field (0), not \"not measured\"", got)

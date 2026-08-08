@@ -28,7 +28,10 @@ func Render(v Verdict) string {
 		fmt.Fprintf(&b, "  %ds", v.DurationS)
 	}
 	if v.Commit != "" {
-		fmt.Fprintf(&b, "  commit %s", v.Commit)
+		// R-VER-12: the JSON carries the full 40-character hash because a
+		// trend store keys on it; a reader scanning a terminal wants the
+		// short form, which is what VERDICT.md §4 shows.
+		fmt.Fprintf(&b, "  commit %s", abbreviateCommit(v.Commit))
 	}
 	b.WriteString("\n")
 
@@ -123,4 +126,15 @@ func Render(v Verdict) string {
 	fmt.Fprintf(&b, "          exit %d\n", ExitCode(v))
 
 	return b.String()
+}
+
+// abbreviateCommit shortens a full hash for display (R-VER-12). Anything
+// that is not a 40-character hash — including the empty string R-VER-12
+// requires outside a git checkout — is passed through untouched rather than
+// truncated into something that looks like a hash and is not.
+func abbreviateCommit(c string) string {
+	if len(c) == 40 {
+		return c[:7]
+	}
+	return c
 }

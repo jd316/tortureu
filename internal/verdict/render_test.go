@@ -309,3 +309,32 @@ func TestRender_AllUnevaluatedFindingsReadsInconclusiveNotFail(t *testing.T) {
 		t.Errorf("mixed unevaluated+broken verdict should exit 1; render:\n%s", mixedHuman)
 	}
 }
+
+// spec: R-VER-12
+//
+// The JSON keeps the full 40-character hash because a trend store keys on
+// it and `bencher run --hash` rejects anything shorter; VERDICT.md §4's
+// human rendering shows the short form. The renderer printed the full hash,
+// so the two disagreed with the requirement that specifies both.
+func TestRender_AbbreviatesTheCommitForDisplay(t *testing.T) {
+	const full = "9fa9ac0919ec633c56c0528698775fd362fad5ad"
+	v := Verdict{Scenario: "s", Status: StatusPass, Commit: full}
+	out := Render(v)
+	if !strings.Contains(out, "commit "+full[:7]) {
+		t.Errorf("rendering does not carry the abbreviated commit:\n%s", out)
+	}
+	if strings.Contains(out, full) {
+		t.Errorf("rendering carries the full 40-char hash; VERDICT.md §4 abbreviates:\n%s", out)
+	}
+}
+
+// spec: R-VER-12
+//
+// A value that is not a full hash must pass through untouched — truncating
+// it would manufacture something that looks like a hash and is not.
+func TestRender_DoesNotTruncateANonHashCommit(t *testing.T) {
+	out := Render(Verdict{Scenario: "s", Status: StatusPass, Commit: "v1.2.3"})
+	if !strings.Contains(out, "commit v1.2.3") {
+		t.Errorf("non-hash commit was altered:\n%s", out)
+	}
+}

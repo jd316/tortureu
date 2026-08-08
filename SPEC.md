@@ -602,6 +602,27 @@ the backend is unreachable or unsupported, no span matches the fault's target, n
 observed at it, or no single fault identifies a target at all.
 
 **R-VER-14** *(proposed)* — A finding's confidence **MUST** be raised to `caused` **only** when
+
+**R-VER-15** *(proposed)* — A metric value rendered into a verdict — `Broke.Observed`,
+`Passed.Observed` — **MUST** be formatted for a reader, in both the JSON document and the human
+rendering (**R-VER-9**: one document, two renderings): carrying its unit where the unit is known,
+and rounded to a readable precision rather than a float's full decimal expansion.
+
+`VERDICT.md` §1 and §4 both specify this shape (`"observed": "4218ms"`). The code emitted
+`3003.2139021999997`, because the only unit rule it had keyed off a `contains: "time"` field that
+**real k6 `--summary-export` output does not contain** — the branch could never fire against the
+actual tool. The unit is therefore taken from the metric name, which k6 does define: its
+`*_duration` trend metrics are milliseconds.
+
+Precision **MUST** be significant-figure based, not fixed-decimal: a rate of `0.003` and a duration
+of `3003.21` appear in the same document, and rounding both to two decimal places would erase the
+first.
+
+Where the unit is genuinely unknown, the value **MUST** be rendered bare rather than given a
+guessed one — a wrong unit is a wrong measurement, and this document is read as evidence.
+
+*(specified before the fix, per R-PROC-2; the defect was found cross-checking emitted output
+against `VERDICT.md` §1 and §4)*
 **R-VER-13**'s chain was actually built for that finding, and **MUST** then be clamped to the
 ceiling `observability.max_confidence` already carries (**R-DET-6**, TBD-6): a finding may never
 claim more than the ceiling states. With no chain, confidence is unchanged from what

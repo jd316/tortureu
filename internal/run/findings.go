@@ -279,12 +279,12 @@ func thresholdStatKey(expr string) (string, bool) {
 // "not measured" instead of fabricating a number (the honesty rule this
 // package applies everywhere: never emit `caused` without traces, never a
 // guessed knob, and now never a value that wasn't actually read).
-func measuredValue(m map[string]any, expr string) (string, bool) {
+func measuredValue(name string, m map[string]any, expr string) (string, bool) {
 	statKey, ok := thresholdStatKey(expr)
 	if !ok {
 		return "", false
 	}
-	formatted, ok := lookupStat(m, statKey)
+	v, ok := lookupStat(m, statKey)
 	if !ok && statKey == "rate" {
 		// k6's own threshold syntax names a Rate-typed metric's aggregation
 		// function "rate" (e.g. "rate<0.01"), but real k6 --summary-export
@@ -293,15 +293,36 @@ func measuredValue(m map[string]any, expr string) (string, bool) {
 		// http_req_failed: {"value": 0, "passes": 0, "fails": 5, ...} — no
 		// "rate" key at all). Fall back to it rather than report "not
 		// measured" for data that is, in fact, right there.
-		formatted, ok = lookupStat(m, "value")
+		v, ok = lookupStat(m, "value")
 	}
 	if !ok {
 		return "", false
 	}
-	if contains, _ := m["contains"].(string); contains == "time" {
-		formatted += "ms"
+	// R-VER-15: the metric name is what carries the unit.
+	return formatObserved(name, v), true
+}
+
+// formatObserved renders a metric value for a verdict (R-VER-15): its unit
+// where the unit is known, and a readable precision.
+//
+// The unit comes from the metric NAME, not from the summary object. k6's
+// --summary-export output carries no "contains" field in practice — the
+// contains:"time" rule this package used to rely on could never fire
+// against real k6, which is why a duration reached VERDICT.md as a bare
+// 3003.2139021999997. k6 documents its *_duration trend metrics as
+// milliseconds, so the name is the reliable source.
+//
+// Precision is significant-figure based because a rate (0.003) and a
+// duration (3003.21) share one document; two decimal places would round the
+// rate away entirely.
+func formatObserved(metric string, v float64) string {
+	s := strconv.FormatFloat(v, 'g', 6, 64)
+	if strings.HasSuffix(metric, "_duration") {
+		// A guessed unit is a wrong measurement, so only the names k6
+		// actually defines as durations get one.
+		return s + "ms"
 	}
-	return formatted, true
+	return s
 }
 
 // lookupStat reads key directly off the metric object m — real k6
@@ -311,7 +332,7 @@ func measuredValue(m map[string]any, expr string) (string, bool) {
 // path fix). The "values" fallback is kept for any summary shape that does
 // nest them (e.g. an older or different export mode) rather than assuming
 // the flat shape is the only one that will ever be seen.
-func lookupStat(m map[string]any, key string) (string, bool) {
+func lookupStat(m map[string]any, key string) (float64, bool) {
 	raw, ok := m[key]
 	if !ok {
 		if values, ok2 := m["values"].(map[string]any); ok2 {
@@ -319,13 +340,13 @@ func lookupStat(m map[string]any, key string) (string, bool) {
 		}
 	}
 	if !ok {
-		return "", false
+		return 0, false
 	}
 	v, ok := raw.(float64)
 	if !ok {
-		return "", false
+		return 0, false
 	}
-	return strconv.FormatFloat(v, 'f', -1, 64), true
+	return v, true
 }
 
 // faultWindow renders a fault's declared anchor as the two-element
@@ -531,7 +552,7 @@ func evaluateThresholds(metrics map[string]any, faults []config.Fault, sys detec
 			result, _ := thresholds[expr].(map[string]any)
 			ok, _ := result["ok"].(bool)
 			assertion := fmt.Sprintf("%s: %s", name, expr)
-			observed, measured := measuredValue(m, expr)
+			observed, measured := measuredValue(name, m, expr)
 			if !measured {
 				observed = "not measured"
 			}
