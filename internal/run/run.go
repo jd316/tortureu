@@ -19,6 +19,7 @@ package run
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -195,6 +196,17 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 		v.DurationS = int(now().Sub(started).Seconds())
 		return v
 	}
+	// fail sets v.Error to an actionable reason and finishes as
+	// status:error (R-VER-2: "fail" means the SUT broke, "error" means the
+	// tool broke, and a status:error with no reason is indistinguishable
+	// from a shrug — a user cannot tell "go debug your service" from "go
+	// install k6" from status alone). reason names what failed; err is
+	// always appended, never replaced by reason alone, since the detail
+	// matters when the cause isn't one this package anticipated.
+	fail := func(reason string, err error) *verdict.Verdict {
+		v.Error = fmt.Sprintf("%s: %v", reason, err)
+		return finish(verdict.StatusError)
+	}
 
 	manager := &fault.Manager{}
 
@@ -256,6 +268,7 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 			// this assignment actually reaches the caller.
 			teardownAll() // R-EXE-5: teardown on panic
 			v.Status = verdict.StatusError
+			v.Error = fmt.Sprintf("panic: %v", r) // R-VER-2: never a bare, reasonless error
 			v.DurationS = int(now().Sub(started).Seconds())
 			runVerdict = v
 		}
@@ -313,7 +326,7 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 	}
 	internalHosts := internalNetworkFaultTargets(cfg.Faults, classes)
 	if err := deps.Topology.Apply(cfg.Target.Compose, top, externalHosts, internalHosts); err != nil {
-		return finish(verdict.StatusError)
+		return fail("apply egress topology", err)
 	}
 	if preparer, ok := deps.Applier.(interface{ EnsureProxies(map[string]string) error }); ok {
 		targets := map[string]string{}
@@ -326,13 +339,13 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 			}
 		}
 		if err := preparer.EnsureProxies(targets); err != nil {
-			return finish(verdict.StatusError)
+			return fail("configure egress proxy", err)
 		}
 	}
 
 	script, err := k6.Compile(cfg)
 	if err != nil {
-		return finish(verdict.StatusError)
+		return fail("compile k6 script", err)
 	}
 	if av, ok := abortedEarly(); ok {
 		return av
@@ -341,7 +354,12 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 	// 4. Start load; schedule faults against k6's phase markers (R-EXE-8).
 	handle, err := deps.Load.Start(script)
 	if err != nil {
-		return finish(verdict.StatusError)
+		// The most likely first-run failure of all: we do not bundle k6
+		// (R-LIC-1), so "k6 not on PATH" is what most new users will hit
+		// first. K6Runner already turns that into an actionable message
+		// (wrapStartError, load.go); other LoadRunner implementations'
+		// errors pass through as-is, still wrapped with what step failed.
+		return fail("start load generator", err)
 	}
 	schedDone, expiringTeardown := scheduleFaults(cfg.Faults, handle.Markers(), started, manager, deps.Applier, deps.QueueApplier, deps.MockApplier, classes)
 	setTeardownExpiring(expiringTeardown)
@@ -353,9 +371,8 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 		// teardownAll already ran inside the signal watcher goroutine.
 		return finish(verdict.StatusAborted)
 	case loadErr := <-handle.Err():
-		_ = loadErr
 		teardownAll()
-		return finish(verdict.StatusError)
+		return fail("load generator failed", loadErr)
 	}
 	if av, ok := abortedEarly(); ok {
 		return av
@@ -376,7 +393,7 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 		}
 		if len(realErrs) > 0 {
 			teardownAll()
-			return finish(verdict.StatusError)
+			return fail("fault scheduling failed", errors.Join(realErrs...))
 		}
 	}
 	if av, ok := abortedEarly(); ok {
@@ -386,7 +403,7 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 	metrics, err := k6.IngestSummary(result.SummaryJSON)
 	if err != nil {
 		teardownAll()
-		return finish(verdict.StatusError)
+		return fail("parse k6 summary", err)
 	}
 	v.Metrics = metrics
 

@@ -136,4 +136,8 @@ func TestRun_PanicMidRunTearsDownForDurationFaultsToo(t *testing.T) {
 	if applier.undoCalls.Load() == 0 {
 		t.Error("fault was never torn down after a mid-run panic — R-EXE-5 requires teardown on panic, including a for:-duration fault tracked outside fault.Manager")
 	}
+	// spec: R-VER-2
+	if v.Error == "" {
+		t.Error("Error is empty on a status:error verdict — R-VER-2 requires a reason distinguishing \"the tool broke\" from \"the SUT broke\", and an error with no reason is indistinguishable from a shrug")
+	}
 }

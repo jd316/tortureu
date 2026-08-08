@@ -8,6 +8,8 @@ package run
 
 import (
 	"bufio"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,6 +39,24 @@ func (r K6Runner) dir() string {
 		return r.Dir
 	}
 	return os.TempDir()
+}
+
+// wrapStartError turns cmd.Start()'s failure to launch bin into an
+// actionable message (R-VER-2: status:error means the tool itself broke,
+// and "k6 not found on PATH" is the difference between "go install k6" and
+// "go debug your service"). Since we do not bundle k6 (R-LIC-1), this is
+// the single most likely first-run failure for anyone trying the tool, and
+// os/exec's own message ("exec: \"k6\": executable file not found in
+// $PATH", or "fork/exec /path/to/k6: no such file or directory" when bin
+// contains a path separator — two different stdlib error shapes for the
+// same underlying problem) does not say what to do about it. Wraps, never
+// replaces, the original error: the detail matters when the cause turns
+// out not to be a missing binary at all.
+func wrapStartError(bin string, err error) error {
+	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("k6 not found on PATH (looked for %q) — install k6 (https://k6.io) or pass -k6-path: %w", bin, err)
+	}
+	return fmt.Errorf("start k6: %w", err)
 }
 
 type k6Handle struct {
@@ -69,7 +89,7 @@ func (r K6Runner) Start(script string) (LoadHandle, error) {
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
-		return nil, err
+		return nil, wrapStartError(r.bin(), err)
 	}
 
 	h := &k6Handle{

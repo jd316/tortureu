@@ -3,6 +3,7 @@ package run
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,5 +86,29 @@ func TestK6Runner_DoneCarriesSummaryJSONForIngestSummary(t *testing.T) {
 		t.Fatalf("Err() = %v, want a result on Done()", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for Done()")
+	}
+}
+
+// spec: R-VER-2
+func TestK6Runner_MissingBinaryReportsActionableError(t *testing.T) {
+	// Since we do not bundle k6 (R-LIC-1), "k6 not on PATH" is the most
+	// likely first-run outcome for anyone trying this tool. The bare
+	// `exec: "k6": executable file not found in $PATH` os/exec produces
+	// does not tell a new user what to do; this must say so explicitly
+	// (R-VER-2: status:error means the tool broke, and the message is what
+	// lets a user tell that apart from status:fail).
+	r := K6Runner{Bin: filepath.Join(t.TempDir(), "definitely-not-a-real-k6-binary")}
+
+	_, err := r.Start("// script")
+	if err == nil {
+		t.Fatal("Start returned nil error for a nonexistent binary")
+	}
+	if !strings.Contains(err.Error(), "k6 not found") {
+		t.Errorf("error = %q, want it to say plainly that k6 was not found, not just relay os/exec's raw message", err.Error())
+	}
+	// Wrap, don't replace: the underlying detail must still be present for
+	// a cause this package didn't anticipate.
+	if !strings.Contains(err.Error(), "not-a-real-k6-binary") {
+		t.Errorf("error = %q, want the underlying os/exec error preserved, not discarded", err.Error())
 	}
 }

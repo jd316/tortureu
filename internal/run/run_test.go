@@ -2,6 +2,7 @@ package run
 
 import (
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -174,6 +175,60 @@ func TestRun_FindingIDsAreUniqueAcrossMergedSources(t *testing.T) {
 			t.Errorf("finding ID %q used more than once — an agent calling explain_failure could not address the second one", f.ID)
 		}
 		seen[f.ID] = true
+	}
+}
+
+// spec: R-VER-2
+func TestRun_TopologyApplyFailureSetsErrorReason(t *testing.T) {
+	// R-VER-2: status:error means the tool itself broke, distinct from
+	// status:fail (the SUT broke an assertion) — a user cannot tell which
+	// they're looking at from status alone. The underlying cause (e.g. "no
+	// Dockerfile for this service") must actually reach the verdict, not
+	// be discarded the moment Run decides to fail.
+	cfg := minimalConfig()
+	sys := detect.System{}
+	wantErr := errors.New("docker compose build: no Dockerfile for service checkout-api")
+
+	v := Run(cfg, sys, Deps{
+		Reset:    &fakeResetter{},
+		Topology: &fakeTopology{err: wantErr},
+		Load:     &fakeLoadRunner{handle: newFakeLoadHandle()},
+		Applier:  &fakeApplier{},
+	}, Options{})
+
+	if v.Status != verdict.StatusError {
+		t.Fatalf("Status = %q, want error", v.Status)
+	}
+	if v.Error == "" {
+		t.Fatal("Error is empty on a status:error verdict")
+	}
+	if !strings.Contains(v.Error, wantErr.Error()) {
+		t.Errorf("Error = %q, want it to contain the underlying cause %q (wrap, don't replace)", v.Error, wantErr.Error())
+	}
+}
+
+// spec: R-VER-2
+func TestRun_LoadStartFailureSetsErrorReason(t *testing.T) {
+	// The load generator failing to start — most commonly because k6 isn't
+	// installed (R-LIC-1: this tool never bundles it) — must not read as a
+	// blank ERROR: this is the most likely first-run outcome for anyone
+	// trying the tool for the first time.
+	cfg := minimalConfig()
+	sys := detect.System{}
+	wantErr := errors.New("k6 not found on PATH (looked for \"k6\") — install k6 (https://k6.io) or pass -k6-path")
+
+	v := Run(cfg, sys, Deps{
+		Reset:    &fakeResetter{},
+		Topology: &fakeTopology{},
+		Load:     &fakeLoadRunner{err: wantErr},
+		Applier:  &fakeApplier{},
+	}, Options{})
+
+	if v.Status != verdict.StatusError {
+		t.Fatalf("Status = %q, want error", v.Status)
+	}
+	if !strings.Contains(v.Error, "k6 not found") {
+		t.Errorf("Error = %q, want it to name the actual cause (k6 missing), not a generic failure message", v.Error)
 	}
 }
 
