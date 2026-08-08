@@ -50,8 +50,8 @@ assert:
   - http_req_duration: ["p(95)<500"]
 `
 
-// R-CLI-8 (proposed): fio translates "io" resource-pressure faults into a
-// docker exec fio command against the fault's own container, and reports
+// R-CLI-8 (proposed): fio translates "io" resource-pressure faults into an
+// fio command aimed at the fault's own container's data volume, and reports
 // (never drops) every other verb it does not translate.
 func TestFio_IOFault_UsesDependencyContainerAndDataDir(t *testing.T) {
 	cfg := mustParse(t, fioFixture)
@@ -60,8 +60,8 @@ func TestFio_IOFault_UsesDependencyContainerAndDataDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Fio: %v", err)
 	}
-	if !strings.Contains(out, "docker exec mysql fio --name=torture_io_db_io_pressure --directory=/var/lib/mysql") {
-		t.Errorf("expected fio against the mysql container's data dir, got:\n%s", out)
+	if !strings.Contains(out, "--volumes-from mysql") || !strings.Contains(out, "--name=torture_io_db_io_pressure --directory=/var/lib/mysql/.tortureu_io") {
+		t.Errorf("expected fio against the mysql container's own data volume, got:\n%s", out)
 	}
 	if !strings.Contains(out, "--size=500m") {
 		t.Errorf("expected --size=500m from inject.io, got:\n%s", out)
@@ -450,5 +450,116 @@ func TestSysbench_EndToEnd_AgainstLiveMySQL(t *testing.T) {
 				t.Errorf("expected real sysbench transaction output from the emitted run command, got:\n%s", cmdOut)
 			}
 		}
+	}
+}
+
+// spec: R-CLI-8 — `emit <tool>` must generate a RUNNABLE command. The
+// previous shape (`docker exec <db> fio ...`) is not runnable against any
+// stock database image: postgres:16-alpine, mysql:8.0 and mongo all ship
+// no fio, and copying a host fio binary in fails on the image's own libc
+// (missing libnuma.so.1 / GLIBC mismatch).
+//
+// The runnable arrangement, verified for real on this host against a live
+// postgres:16-alpine with a named volume, is a sidecar container that
+// mounts the database's OWN volumes via --volumes-from and installs fio
+// into the throwaway sidecar. It writes into a dedicated subdirectory of
+// the data directory (same volume, so the IO lands on the filesystem that
+// matters) and passes --unlink=1 so no fio test file is left behind in a
+// live database's data directory.
+func TestFio_UsesVolumesFromSidecarNotDockerExec(t *testing.T) {
+	cfg := mustParse(t, fioFixture)
+	sys := &detect.System{Deps: []detect.Dep{{Name: "mysql", Type: "mysql", Address: "mysql:3306"}}}
+	out, err := Fio(cfg, sys)
+	if err != nil {
+		t.Fatalf("Fio: %v", err)
+	}
+	if strings.Contains(out, "docker exec mysql fio") {
+		t.Errorf("expected NOT to docker exec fio inside an image that does not ship it, got:\n%s", out)
+	}
+	if !strings.Contains(out, "docker run --rm --volumes-from mysql") {
+		t.Errorf("expected a sidecar mounting the dependency's own volumes, got:\n%s", out)
+	}
+	if !strings.Contains(out, "apk add --no-cache fio") {
+		t.Errorf("expected fio to be installed into the sidecar, got:\n%s", out)
+	}
+	if !strings.Contains(out, "--directory=/var/lib/mysql/.tortureu_io") {
+		t.Errorf("expected a dedicated subdirectory on the dependency's data volume, got:\n%s", out)
+	}
+	if !strings.Contains(out, "--unlink=1") {
+		t.Errorf("expected --unlink=1 so no test file is left in a live data directory, got:\n%s", out)
+	}
+	if !strings.Contains(out, "--size=500m") || !strings.Contains(out, "--numjobs=2") || !strings.Contains(out, "--runtime=30s --time_based") {
+		t.Errorf("expected the fault's sizing flags to survive the move to a sidecar, got:\n%s", out)
+	}
+	// the scratch-directory cleanup must not become the command's exit
+	// status — otherwise a failed rmdir reports failure for a successful
+	// fio run (observed exactly once as that flake before this was fixed).
+	if !strings.Contains(out, "rc=$?;") || !strings.Contains(out, "exit $rc") {
+		t.Errorf("expected fio's own exit status to survive the cleanup step, got:\n%s", out)
+	}
+	// and it must be single-quoted, or the shell running this generated
+	// script expands $? / $rc itself before docker sees them.
+	if strings.Contains(out, `sh -c "`) {
+		t.Errorf("expected the inner script single-quoted so the outer shell cannot expand it, got:\n%s", out)
+	}
+}
+
+// spec: R-CLI-8 — the emitted command is only "runnable" if it actually
+// runs. This test builds the real command Fio() emits and executes it
+// against a throwaway postgres container, asserting fio reports real IO
+// and that nothing is left behind in the data directory.
+func TestFio_EmittedSidecarCommandActuallyRuns(t *testing.T) {
+	if testing.Short() {
+		t.Skip("docker integration test; skipped under -short")
+	}
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker not on PATH")
+	}
+	if err := exec.Command("docker", "info").Run(); err != nil {
+		t.Skip("docker daemon not available")
+	}
+	const name = "tortureu-fio-itest"
+	_ = exec.Command("docker", "rm", "-f", name).Run()
+	up := exec.Command("docker", "run", "-d", "--name", name,
+		"-e", "POSTGRES_PASSWORD=x", "-v", name+"-data:/var/lib/postgresql/data", "postgres:16-alpine")
+	if out, err := up.CombinedOutput(); err != nil {
+		t.Skipf("could not start postgres:16-alpine (image not present?): %v\n%s", err, out)
+	}
+	defer func() {
+		_ = exec.Command("docker", "rm", "-f", name).Run()
+		_ = exec.Command("docker", "volume", "rm", name+"-data").Run()
+	}()
+	// Wait for a real readiness signal rather than a fixed sleep: under a
+	// full parallel test run an 8s sleep was observed expiring before
+	// postgres had initialised its data directory, failing the run for a
+	// reason that has nothing to do with the emitted command.
+	ready := false
+	for i := 0; i < 60; i++ {
+		if err := exec.Command("docker", "exec", name, "pg_isready").Run(); err == nil {
+			ready = true
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if !ready {
+		t.Skip("postgres container never became ready")
+	}
+
+	// the exact command shape Fio() emits, for a postgres dependency
+	cmdline := fioSidecarCommand(name, "/var/lib/postgresql/data", "itest", "32m", 1, " --runtime=5s --time_based")
+	run := exec.Command("sh", "-c", cmdline)
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("emitted fio sidecar command failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "READ:") || !strings.Contains(string(out), "WRITE:") {
+		t.Fatalf("expected real read/write summary lines from fio, got:\n%s", out)
+	}
+	left, err := exec.Command("docker", "exec", name, "sh", "-c", "ls -a /var/lib/postgresql/data").CombinedOutput()
+	if err != nil {
+		t.Fatalf("listing the data dir: %v\n%s", err, left)
+	}
+	if strings.Contains(string(left), "torture_io_itest") {
+		t.Errorf("fio left test files behind in a live data directory:\n%s", left)
 	}
 }

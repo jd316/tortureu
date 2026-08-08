@@ -159,7 +159,11 @@ func TestGatling_HeaderDisclosesVerificationStatus(t *testing.T) {
 	}
 }
 
-func TestLocust_ProducesLoadShapeApproximatingOpenModel(t *testing.T) {
+// spec: R-CFG-6 — the LoadTestShape survives, but its job is inverted: it
+// holds exactly one user (the arrival pacer) for the run's duration, and
+// deliberately does NOT use user_count as the load knob, because
+// user_count is the size of a closed pool.
+func TestLocust_LoadShapeHoldsASinglePacerNotAUserPool(t *testing.T) {
 	cfg := mustParse(t, loadgenFixture)
 	out, err := Locust(cfg)
 	if err != nil {
@@ -168,31 +172,33 @@ func TestLocust_ProducesLoadShapeApproximatingOpenModel(t *testing.T) {
 	if !strings.Contains(out, "class TortureULoadShape(LoadTestShape)") {
 		t.Errorf("expected a custom LoadTestShape, got:\n%s", out)
 	}
-	if !strings.Contains(out, "200") {
-		t.Errorf("expected the 200rps target to appear, got:\n%s", out)
+	if !strings.Contains(out, "return (1, 1)") {
+		t.Errorf("expected the shape to hold exactly one pacer user, got:\n%s", out)
 	}
-	if !strings.Contains(out, "closed") {
-		t.Errorf("expected the header to disclose Locust's closed-model limitation, got:\n%s", out)
+	if !strings.Contains(out, "TOTAL_RUNTIME") {
+		t.Errorf("expected the shape to end the run at the last stage's end, got:\n%s", out)
 	}
 }
 
-func TestLocust_WeightedTasksMatchScenarioWeights(t *testing.T) {
+// spec: R-CFG-6 — the single pacer user still targets target.base_url,
+// and there is deliberately no longer a @task per scenario: in an open
+// model the pacer picks each arrival's flow (see
+// TestLocust_ScenarioTableCarriesWeightsAndFlows), so Locust's own task
+// scheduler must not be the thing deciding the mix.
+func TestLocust_HostIsSetAndSchedulingIsNotLeftToTaskWeights(t *testing.T) {
 	cfg := mustParse(t, loadgenFixture)
 	out, err := Locust(cfg)
 	if err != nil {
 		t.Fatalf("Locust: %v", err)
 	}
-	if !strings.Contains(out, "@task(3)") || !strings.Contains(out, "@task(1)") {
-		t.Errorf("expected task weights 3 and 1 from the scenarios, got:\n%s", out)
-	}
-	if !strings.Contains(out, `self.client.get("/products")`) {
-		t.Errorf("expected the browse scenario's GET, got:\n%s", out)
-	}
-	if !strings.Contains(out, `self.client.post("/cart"`) || !strings.Contains(out, `self.client.post("/checkout"`) {
-		t.Errorf("expected the checkout scenario's POSTs, got:\n%s", out)
-	}
 	if !strings.Contains(out, `host = "http://localhost:8080"`) {
 		t.Errorf("expected host set from target.base_url, got:\n%s", out)
+	}
+	if strings.Contains(out, "@task(3)") || strings.Contains(out, "@task(1)") {
+		t.Errorf("expected no per-scenario @task weights in an open model, got:\n%s", out)
+	}
+	if !strings.Contains(out, "self.client.request(method, path, data=body)") {
+		t.Errorf("expected each arrival to drive its flow through one request call, got:\n%s", out)
 	}
 }
 
@@ -224,4 +230,101 @@ func TestLocust_OutputIsValidPython(t *testing.T) {
 		t.Fatalf("Locust: %v", err)
 	}
 	assertPyCompiles(t, out)
+}
+
+// spec: R-CFG-6 — load.model MUST be arrival_rate (an OPEN model): the
+// arrival rate is independent of response time, precisely so a slowdown
+// does not silently throttle the offered load (coordinated omission).
+//
+// Locust ships no open-model executor, and its two candidate wait-time
+// primitives are both "at most" pacers on a fixed pool of looping users,
+// so neither can satisfy R-CFG-6. Measured on this host (locust 2.46.3,
+// 200rps declared for 20s against a Go target with fixed injected
+// latency, arrivals counted server-side):
+//
+//	wait_time                latency  achieved
+//	constant_pacing(1)          10ms   200 rps
+//	constant_pacing(1)         500ms   200 rps
+//	constant_pacing(1)         900ms   200 rps
+//	constant_pacing(1)        1200ms   170 rps
+//	constant_pacing(1)        2000ms   100 rps  (arrivals bunched 200,0,200,0)
+//	constant_throughput(1)     500ms   200 rps
+//	constant_throughput(1)    2000ms   100 rps
+//
+// i.e. achieved = declared * min(1, pacing_interval / response_time) —
+// the rate holds only while responses stay under the pacing interval,
+// which is exactly the regime where the open model does not matter.
+//
+// The emit therefore must NOT drive the rate from a wait_time at all: it
+// paces arrivals itself and dispatches each into its own greenlet, so an
+// in-flight request cannot delay the next arrival.
+func TestLocust_EmitsOpenModelArrivalPacer(t *testing.T) {
+	cfg := mustParse(t, loadgenFixture)
+	out, err := Locust(cfg)
+	if err != nil {
+		t.Fatalf("Locust: %v", err)
+	}
+	if !strings.Contains(out, "gevent.spawn_later") {
+		t.Errorf("expected arrivals dispatched via gevent so response time cannot gate them, got:\n%s", out)
+	}
+	if strings.Contains(out, "wait_time = constant_pacing(") || strings.Contains(out, "wait_time = constant_throughput(") {
+		t.Errorf("expected the arrival rate NOT to be driven by a closed-model wait_time, got:\n%s", out)
+	}
+	if !strings.Contains(out, "def rate_at(") || !strings.Contains(out, "STAGES = [") {
+		t.Errorf("expected a declared arrival-rate schedule, got:\n%s", out)
+	}
+}
+
+// spec: R-CFG-6 — the stage table the pacer reads must carry the declared
+// load.stages rates and durations, with a ramp's implicit "from" being the
+// previous stage's end rate.
+func TestLocust_StageTableCarriesDeclaredArrivalRates(t *testing.T) {
+	cfg := mustParse(t, loadgenFixture)
+	out, err := Locust(cfg)
+	if err != nil {
+		t.Fatalf("Locust: %v", err)
+	}
+	if !strings.Contains(out, `(0, 30, 0, 200),  # phase "ramp_up"`) {
+		t.Errorf("expected the ramp_up stage 0->200rps over 30s, got:\n%s", out)
+	}
+	if !strings.Contains(out, `(30, 90, 200, 200),  # phase "peak"`) {
+		t.Errorf("expected the peak stage held at 200rps for 60s, got:\n%s", out)
+	}
+}
+
+// spec: R-CFG-6 — scenario weighting must survive the move off @task(n):
+// in an open model the pacer picks the flow per arrival, so the weights
+// live in a table it samples rather than in Locust's task scheduler.
+func TestLocust_ScenarioTableCarriesWeightsAndFlows(t *testing.T) {
+	cfg := mustParse(t, loadgenFixture)
+	out, err := Locust(cfg)
+	if err != nil {
+		t.Fatalf("Locust: %v", err)
+	}
+	if !strings.Contains(out, `(3, [("GET", "/products", None)]),  # scenario "browse"`) {
+		t.Errorf("expected the browse scenario weighted 3, got:\n%s", out)
+	}
+	if !strings.Contains(out, `("POST", "/cart", "{\"sku\":\"abc\"}")`) {
+		t.Errorf("expected the checkout POST with its body, got:\n%s", out)
+	}
+	if !strings.Contains(out, `("POST", "/checkout", None)`) {
+		t.Errorf("expected the checkout second step, got:\n%s", out)
+	}
+}
+
+// spec: R-CFG-6 — the header must state what was actually measured, not a
+// general disclaimer. It must also keep the one limitation that genuinely
+// survives: the pacer is a single Locust user, so `--worker` distributed
+// mode does not divide the rate across workers.
+func TestLocust_HeaderStatesMeasuredEvidenceAndSurvivingLimit(t *testing.T) {
+	cfg := mustParse(t, loadgenFixture)
+	out, err := Locust(cfg)
+	if err != nil {
+		t.Fatalf("Locust: %v", err)
+	}
+	for _, want := range []string{"OPEN MODEL", "2.46.3", "2000ms", "Distributed mode"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected the header to mention %q, got:\n%s", want, out)
+		}
+	}
 }
