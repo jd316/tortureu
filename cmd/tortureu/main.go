@@ -13,7 +13,6 @@ import (
 // v0 (PLAN.md Task 8): they exit 2 naming themselves rather than silently
 // doing nothing or pretending to succeed.
 var stubVerbs = map[string]bool{
-	"smoke":   true,
 	"check":   true,
 	"emit":    true,
 	"capture": true,
@@ -38,6 +37,8 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		return runInit(rest, stdout, stderr)
 	case verb == "run":
 		return runRun(rest, stdout, stderr)
+	case verb == "smoke":
+		return runSmoke(rest, stdout, stderr)
 	case verb == "doctor":
 		return runDoctor(rest, stdout, stderr)
 	case verb == "mcp":
