@@ -3,7 +3,9 @@ package run
 import (
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"testing"
+	"time"
 )
 
 // spec: R-CFG-17
@@ -80,4 +82,73 @@ func TestHTTPPromQuerier_ServerErrorIsReported(t *testing.T) {
 	if _, _, err := q.Query(`invalid{`); err == nil {
 		t.Error("Query returned nil error for a Prometheus-reported query failure")
 	}
+}
+
+// spec: R-CFG-17
+//
+// TestHTTPPromQuerier_NonEmptyResultMeansConditionHolds (above) already
+// proves the out-of-stack case, unchanged by this fix: an httptest.Server
+// is always directly reachable from the host, so Query's primary path
+// succeeds and the fallback below is never even attempted. This test
+// proves the other half an E1 finding identified: R-DC2-3's own topology
+// enforcement can put a real Prometheus on the SUT's internal-only
+// network, unreachable as a plain host-process HTTP call — the identical
+// reachability problem K6Runner already solves for the SUT itself (see
+// load.go's package doc comment), one layer over. The container below
+// publishes no port at all, standing in for exactly that shape; Query
+// must still reach it, by joining its own network namespace rather than
+// assuming host reachability.
+func TestHTTPPromQuerier_ReachesInStackPrometheusViaContainerNamespace(t *testing.T) {
+	dockerAvailable(t)
+
+	name := "promt-" + uniqueSuffix("prom")
+	out, err := exec.Command("docker", "run", "-d", "--name", name,
+		// discoverSUTContainer (reused, unmodified, for any compose
+		// service — not just the SUT) keys off this exact label.
+		"--label", "com.docker.compose.service="+name,
+		"busybox:1.36", "sh", "-c",
+		`mkdir -p /www/api/v1 && printf '{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"1"]}]}}' > /www/api/v1/query && httpd -f -p 9090 -h /www`,
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker run: %v: %s", err, out)
+	}
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+
+	// Confirm the premise before asserting the fix: no published port
+	// means a plain host dial cannot reach it, exactly the failure mode
+	// this fix addresses. If this ever starts passing, the test below
+	// would no longer be testing what it claims to.
+	deadline := waitForContainer(t, name)
+	_ = deadline
+	if portOut, _ := exec.Command("docker", "port", name).Output(); len(portOut) != 0 {
+		t.Fatalf("container unexpectedly has a published port (%s) — this test needs an unpublished one to reproduce the DC-2-isolated shape", portOut)
+	}
+
+	q := HTTPPromQuerier{BaseURL: "http://" + name + ":9090"}
+	holds, observed, err := q.Query("up")
+	if err != nil {
+		t.Fatalf("Query: %v — a plain host-process HTTP call cannot reach this container (no published port); Query must fall back to joining its network namespace", err)
+	}
+	if !holds {
+		t.Error("holds = false, want true (the query returned a result)")
+	}
+	if observed != "1" {
+		t.Errorf("observed = %q, want %q", observed, "1")
+	}
+}
+
+// waitForContainer polls until name's httpd is actually accepting
+// connections inside its own namespace, so the test above isn't racing the
+// container's own startup — a container-hop request that arrives before
+// httpd has bound its port would fail for an unrelated, flaky reason.
+func waitForContainer(t *testing.T, name string) bool {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		if out, err := exec.Command("docker", "exec", name, "wget", "-qO-", "http://localhost:9090/api/v1/query").CombinedOutput(); err == nil && len(out) > 0 {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("container's httpd never became reachable via docker exec")
+	return false
 }

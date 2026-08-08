@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -408,6 +409,22 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 			return fail("locate SUT container for the load generator's network attachment", err)
 		}
 		setter.SetSUTContainer(sutContainer)
+	}
+
+	// R-CFG-17/R-EXE-15: the orchestrator itself makes outbound calls into
+	// the stack DC-2 just isolated — promql: asserts against Prometheus,
+	// poison_pill/duplicate against the broker's admin API — and an E1
+	// finding showed neither has any equivalent of the fix above: a plain
+	// host-process HTTP call cannot reach a target R-DC2-3 moved onto the
+	// SUT's internal-only network, the identical reachability problem
+	// solved for k6/the SUT, one layer over. HTTPPromQuerier's default
+	// client (promql.go) already carries this fix internally; BrokerApplier
+	// lives in internal/applier (untouched here) but already exposes an
+	// injectable Client field for exactly this kind of substitution — wire
+	// the same fallback transport into it, without overriding a caller who
+	// already supplied their own client.
+	if broker, ok := deps.QueueApplier.(*realapplier.BrokerApplier); ok && broker.Client == nil {
+		broker.Client = &http.Client{Transport: fallbackTransport{}}
 	}
 
 	script, err := k6.Compile(cfg)

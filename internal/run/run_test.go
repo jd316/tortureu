@@ -2,11 +2,13 @@ package run
 
 import (
 	"errors"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	realapplier "github.com/jdb316/tortureu/internal/applier"
 	"github.com/jdb316/tortureu/internal/config"
 	"github.com/jdb316/tortureu/internal/detect"
 	"github.com/jdb316/tortureu/internal/egress"
@@ -418,6 +420,59 @@ func TestRun_TeardownDisabledCalledOnSuccessAndFailurePaths(t *testing.T) {
 			t.Errorf("TeardownDisabled calls = %d, want exactly 1 — a failure partway through the run must still clean up the disabled service, not just a clean finish", topo.teardownCalls)
 		}
 	})
+}
+
+// spec: R-EXE-15
+//
+// An E1 finding: poison_pill/duplicate (routed to internal/applier's
+// BrokerApplier, R-EXE-15's broker-producer row) hit the identical
+// reachability problem R-DC2-3 creates for the load generator — a plain
+// host-process HTTP call cannot reach a broker admin API DC-2's topology
+// enforcement moved onto the SUT's internal-only network. BrokerApplier
+// lives in a different package (untouched here) but already exposes an
+// injectable Client field for exactly this kind of substitution; this
+// proves Run wires the same fallback-then-in-stack transport
+// (inreach.go's fallbackTransport, already proven against a real
+// DC-2-isolated target for Prometheus in promql_test.go) into it.
+func TestRun_WiresFallbackTransportIntoBrokerApplierClient(t *testing.T) {
+	broker := &realapplier.BrokerApplier{BaseURL: "http://broker:8082"}
+	handle := newFakeLoadHandle()
+	handle.done <- LoadResult{SummaryJSON: []byte(`{"metrics":{}}`)}
+
+	v := Run(minimalConfig(), detect.System{}, Deps{
+		Reset:        &fakeResetter{},
+		Topology:     &fakeTopology{},
+		Load:         &fakeLoadRunner{handle: handle},
+		Applier:      &fakeApplier{},
+		QueueApplier: broker,
+	}, Options{})
+
+	if v.Status != verdict.StatusPass {
+		t.Fatalf("Status = %q, want pass (verdict: %+v)", v.Status, v)
+	}
+	if broker.Client == nil {
+		t.Fatal("BrokerApplier.Client is nil, want the fallback transport wired in so poison_pill/duplicate can reach a DC-2-isolated broker")
+	}
+}
+
+// spec: R-EXE-15
+func TestRun_DoesNotOverrideAnExplicitlySetBrokerApplierClient(t *testing.T) {
+	custom := &http.Client{}
+	broker := &realapplier.BrokerApplier{BaseURL: "http://broker:8082", Client: custom}
+	handle := newFakeLoadHandle()
+	handle.done <- LoadResult{SummaryJSON: []byte(`{"metrics":{}}`)}
+
+	Run(minimalConfig(), detect.System{}, Deps{
+		Reset:        &fakeResetter{},
+		Topology:     &fakeTopology{},
+		Load:         &fakeLoadRunner{handle: handle},
+		Applier:      &fakeApplier{},
+		QueueApplier: broker,
+	}, Options{})
+
+	if broker.Client != custom {
+		t.Error("BrokerApplier.Client was overridden even though a caller already supplied one")
+	}
 }
 
 // spec: R-EXE-20

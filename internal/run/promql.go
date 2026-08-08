@@ -32,7 +32,12 @@ func (q HTTPPromQuerier) client() *http.Client {
 	if q.Client != nil {
 		return q.Client
 	}
-	return http.DefaultClient
+	// fallbackTransport (inreach.go): a direct call first, falling back to
+	// reaching the target's own container network namespace only if that
+	// fails — the fix for an E1 finding that a DC-2-isolated Prometheus is
+	// unreachable as a plain host-process HTTP call, the same shape
+	// K6Runner already solves for the SUT itself, one layer over.
+	return &http.Client{Transport: fallbackTransport{}}
 }
 
 type promResponse struct {
