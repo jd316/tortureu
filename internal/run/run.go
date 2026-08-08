@@ -55,6 +55,19 @@ type Options struct {
 	// Multiplier is the replay multiplier CheckMultiplier guards. Zero is
 	// treated as 1x (no replay scaling), never as "no traffic".
 	Multiplier float64
+	// DBLoad co-executes pgbench against the detected PostgreSQL
+	// dependency for the duration of the run (R-EXE-26's --db-load).
+	DBLoad bool
+	// DBURL is the connection string pgbench is given. There is no default
+	// and none is derived: R-EXE-26 forbids guessing credentials or a
+	// database name.
+	DBURL string
+	// Fuzz co-executes schemathesis against the SUT's OpenAPI document for
+	// the duration of the run (R-EXE-27's --fuzz).
+	Fuzz bool
+	// FuzzSpec overrides torture.yaml's target.openapi as the document to
+	// fuzz. Empty with no target.openapi is a refusal, never a search.
+	FuzzSpec string
 }
 
 // Resetter runs the user-supplied reset command before load begins
@@ -141,7 +154,15 @@ type Deps struct {
 	// error_rate against a class: mock host then fails per R-EXE-19 rather
 	// than silently skipping the fault.
 	MockApplier MockApplier
-	Prom        PromQuerier
+	// DBLoad is the drive-tier DB saturation runner (PgbenchRunner,
+	// pgbench.go), used only when Options.DBLoad is set. nil with the flag
+	// set is a refusal, never a silent skip (R-EXE-26).
+	DBLoad DBLoadRunner
+	// Fuzz is the drive-tier spec fuzzer (SchemathesisRunner,
+	// schemathesis.go), used only when Options.Fuzz is set. nil with the
+	// flag set is a refusal, never a silent skip (R-EXE-27).
+	Fuzz Fuzzer
+	Prom PromQuerier
 	// Now is the wall clock used only for verdict timestamps/duration —
 	// never for fault scheduling (R-EXE-8: that clock is k6's). Defaults to
 	// time.Now.
@@ -195,6 +216,16 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 	}
 	started := now()
 	v := newVerdict(started, cfg.Target.Service)
+	// R-VER-11: state what this repo's observability can support, on every
+	// verdict including the ones that end early. Detection has already
+	// computed it (R-DET-6) and nothing here recomputes or second-guesses
+	// it; MaxConfidence has a floor of "correlated" and is never empty.
+	v.Observability = verdict.Observability{
+		Traces:        sys.Obs.Traces,
+		Metrics:       sys.Obs.Metrics,
+		Logs:          sys.Obs.Logs,
+		MaxConfidence: verdict.Confidence(sys.Obs.MaxConfidence),
+	}
 	finish := func(status verdict.Status) *verdict.Verdict {
 		v.Status = status
 		v.DurationS = int(now().Sub(started).Seconds())
@@ -248,8 +279,25 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 		teardownTopology = f
 		topoMu.Unlock()
 	}
+	// teardownDrivers is the same lazily-armed pattern as the two above,
+	// for the co-driven load sources (--db-load / --fuzz, R-EXE-26/27):
+	// nothing to stop until the first phase marker starts them. A crashed
+	// or interrupted run must never leave pgbench hammering a developer's
+	// database (R-EXE-5, R-EXE-16), so it hangs off the same teardownAll
+	// every fault already does.
+	var drvMu sync.Mutex
+	teardownDrivers := func() {}
+	setTeardownDrivers := func(f func()) {
+		drvMu.Lock()
+		teardownDrivers = f
+		drvMu.Unlock()
+	}
 	teardownAll := func() {
 		manager.Teardown() // R-EXE-5
+		drvMu.Lock()
+		df := teardownDrivers
+		drvMu.Unlock()
+		df()
 		teMu.Lock()
 		f := teardownExpiring
 		teMu.Unlock()
@@ -317,6 +365,16 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 			return finish(verdict.StatusAborted), true
 		}
 		return nil, false
+	}
+
+	// 0. Refuse an unusable drive-tier flag before anything is perturbed
+	// (R-EXE-26, R-EXE-27): no postgres to saturate, no connection string,
+	// no OpenAPI document, no binary on PATH. Discovering any of those
+	// after a reset has already wiped the stack teaches the user nothing,
+	// and silently proceeding without the co-driven load would be the
+	// silent omission this project rejects everywhere.
+	if err := checkDriveFlags(cfg, sys, deps, opts); err != nil {
+		return fail("drive-tier co-execution refused", err)
 	}
 
 	// 1. Reset (R-CFG-20/21, R-EXE-2), unless --no-reset.
@@ -452,7 +510,19 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 		teardownAll()
 		return fail("start load generator", err)
 	}
-	schedDone, expiringTeardown := scheduleFaults(cfg.Faults, handle.Markers(), started, manager, deps.Applier, deps.QueueApplier, deps.MockApplier, classes)
+	// R-EXE-26/R-EXE-27: the co-driven tools start off the *same* clock the
+	// faults follow — k6's first phase marker (R-EXE-8) — not off this
+	// package's wall clock, and not before load exists. teeMarkers forwards
+	// every marker to the scheduler unchanged, so the fault path is
+	// untouched whether or not either flag is set.
+	markers := handle.Markers()
+	var drivers *coDrivers
+	if opts.DBLoad || opts.Fuzz {
+		drivers = newCoDrivers(cfg, deps, opts)
+		markers = teeMarkers(markers, drivers.start)
+		setTeardownDrivers(drivers.stop)
+	}
+	schedDone, expiringTeardown := scheduleFaults(cfg.Faults, markers, started, manager, deps.Applier, deps.QueueApplier, deps.MockApplier, classes)
 	setTeardownExpiring(expiringTeardown)
 
 	var result LoadResult
@@ -510,6 +580,21 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 	// compose file) — this package still never opens a source file itself.
 	auditFindings := doctor.Audit(filepath.Dir(cfg.Target.Compose), &sys)
 
+	// R-EXE-26/R-EXE-27: stop the co-driven tools and fold what they
+	// produced into this run's one verdict — that is what `drive` tier
+	// means. A tool that could not run at all is TortureU failing
+	// (status: error); the failures a fuzzer found are the SUT failing and
+	// become findings below, never an error (R-VER-2).
+	var fuzzFindings []verdict.Finding
+	if drivers != nil {
+		var driveErr error
+		fuzzFindings, driveErr = applyDriveResults(v, drivers.collect(), cfg, sys, auditFindings, drivers.everStarted())
+		if driveErr != nil {
+			teardownAll()
+			return fail("co-driven load source failed", driveErr)
+		}
+	}
+
 	thresholdPassed, thresholdFindings := evaluateThresholds(metrics, cfg.Faults, sys, auditFindings)
 	promPassed, promFindings := evaluatePromqlAsserts(cfg.Assert, deps.Prom, cfg.Faults, sys, auditFindings)
 	sqlFindings := evaluateSQLAsserts(cfg.Assert)
@@ -523,7 +608,7 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 	// each of which used to number its own findings from f1: two sources
 	// could then emit the same ID, making one of them unaddressable by an
 	// agent calling explain_failure (it returns the first match).
-	findings := append(append(thresholdFindings, promFindings...), sqlFindings...)
+	findings := append(append(append(thresholdFindings, promFindings...), sqlFindings...), fuzzFindings...)
 	for i := range findings {
 		findings[i].ID = fmt.Sprintf("f%d", i+1)
 	}

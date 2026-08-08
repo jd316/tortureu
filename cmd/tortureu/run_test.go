@@ -139,7 +139,7 @@ func TestBuildRealDepsWiresApplierEndpointsFromFlagValues(t *testing.T) {
 // field set, so egress.CheckMultiplier was always called (1, false) and a
 // replay multiplier could never trigger its guard.
 func TestBuildRunOptionsWiresMultiplierAndAllowRealTrafficFromFlagValues(t *testing.T) {
-	opts := buildRunOptions(false, true, 5.0)
+	opts := buildRunOptions(false, true, 5.0, driveFlags{})
 	if !opts.AllowRealTraffic {
 		t.Error("allowRealTraffic=true did not reach Options.AllowRealTraffic")
 	}
@@ -147,7 +147,7 @@ func TestBuildRunOptionsWiresMultiplierAndAllowRealTrafficFromFlagValues(t *test
 		t.Errorf("Options.Multiplier = %v, want 5.0", opts.Multiplier)
 	}
 
-	opts2 := buildRunOptions(true, false, 2.5)
+	opts2 := buildRunOptions(true, false, 2.5, driveFlags{})
 	if !opts2.NoReset {
 		t.Error("noReset=true did not reach Options.NoReset")
 	}
@@ -211,5 +211,45 @@ func TestRunInvalidConfigExitsTwo(t *testing.T) {
 	}
 	if !strings.Contains(errb.String(), "target.compose") {
 		t.Errorf("expected config parse error surfaced, got: %s", errb.String())
+	}
+}
+
+// spec: R-EXE-26
+//
+// The same wiring proof for the two drive-tier flags: -db-load/-db-url and
+// -fuzz/-fuzz-spec must reach internal/run.Options, or the flags parse and
+// nothing co-executes — the "built but unwired" failure this project has
+// hit three times.
+func TestBuildRunOptionsWiresDriveTierFlags(t *testing.T) {
+	opts := buildRunOptions(false, false, 1, driveFlags{
+		dbLoad: true, dbURL: "postgresql://u:p@h:5432/d",
+		fuzz: true, fuzzSpec: "api/openapi.yaml",
+	})
+	if !opts.DBLoad || opts.DBURL != "postgresql://u:p@h:5432/d" {
+		t.Errorf("-db-load/-db-url did not reach Options: %+v", opts)
+	}
+	if !opts.Fuzz || opts.FuzzSpec != "api/openapi.yaml" {
+		t.Errorf("-fuzz/-fuzz-spec did not reach Options: %+v", opts)
+	}
+}
+
+// spec: R-EXE-27
+//
+// The flags must really be declared by the verb (check.py gates the
+// registry `how:` against the flags cmd/tortureu actually parses), and
+// -db-load's help must state the pgbench_* write it performs.
+func TestRunDeclaresDriveTierFlagsWithTheStatedSideEffect(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := runRun([]string{"-h"}, &out, &errb); code != 2 {
+		t.Fatalf("runRun -h exit = %d, want 2", code)
+	}
+	usage := out.String() + errb.String()
+	for _, flag := range []string{"-db-load", "-db-url", "-fuzz", "-fuzz-spec"} {
+		if !strings.Contains(usage, flag) {
+			t.Errorf("usage does not declare %s:\n%s", flag, usage)
+		}
+	}
+	if !strings.Contains(usage, "pgbench_*") {
+		t.Error("-db-load help does not state that pgbench initialization creates and drops pgbench_* tables (R-EXE-26)")
 	}
 }

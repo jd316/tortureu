@@ -66,6 +66,37 @@ var clientKnobPatterns = []struct {
 	// Transport.MaxIdleConnsPerHost is the connection-pool knob — net/http's
 	// equivalent of the pgx pool-exhaustion knob above.
 	{"net/http", []string{"Client.Timeout", "Transport.ResponseHeaderTimeout", "Transport.DialContext", "Transport.TLSHandshakeTimeout", "Transport.MaxIdleConnsPerHost"}},
+	// Java clients (R-DET-14's pom.xml support). Detection records Maven
+	// coordinates, which are distinctive enough for substring matching.
+	// Every name below is a real property of the named library, checked
+	// against its own documentation — the same rule the rest of this table
+	// follows, and the reason `pool` knobs are attached to the pool and
+	// driver knobs to the driver rather than mixed.
+	{"org.postgresql:postgresql", []string{"connectTimeout", "socketTimeout", "loginTimeout"}},
+	// HikariCP is the connection pool behind Spring Boot's JPA starter.
+	// It is listed as its own entry rather than folded into the JDBC
+	// driver's knobs because they are different objects with different
+	// settings — and it fires only when the pool itself is a detected
+	// client, which internal/detect does not currently record (R-AUD-5: a
+	// knob attributed to a library we did not see would be a guess).
+	{"com.zaxxer:HikariCP", []string{"maximumPoolSize", "connectionTimeout", "maxLifetime"}},
+	{"redis.clients:jedis", []string{"JedisPoolConfig.maxTotal", "JedisClientConfig.connectionTimeoutMillis", "JedisClientConfig.socketTimeoutMillis"}},
+	{"io.lettuce:lettuce-core", []string{"RedisURI.timeout", "SocketOptions.connectTimeout"}},
+	{"kafka-clients", []string{"request.timeout.ms", "delivery.timeout.ms", "max.block.ms"}},
+	{"spring-kafka", []string{"request.timeout.ms", "delivery.timeout.ms", "max.block.ms"}},
+}
+
+// exactClientKnobs is matched before clientKnobPatterns, by exact equality
+// rather than substring. RubyGems names are bare identifiers, not import
+// paths: the `pg` gem is a substring of Go's "github.com/jackc/pgx/v5", so
+// a substring entry for it would silently hand pgx's caller ActiveRecord's
+// knobs. Ruby's pooling knobs live in ActiveRecord's `database.yml`, which
+// is where a reader has to go to change them; the per-connection timeouts
+// belong to the driver gem itself.
+var exactClientKnobs = map[string][]string{
+	"pg":     {"pool", "checkout_timeout", "connect_timeout"},
+	"mysql2": {"pool", "checkout_timeout", "connect_timeout", "read_timeout"},
+	"redis":  {"timeout", "connect_timeout", "reconnect_attempts"},
 }
 
 // manifestFor names the manifest file a detected client library was almost
@@ -104,6 +135,9 @@ func depForTarget(deps []detect.Dep, target string) *detect.Dep {
 // rule this codebase applies everywhere else: R-AUD-6, R-DC2-6, and this
 // package's own refusal to ever emit `caused` without a trace pipeline).
 func knobsFor(client string) []string {
+	if knobs, ok := exactClientKnobs[client]; ok {
+		return knobs
+	}
 	for _, p := range clientKnobPatterns {
 		if strings.Contains(client, p.substr) {
 			return p.knobs

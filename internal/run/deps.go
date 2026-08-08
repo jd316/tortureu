@@ -60,8 +60,16 @@ func NewRealDepsFull(toxiproxyURL, promURL, mockURL, brokerURL string) Deps {
 	if brokerURL != "" {
 		queue = &realapplier.BrokerApplier{BaseURL: brokerURL}
 	}
+	// DBLoad/Fuzz are always wired: unlike the endpoints above they need no
+	// address to construct, and they do nothing at all unless
+	// Options.DBLoad / Options.Fuzz is set. Leaving them nil would make
+	// `run --db-load` refuse on a machine where pgbench is installed and
+	// everything else is in order — the "built but unwired" failure this
+	// project has hit three times (R-EXE-26, R-EXE-27).
 	return Deps{
 		Reset:        ShellResetter{},
+		DBLoad:       PgbenchRunner{},
+		Fuzz:         SchemathesisRunner{},
 		Topology:     ComposeTopologyApplier{},
 		Load:         &K6Runner{},
 		Applier:      applier,

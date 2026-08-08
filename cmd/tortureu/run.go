@@ -58,6 +58,15 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	// attractive.
 	multiplier := fs.Float64("multiplier", 1, "replay rate multiplier applied against class: real hosts; only relevant with -allow-real-traffic")
 	allowRealTraffic := fs.Bool("allow-real-traffic", false, "permit replay above 1x against a class: real host (R-DC2-4); without this, a multiplier above 1x against a real host aborts the run")
+	// The two drive-tier co-executed load sources (R-EXE-26, R-EXE-27).
+	// Neither carries a default address or spec path: a missing -db-url or
+	// target.openapi is a loud refusal, never a guess (see internal/run's
+	// checkDriveFlags). -db-load's help states the pgbench_* write because
+	// it is a write against the caller's own database.
+	dbLoad := fs.Bool("db-load", false, "co-execute pgbench against the detected postgresql dependency for the run's duration (R-EXE-26); requires -db-url. NOTE: pgbench initialization CREATES AND DROPS tables named pgbench_* in that database")
+	dbURL := fs.String("db-url", "", "PostgreSQL connection string for -db-load, e.g. postgresql://user:pass@host:5432/db; never guessed from the compose file")
+	fuzz := fs.Bool("fuzz", false, "co-execute schemathesis against the SUT's OpenAPI document for the run's duration (R-EXE-27); requires spec:openapi and target.openapi (or -fuzz-spec)")
+	fuzzSpec := fs.String("fuzz-spec", "", "OpenAPI document for -fuzz; defaults to torture.yaml's target.openapi, and is never guessed by scanning filenames")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -80,7 +89,9 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	}
 
 	deps := buildRealDeps(*toxiproxyURL, *promURL, *mockURL, *brokerURL)
-	opts := buildRunOptions(*noReset, *allowRealTraffic, *multiplier)
+	opts := buildRunOptions(*noReset, *allowRealTraffic, *multiplier, driveFlags{
+		dbLoad: *dbLoad, dbURL: *dbURL, fuzz: *fuzz, fuzzSpec: *fuzzSpec,
+	})
 	v := tortureurun.Run(cfg, *sys, deps, opts)
 	return emitVerdict(v, *asJSON, stdout)
 }
@@ -91,12 +102,26 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 // -multiplier actually reach Options (R-DC2-4) instead of the wiring being
 // asserted only by reading the source — this is the fourth time in this
 // project a value existed and never reached its consumer.
-func buildRunOptions(noReset, allowRealTraffic bool, multiplier float64) tortureurun.Options {
+func buildRunOptions(noReset, allowRealTraffic bool, multiplier float64, drive driveFlags) tortureurun.Options {
 	return tortureurun.Options{
 		NoReset:          noReset,
 		AllowRealTraffic: allowRealTraffic,
 		Multiplier:       multiplier,
+		DBLoad:           drive.dbLoad,
+		DBURL:            drive.dbURL,
+		Fuzz:             drive.fuzz,
+		FuzzSpec:         drive.fuzzSpec,
 	}
+}
+
+// driveFlags groups the four drive-tier co-execution flags (R-EXE-26,
+// R-EXE-27) so buildRunOptions keeps one argument per concern rather than
+// eight positional bools and strings.
+type driveFlags struct {
+	dbLoad   bool
+	dbURL    string
+	fuzz     bool
+	fuzzSpec string
 }
 
 // buildRealDeps is the one call site that wires the four `run` endpoint
