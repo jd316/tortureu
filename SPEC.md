@@ -520,6 +520,52 @@ says they are.
 anywhere in the codebase, so every verdict emitted an empty anchor; found while implementing
 `emit bencher`, which is the consumer that needs it. Specified here before the fix, per R-PROC-2)*
 
+**R-VER-13** *(proposed)* — A finding's `chain` (`VERDICT.md` §1's fault → symptom hop list)
+**MUST** be derived from real ingested spans, one hop per span on a real request path, or stay
+empty. It **MUST NOT** be synthesized from the fault declaration, from detection, or from any
+other source that does not observe the request path: an invented causal story is worse than an
+absent one, because it is the one field a reader cannot check.
+
+Ingestion is by **query against a trace backend**, not by re-detection: whether this repo has
+tracing at all is already **R-DET-12**'s and **R-COV-6**'s answer (`Obs.Traces`,
+`Coverage.LacksOtel`), and ingestion **MUST** consume those facts rather than recompute them.
+The backend supported in v0 is **Jaeger's query API** (`GET /api/services`,
+`GET /api/traces?service=&start=&end=&limit=`, microsecond epoch bounds) — one backend queried
+correctly beats three approximated. A reachable endpoint that is **not** Jaeger **MUST** be
+refused by name where it is identifiable (Tempo answers `GET /api/echo` with `echo` and has no
+`/api/services`; the OpenTelemetry Collector is a pipeline with **no** query API at all, so a
+collector in compose is not by itself an ingestible source) and the chain stays empty. A refusal
+**MUST** say which backend was found and that only Jaeger is implemented — never fall through to
+silence.
+
+The chain is derived as follows, and every value in it is measured:
+
+- The hop path is the **parent chain of a real span matching the fault's target** (`cause.target`,
+  `host:port`) up to its trace root. A span matches the target when its service name is the
+  target's host, or when its own attributes name that peer (`net.peer.name` / `net.peer.ip` /
+  `server.address` / `peer.service`, with `net.peer.port` / `server.port` when the tag is present).
+- Each hop's `observed` is that hop's own **measured latency change** across every sampled span
+  with the same service and operation: baseline is the median of the fastest quartile, degraded is
+  the p95, and the span count is reported so a reader can weigh it.
+- If the target hop shows **no degradation** (p95 below twice the baseline), the chain **MUST**
+  stay empty. Traces existing is not evidence that the fault reached the request path.
+
+The chain **MUST** stay empty — exactly as when no ingestion exists — when traces are absent,
+the backend is unreachable or unsupported, no span matches the fault's target, no degradation is
+observed at it, or no single fault identifies a target at all.
+
+**R-VER-14** *(proposed)* — A finding's confidence **MUST** be raised to `caused` **only** when
+**R-VER-13**'s chain was actually built for that finding, and **MUST** then be clamped to the
+ceiling `observability.max_confidence` already carries (**R-DET-6**, TBD-6): a finding may never
+claim more than the ceiling states. With no chain, confidence is unchanged from what
+**R-VER-3**'s fault-count rule gives — `correlated` for a single fault, `ambiguous` otherwise.
+This is the mechanism D-4 names: the fault schedule and the load generator are enough for
+`correlated` because we own the independent variable; only the target's own telemetry can show
+the request path through the degraded dependency, which is what `caused` asserts.
+
+*(both proposed by the implementer and specified before citation, per R-PROC-2; they resolve
+TBD-9, and R-VER-3's `caused` row had no producer anywhere in the codebase before them)*
+
 **R-VER-9** — Human output **MUST** be rendered from the same verdict document as machine output.
 No second code path.
 
@@ -1232,10 +1278,44 @@ nothing to suggest, and only the second is honest.
   contains it**, naming its experiment target as undetermined rather than picking a dependency at
   random — an experiment pointing at the wrong host would teach the user something false.
 
-- **TBD-9** — `Finding.Chain` (the fault -> symptom hop list in `VERDICT.md` §1) stays empty: no
-  trace-ingestion pipeline exists in v0, and fabricating hops would be worse than omitting them.
-  Binding once OpenTelemetry ingestion ships, which is also what raises confidence from
-  `correlated` to `caused` (D-4). Raised by Task 7.
+- ~~**TBD-9**~~ — **NARROWED 2026-08-09 to one boundary that is the user's side of the wire.**
+  `Finding.Chain` stayed empty because no trace-ingestion pipeline existed, which also capped every
+  finding at `correlated` (D-4). The pipeline now exists: **R-VER-13** specifies chain derivation
+  from real ingested spans and **R-VER-14** the `caused` upgrade, `internal/trace` queries
+  **Jaeger's** query API, and `internal/run` builds the hop list from the parent chain of a real
+  span matching the fault's target.
+
+  Three decisions worth keeping. First, **one backend, queried correctly**: Jaeger's
+  `/api/traces` returns the whole span tree *with* its `processes` service map in a single
+  response, so a chain is derivable from one request — verified against a real
+  `jaegertracing/jaeger:2.10.0`. Tempo is identified and refused **by name** (it answers
+  `/api/echo` with `echo` and 404s `/api/services` — verified against a real
+  `grafana/tempo:2.9.0`), and the OpenTelemetry Collector is refused for a structural reason: it
+  is a pipeline with no query API at all, so `otel/opentelemetry-collector` in compose says spans
+  are *exported*, never that they are *readable*.
+
+  Second, **every hop value is measured or the chain is empty**. The gate that matters is not
+  "traces exist" but "the fault reached the request path": if the target hop's p95 is under twice
+  its own fastest-quartile baseline, there is no chain and confidence stays `correlated`. Traces
+  present but the dependency never degraded is exactly the case where a plausible-looking invented
+  chain would do the most damage.
+
+  Third, the **endpoint** is `TORTUREU_TRACE_URL`, defaulting to `http://localhost:16686` only when
+  detection already reported traces (**R-DET-12**) and did not report `lacks:otel` (**R-COV-6**) —
+  so a repo with no tracing is never probed, and an explicit URL is the user asserting a backend we
+  should try regardless.
+
+  **What remains, precisely**: spans have to exist. TortureU cannot instrument the system under
+  test — that is application code the user owns — so on an uninstrumented SUT every gate above
+  fails closed and the verdict is exactly what it was before this change. What is *not* left
+  unbuilt is any part of reading, matching, or measuring them.
+
+  Also not built, and deliberately: the query window is the **`tortureu` process lifetime**, a
+  superset of the run, not the sub-run fault window. `internal/run`'s wall-clock fault start/stop
+  lives in its scheduler and is not carried into finding evaluation, so a fault with a `for:`
+  shorter than the run is bounded by the *observed* degradation gate above rather than by its own
+  clock. Closing that gap means threading the applied-fault timestamps into the verdict, which is
+  a change to the run loop, not to ingestion.
 - ~~**TBD-8**~~ — **RESOLVED**: `capture` shipped **with** scrubbing in the same change, as the
   requirement demanded. R-CLI-9 now carries it, and the proof reads the written file back from disk
   rather than asserting on an in-memory struct.
