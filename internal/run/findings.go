@@ -232,23 +232,6 @@ func unevaluatedFinding(assertion, reason string) verdict.Finding {
 	}
 }
 
-// evaluateSQLAsserts reports every sql: assert entry (R-CFG-18) as
-// unevaluated: no package anywhere in this codebase evaluates a SQL
-// assertion against a real database, so the honest answer for every one,
-// always, is "not evaluated" — never a silent skip (R-VER-8) and never a
-// guessed pass or fail.
-func evaluateSQLAsserts(asserts []config.AssertEntry) []verdict.Finding {
-	var findings []verdict.Finding
-	for _, entry := range asserts {
-		expr, ok := entry["sql"].(string)
-		if !ok {
-			continue
-		}
-		findings = append(findings, unevaluatedFinding("sql: "+expr, "no SQL evaluation capability exists in this build"))
-	}
-	return findings
-}
-
 // thresholdComparisonOps are tried in this order only to find the earliest
 // occurring operator in an expression; "<=" appearing before "<" would
 // otherwise make no difference since both start at the same index for an

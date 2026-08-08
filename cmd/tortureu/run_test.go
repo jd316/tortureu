@@ -113,7 +113,7 @@ func TestRunApplierEndpointFlagsHaveNoHardcodedDefault(t *testing.T) {
 // "built but unwired" gap this task exists to close one layer out from
 // internal/run.
 func TestBuildRealDepsWiresApplierEndpointsFromFlagValues(t *testing.T) {
-	empty := buildRealDeps("", "", "", "")
+	empty := buildRealDeps("", "", "", "", nil)
 	if empty.MockApplier != nil {
 		t.Error("empty mock-url must leave Deps.MockApplier nil")
 	}
@@ -121,7 +121,7 @@ func TestBuildRealDepsWiresApplierEndpointsFromFlagValues(t *testing.T) {
 		t.Error("empty broker-url must leave Deps.QueueApplier nil")
 	}
 
-	wired := buildRealDeps("", "", "http://localhost:8080", "http://localhost:9090")
+	wired := buildRealDeps("", "", "http://localhost:8080", "http://localhost:9090", nil)
 	if wired.MockApplier == nil {
 		t.Error("a non-empty mock-url must wire Deps.MockApplier, not leave it nil")
 	}

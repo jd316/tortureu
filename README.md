@@ -93,10 +93,11 @@ That is the real output format, and its limits are visible in it:
   assertion broke. `caused` needs trace data spanning that window, and trace ingestion is not
   built ([`TBD-9`](SPEC.md)). No per-hop causal chain is shown for the same reason: it would have
   to be invented.
-- **`sql:` asserts read `not evaluated`.** There is no SQL execution path in v0, and an assert
-  that was not evaluated is never reported as passing — a run whose asserts were all unevaluated
-  exits `4` (inconclusive), never `0`. The same holds for `promql:` asserts when no Prometheus is
-  configured.
+- **`sql:` and `promql:` asserts need an endpoint.** `sql:` asserts are evaluated against
+  PostgreSQL and MySQL when `-sql-url` is given (a `sql:` expression is a violation *count* — the
+  invariant holds iff it returns `0`); `promql:` needs `-prom-url`. Without one, they read
+  `not evaluated` — and an assert that was not evaluated is never reported as passing, so a run
+  whose asserts were all unevaluated exits `4` (inconclusive), never `0`.
 
 Measured values (`4218ms`, `0.003`) come from k6's own summary; where a value genuinely cannot be
 read it says `not measured`, which is deliberately distinct from `not evaluated`.
@@ -108,7 +109,7 @@ What it does give you is the *candidate config surface* — library plus knob na
 
 | Document | What it is |
 |---|---|
-| [`SPEC.md`](SPEC.md) | normative. 135 numbered requirements. Build against this. |
+| [`SPEC.md`](SPEC.md) | normative. 136 numbered requirements. Build against this. |
 | [`RESEARCH.md`](RESEARCH.md) | the survey: 155 tools across 19 domains, and why each is driven, delegated or merely named |
 | [`VERDICT.md`](VERDICT.md) | verdict schema, exit codes, MCP surface |
 | [`BENCHMARKS.md`](BENCHMARKS.md) | how this gets evaluated, and what we refuse to claim |

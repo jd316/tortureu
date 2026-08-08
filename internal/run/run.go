@@ -163,6 +163,10 @@ type Deps struct {
 	// flag set is a refusal, never a silent skip (R-EXE-27).
 	Fuzz Fuzzer
 	Prom PromQuerier
+	// SQL evaluates sql: asserts (R-CFG-18) against the target database.
+	// nil leaves them unevaluated — the honest v0 state when no -sql-url
+	// was given — rather than silently passing an invariant nobody checked.
+	SQL SQLQuerier
 	// Now is the wall clock used only for verdict timestamps/duration —
 	// never for fault scheduling (R-EXE-8: that clock is k6's). Defaults to
 	// time.Now.
@@ -602,12 +606,20 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 
 	thresholdPassed, thresholdFindings := evaluateThresholds(metrics, cfg.Faults, sys, auditFindings)
 	promPassed, promFindings := evaluatePromqlAsserts(cfg.Assert, deps.Prom, cfg.Faults, sys, auditFindings)
-	sqlFindings := evaluateSQLAsserts(cfg.Assert)
+	sqlPassed, sqlFindings, sqlErr := EvaluateSQLAsserts(cfg.Assert, deps.SQL, cfg.Faults, sys, auditFindings)
+	if sqlErr != nil {
+		// R-VER-2: a violated invariant is a result and lives in
+		// sqlFindings; reaching this branch means the check itself could
+		// not run, which must not be reported as data about the service.
+		teardownAll()
+		return fail("sql: assertion could not be evaluated", sqlErr)
+	}
 
 	// 6. Tear down every fault (R-EXE-5), before the verdict is emitted.
 	teardownAll()
 
 	v.Passed = append(thresholdPassed, promPassed...)
+	v.Passed = append(v.Passed, sqlPassed...)
 	// IDs are assigned once, here, after every finding source is merged —
 	// not inside evaluateThresholds/evaluatePromqlAsserts/evaluateSQLAsserts,
 	// each of which used to number its own findings from f1: two sources

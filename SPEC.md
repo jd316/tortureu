@@ -401,14 +401,32 @@ Refusals — this flag **MUST NOT** silently no-op, which is this project's wors
 - **no credentials**: the connection string is supplied by `-db-url` and by nothing else. TortureU
   **MUST NOT** guess a user, password, host, port or database name, nor read one out of the
   compose file. Absent `-db-url` **MUST** be an error naming the flag;
-- **no binary**: `pgbench` absent from `PATH` **MUST** be reported with an install hint in the
-  manner of **R-CLI-5**, never as an obscure failure;
+- **no binary**: `pgbench` absent from `PATH` **and** no `docker` to run its official image (see
+  *Reach* below) **MUST** be reported with an install hint in the manner of **R-CLI-5**, naming
+  both routes, never as an obscure failure;
 - every refusal above **MUST** happen *before* reset and before any load starts. Discovering the
   flag was unusable after a run has already perturbed the stack teaches the user nothing.
 
 `pgbench`'s own initialization (`pgbench -i`) **creates and drops tables named `pgbench_*`** in the
 target database. That is a write against the caller's data, so the flag's help text **MUST** say
 so; it is not something a user may discover from the effects.
+
+Reach: the database `-db-url` names may sit on the internal-only network **R-DC2-3** creates, for
+which Docker publishes no host port at all — so a host-process pgbench cannot dial it. `--db-load`
+**MUST** therefore reach it the way the load path already does (**R-CLI-6**'s rule): a direct dial
+from the host first, falling back to running pgbench's own official image in a container that joins
+the *database container's* network namespace (`docker run --network container:<id>`). The address
+translation **MUST** be stated rather than guessed, and this is the statement:
+
+- the container joined is the one Docker reports for the compose service `-db-url`'s **own host**
+  names — the caller's address is what selects it, so nothing is inferred from the compose file;
+- inside that namespace the host becomes `127.0.0.1` and **the port stays exactly what `-db-url`
+  already says**. This is not a choice between candidates: a container with no published port can
+  only be named by the port its own server listens on, so the caller's port *is* the in-namespace
+  port or the caller's address was never valid.
+
+A `-db-url` whose host names no running compose service, or whose form this rule cannot rewrite,
+**MUST** keep failing loudly (**R-VER-2**'s `error`) rather than being guessed at.
 
 Results: what the DB load achieved (tps, client count, duration, and whether it was cut short by
 the load ending first) **MUST** appear in the verdict as an artifact — a run that claims DB
@@ -430,9 +448,19 @@ Refusals, in the same shape as **R-EXE-26**:
   It **MUST NOT** be guessed by scanning for conventional filenames — a fuzzer pointed at the
   wrong document reports confident nonsense. The URL fuzzed is `target.base_url`, equally
   un-guessable and equally an error when absent;
-- **no binary**: `schemathesis` (or its `st` alias) absent from `PATH` **MUST** carry an install
-  hint per **R-CLI-5**;
+- **no binary**: `schemathesis` (or its `st` alias) absent from `PATH` **and** no `docker` to run
+  its official image (see *Reach* below) **MUST** carry an install hint per **R-CLI-5**, naming
+  both routes;
 - all three **MUST** be checked before reset and before load.
+
+Reach, in the same shape as **R-EXE-26** and with strictly less to state: a SUT **R-DC2-3** put on
+an internal-only network publishes no port, so `--fuzz` **MUST** likewise dial `target.base_url`
+directly first and fall back to running schemathesis's own official image in a container joining
+the **same** container the load generator joins — `target.service`, resolved exactly as the load
+path resolves it. There is no address to translate at all: `target.base_url` is fuzzed
+**unchanged**, because it is the identical address k6 itself uses from inside that identical
+namespace. A fuzz pass and the load it runs under therefore cannot disagree about what they were
+pointed at.
 
 Findings: each failing operation schemathesis reports **MUST** become a finding in the verdict
 (**R-VER-1**). **R-VER-2's distinction is load-bearing here**: a fuzzer finding a `500` is the
@@ -695,6 +723,22 @@ a continuity that was never measured.
 *(all four proposed by the implementer and specified before citation, per R-PROC-2; they resolve
 TBD-1)*
 
+
+**R-CLI-18** *(proposed)* — `run` **MUST** accept `--trend`, which appends the run's verdict to the
+**R-CLI-15** store as if `trend record` had been piped it. Without it, recording a trend requires
+remembering `tortureu run -json | tortureu trend record -`, and a trend nobody remembers to record
+is not a trend.
+
+It **MUST** default to **off**: a verb that writes a file into the user's repo without being asked
+is a surprise, and `run` is the verb most likely to be run casually.
+
+Appending **MUST NOT** change the run's exit code or its rendered verdict. A store that cannot be
+written is reported on stderr and nothing else — **R-VER-7**'s codes describe what the *experiment*
+found, and letting a bookkeeping failure overwrite that would report a resilience result the run
+did not reach.
+
+*(the store and both `trend` modes shipped first (R-CLI-14..17), reachable only through a shell
+pipeline; specified here before wiring it into `run`, per R-PROC-2)*
 **R-CLI-11** — `init --ci [provider]` **MUST** write a CI pipeline that runs `tortureu run` and
 treats **R-VER-7**'s exit codes `0`–`4` as the contract. `provider` is `github` (default) or
 `gitlab`; any other value **MUST** error listing what is supported, in the manner of **R-CLI-8**.
@@ -1207,7 +1251,7 @@ nothing to suggest, and only the second is honest.
   (R-CLI-8) is built and verified against the real CLI (bencher 0.6.11): Bencher Metric Format is a
   *projection* of one verdict computed at emit time, and the history lives on Bencher's server.
   Nothing is stored on our side, so that option answers "where does a repo *with* a Bencher project
-  keep its trend" and says nothing about a repo without one. The two remain complementary rather
+  keep its trend" and says nothing about a repo without one. Those two remain complementary rather
   than competing: the same projection idea, one pointed at a server, one at a file.
 
   **The binding constraint was the anchor, not the format.** Every trend joins on a per-run commit,
@@ -1218,38 +1262,35 @@ nothing to suggest, and only the second is honest.
   outside a checkout rather than inventing one. (Bencher's `--hash` rejects anything shorter — even
   VERDICT.md's own example value `a3f19c2`.)
 
-  **Why JSONL and not SQLite**, now that the store has something real to hold:
+  **Why JSONL and not SQLite**, given the store now has something real to hold:
 
   - **It is the artefact that survives being committed.** A trend is only worth keeping if it
     outlives the machine that produced it, which means it goes in the repo. A SQLite file is opaque
-    to `git diff`, rewrites pages on every insert so every run is whole-file binary churn, and
+    to `git diff`, rewrites pages on every insert so every run is a whole-file binary churn, and
     conflicts unmergeably when two branches each record a run. An append-only JSONL file diffs as
-    the one line it gained, and two branches that each appended merge by concatenation. A repo that
-    would rather not track it gitignores one path either way, so JSONL is strictly better on the
-    axis that actually differs.
+    the one line that was added, and two branches that each appended merge by concatenation. A repo
+    that would rather not track it gitignores one path either way, so JSONL is strictly better on
+    the axis that actually differs.
   - **The dependency cost is real and the query benefit is not.** SQLite in Go is either cgo
     (`mattn/go-sqlite3`, which ends the single static binary D-6 exists for) or a very large pure-Go
     transpilation (`modernc.org/sqlite`). `go.mod` currently has two direct dependencies. What that
     buys is indexed query over a table whose row count is *one per run* — a few thousand rows after
-    years of CI. Reading the whole file and grouping in memory is not the slow path and will not
+    years of CI. Reading the whole file and grouping in memory is not the slow path, and will not
     become one.
   - **Concurrent writers do not need a database.** The one genuinely hard requirement — two parallel
     CI jobs recording at the same instant — is satisfied by an advisory exclusive lock held across a
-    single append of one whole line (R-CLI-16). Measured: 40 concurrent `tortureu trend record`
-    processes against one store produced 40 whole records and zero unparseable lines, where the same
-    40 writes without the lock tore 17 of them. SQLite would solve the same problem with a
-    write-ahead log, a lock file and a `database is locked` failure mode; here the worst case is one
-    skippable line, and R-CLI-15 requires the reader to skip it by line number rather than lose the
-    history above it.
+    single append of one whole line (R-CLI-16). SQLite would solve the same problem with a
+    write-ahead log, a lock file and a `database is locked` failure mode. The failure mode here is
+    one skippable malformed line, and R-CLI-15 requires the reader to skip it by line number rather
+    than lose the history above it.
   - **A verdict is already JSON.** The store is a projection of the document `run` emits, in the
-    same encoding, so nothing sits between "we have a verdict" and "we have a row" — which is also
-    why the projection is explicit (R-CLI-15) rather than the whole document: the file stays
-    readable and bounded.
+    same encoding, so there is no schema migration step between "we have a verdict" and "we have a
+    row" — which is also why the projection is explicit (R-CLI-15) rather than the whole document:
+    the file stays readable and bounded.
 
   What the resolution deliberately does **not** do: fail a build on a regression (R-CLI-14 — that is
   a threshold policy nothing has stated), and enter an anchorless or unmeasured run into the series
   (R-CLI-17 — a row with no anchor is kept and shown as excluded, never joined on `""`).
-
 
 - ~~**TBD-14**~~ — **RESOLVED 2026-08-09: a `sql:` expression is a VIOLATION COUNT.** The question
   was what SHAPE a `sql:` assertion (R-CFG-18) is: a query whose returned **rows** are the
@@ -1353,17 +1394,40 @@ nothing to suggest, and only the second is honest.
   means TortureU generates and hands off, and the CLI still states the command as generated rather
   than as run. What is now settled is that the generated command is one that works.
 
-- **TBD-12** — How `--db-load` (R-EXE-26) and `--fuzz` (R-EXE-27) reach a SUT or database that
-  **R-DC2-3** has put on an `internal: true` network. Both drive a real third-party binary as a
-  subprocess, so neither can use the container-network-namespace join `internal/run`'s k6 path
-  (`SetSUTContainer`, load.go) or its `fallbackTransport` (inreach.go) use — a subprocess dials
-  from the host's own namespace. v0 therefore runs both as host processes against the address the
-  caller supplied (`-db-url`, `target.base_url`), which covers a published port and a
-  non-DC-2-isolated stack, and **fails loudly** (`status: error`) when the address is unreachable
-  rather than reporting zero DB load or zero fuzz findings. Resolves by giving both runners the
-  same `docker run --network container:<id>` mode `K6Runner` already has, which also needs a
-  stated rule for translating the caller's address into that namespace — the part that must not be
-  guessed, and the reason it is not done here.
+- ~~**TBD-12**~~ — **RESOLVED 2026-08-09: both join a container's network namespace, and the
+  translation rule was already in the codebase rather than needing to be invented.** How
+  `--db-load` (R-EXE-26) and `--fuzz` (R-EXE-27) reach a SUT or database **R-DC2-3** has put on an
+  `internal: true` network. The old answer ran both as host subprocesses against the caller's
+  address and failed loudly when it was unreachable — honest, but it meant the two newest
+  drive-tier features did not work in the one topology TortureU itself creates.
+
+  The premise that blocked it — "a subprocess dials from the host's own namespace" — was true and
+  irrelevant: `K6Runner` is *also* a subprocess, and reaches an internal-only SUT anyway by running
+  the tool's own container image with `docker run --network container:<id>`. Both tools have
+  official images (`postgres`'s carries `pgbench`; `schemathesis/schemathesis`), so the same route
+  was open to both, and the reach paragraphs now in R-EXE-26/R-EXE-27 say which container each
+  joins and what happens to the address.
+
+  The "guess" this was deferred over does not exist. For `--fuzz` there is **nothing to translate**:
+  it joins the same container k6 joins (`target.service`) and fuzzes `target.base_url` byte for
+  byte, so it is pointed at exactly what the load is pointed at, by construction. For `--db-load`
+  the only translation is host → `127.0.0.1` with **the port left alone**, which is what
+  `inreach.go`'s `containerHopScript` has always done for the orchestrator's own in-stack calls and
+  what `load.go`'s package comment already states for k6 — and it is forced, not chosen: an
+  internal-only container publishes no port, so the caller's port either *is* the port the server
+  listens on or the caller's address was never usable. The container to join is selected by the
+  caller's own DSN host, resolved as a compose service the way `fallbackTransport` already resolves
+  a URL host — nothing is read out of the compose file, so R-EXE-26's no-guessing refusal is intact.
+
+  Neither runner changes mode silently: each dials the caller's address from the host first and only
+  falls back on an actual failure (**R-CLI-6**'s stated rule), so a published-port or
+  non-DC-2-isolated stack keeps the host-process path and touches Docker not at all. A DSN host that
+  names no running container still fails loudly, exactly as before.
+
+  Verified against a real `internal: true` network, not fakes: a `postgres:16-alpine` and an nginx
+  SUT with `docker port` reporting nothing published, where host `pgbench` fails to resolve the DSN
+  host and host schemathesis cannot connect — and namespace-joined runs of both reach them,
+  sustaining ~1000 tps and reporting the SUT's planted `500` as a finding.
 
 - **TBD-5** — Whether to adopt the `grafana/k6-summary` JSON Schema once it leaves
   work-in-progress, replacing our own `handleSummary()` shape.

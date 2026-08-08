@@ -22,7 +22,7 @@ import (
 // --mock-url/--broker-url flags) is a follow-up outside this task's
 // touch-only-internal/run scope, flagged in the Task 7 report.
 func NewRealDeps(toxiproxyURL, promURL string) Deps {
-	return NewRealDepsFull(toxiproxyURL, promURL, "", "")
+	return NewRealDepsFull(toxiproxyURL, promURL, "", "", nil)
 }
 
 // NewRealDepsFull is NewRealDeps plus internal/applier's real owners for
@@ -40,7 +40,7 @@ func NewRealDeps(toxiproxyURL, promURL string) Deps {
 // class: mock host would need one address per host, not one shared BaseURL.
 // Scoped out for this task; flagged for whoever wires multi-host mock
 // support.
-func NewRealDepsFull(toxiproxyURL, promURL, mockURL, brokerURL string) Deps {
+func NewRealDepsFull(toxiproxyURL, promURL, mockURL, brokerURL string, sql SQLQuerier) Deps {
 	if toxiproxyURL == "" {
 		toxiproxyURL = "http://localhost:" + ProxyControlPort
 	}
@@ -76,5 +76,6 @@ func NewRealDepsFull(toxiproxyURL, promURL, mockURL, brokerURL string) Deps {
 		QueueApplier: queue,
 		MockApplier:  mock,
 		Prom:         prom,
+		SQL:          sql,
 	}
 }

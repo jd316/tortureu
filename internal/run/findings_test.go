@@ -641,13 +641,21 @@ func (f fakeQuerier) Query(expr string) (bool, string, error) { return f.holds, 
 
 // spec: R-VER-8
 // spec: R-CFG-18
-func TestEvaluateSQLAsserts_AlwaysUnevaluated(t *testing.T) {
-	// sql: is parsed (R-CFG-18) but no package anywhere evaluates a SQL
-	// assertion — the honest report is "not evaluated", every time, not
-	// silence (which would let a sql:-only assert: block run green having
-	// checked nothing, R-VER-8) and not a fabricated pass or fail.
+//
+// R-CFG-18 asserts are evaluated for real now (EvaluateSQLAsserts, against
+// the engine's own client). What survives is the no-endpoint case: with no
+// querier there is nothing to ask, and the honest report is "not evaluated"
+// every time — not silence, which would let a sql:-only assert: block run
+// green having checked nothing (R-VER-8), and not a fabricated pass.
+func TestEvaluateSQLAsserts_UnevaluatedWithoutAQuerier(t *testing.T) {
 	asserts := []config.AssertEntry{{"sql": "select count(*) from orders where status = 'orphaned'"}}
-	findings := evaluateSQLAsserts(asserts)
+	passed, findings, err := EvaluateSQLAsserts(asserts, nil, oneFault(), detect.System{}, nil)
+	if err != nil {
+		t.Fatalf("EvaluateSQLAsserts: %v", err)
+	}
+	if len(passed) != 0 {
+		t.Fatalf("passed = %v, want none — an unevaluated invariant is not a passing one", passed)
+	}
 	if len(findings) != 1 {
 		t.Fatalf("findings = %v, want exactly one", findings)
 	}
@@ -659,10 +667,12 @@ func TestEvaluateSQLAsserts_AlwaysUnevaluated(t *testing.T) {
 		t.Error("Unevaluated = false, want true")
 	}
 	if f.Reason == "" {
-		t.Error("Reason is empty, want it to say why sql: cannot be evaluated")
+		t.Error("Reason is empty, want it to say why sql: was not evaluated")
 	}
-	if strings.HasPrefix(f.Reason, "not evaluated") {
-		t.Errorf("Reason = %q must not carry the \"not evaluated: \" prefix — the renderer supplies that now", f.Reason)
+	// The superseded claim must be gone: a build that CAN evaluate SQL must
+	// not tell the user no such capability exists.
+	if strings.Contains(f.Reason, "no SQL evaluation capability") {
+		t.Errorf("Reason = %q still claims SQL cannot be evaluated at all", f.Reason)
 	}
 	if f.Broke.Observed != "" {
 		t.Errorf("Broke.Observed = %q, want empty", f.Broke.Observed)

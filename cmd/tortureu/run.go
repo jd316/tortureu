@@ -10,6 +10,7 @@ import (
 	"github.com/jdb316/tortureu/internal/config"
 	"github.com/jdb316/tortureu/internal/detect"
 	tortureurun "github.com/jdb316/tortureu/internal/run"
+	"github.com/jdb316/tortureu/internal/trend"
 	"github.com/jdb316/tortureu/internal/verdict"
 )
 
@@ -37,6 +38,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	path := fs.String("config", "torture.yaml", "path to torture.yaml")
 	noReset := fs.Bool("no-reset", false, "skip the reset step (R-CFG-20)")
 	asJSON := fs.Bool("json", false, "print the verdict as JSON instead of the human rendering")
+	recordTrend := fs.Bool("trend", false, "append this verdict to the trend store ("+trend.DefaultStore+"); off by default (R-CLI-18)")
 	// Every endpoint below defaults to "" and is left for NewRealDepsFull to
 	// resolve: toxiproxyURL becomes NewRealDepsFull's own
 	// "http://localhost:<ProxyControlPort>" default; mockURL and brokerURL
@@ -47,6 +49,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	// connecting to an invented address. None of these are hardcoded here.
 	toxiproxyURL := fs.String("toxiproxy-url", "", "Toxiproxy control-plane address; defaults to the standard local overlay port")
 	promURL := fs.String("prom-url", "", "Prometheus base URL; promql: asserts are skipped when empty")
+	sqlURL := fs.String("sql-url", "", "database URL for sql: asserts (R-CFG-18); they are reported unevaluated when empty")
 	mockURL := fs.String("mock-url", "", "WireMock base URL, for error_rate faults against a class: mock host; empty fails loudly if declared (R-EXE-19)")
 	brokerURL := fs.String("broker-url", "", "message broker base URL, for poison_pill/duplicate faults; empty fails loudly if declared (R-EXE-19)")
 	// multiplier/allowRealTraffic default to the safe values (1x, no real
@@ -88,11 +91,34 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	deps := buildRealDeps(*toxiproxyURL, *promURL, *mockURL, *brokerURL)
+	// R-CFG-18: a bad -sql-url must fail here, loudly. Downgrading it to a
+	// nil querier would report the asserts as "unevaluated" — the same
+	// wording a user gets for supplying no URL at all — and so hide the
+	// fact that they asked for evaluation and did not get it.
+	var sqlQuerier tortureurun.SQLQuerier
+	if *sqlURL != "" {
+		q, qerr := tortureurun.NewSQLQuerier(*sqlURL)
+		if qerr != nil {
+			fmt.Fprintf(stderr, "tortureu run: %v\n", qerr)
+			return 2
+		}
+		sqlQuerier = q
+	}
+
+	deps := buildRealDeps(*toxiproxyURL, *promURL, *mockURL, *brokerURL, sqlQuerier)
 	opts := buildRunOptions(*noReset, *allowRealTraffic, *multiplier, driveFlags{
 		dbLoad: *dbLoad, dbURL: *dbURL, fuzz: *fuzz, fuzzSpec: *fuzzSpec,
 	})
 	v := tortureurun.Run(cfg, *sys, deps, opts)
+	// R-CLI-18: bookkeeping never changes what the experiment found, so a
+	// store that cannot be written is reported and nothing else — the exit
+	// code stays the verdict's.
+	if *recordTrend {
+		if terr := trend.Append("", trend.Project(*v)); terr != nil {
+			fmt.Fprintf(stderr, "tortureu run: --trend: %v\n", terr)
+		}
+	}
+
 	return emitVerdict(v, *asJSON, stdout)
 }
 
@@ -132,6 +158,6 @@ type driveFlags struct {
 // -broker-url must be observable as Deps.MockApplier / Deps.QueueApplier
 // going from nil to non-nil, the same way internal/run's own tests observe
 // NewRealDepsFull.
-func buildRealDeps(toxiproxyURL, promURL, mockURL, brokerURL string) tortureurun.Deps {
-	return tortureurun.NewRealDepsFull(toxiproxyURL, promURL, mockURL, brokerURL)
+func buildRealDeps(toxiproxyURL, promURL, mockURL, brokerURL string, sql tortureurun.SQLQuerier) tortureurun.Deps {
+	return tortureurun.NewRealDepsFull(toxiproxyURL, promURL, mockURL, brokerURL, sql)
 }
