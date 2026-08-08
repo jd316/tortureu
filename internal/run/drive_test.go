@@ -378,9 +378,19 @@ func TestRun_FuzzToolFailureIsStatusError(t *testing.T) {
 
 // spec: R-CLI-5
 func TestPgbenchRunner_MissingBinaryCarriesInstallHint(t *testing.T) {
-	err := PgbenchRunner{Bin: "tortureu-no-such-pgbench"}.Preflight()
+	// Both routes absent, not just the binary: Docker alone is enough to
+	// run pgbench's own image in the database's network namespace
+	// (R-EXE-26's Reach rule), so refusing over a missing binary while
+	// Docker is present would refuse a machine that can in fact do the job.
+	err := PgbenchRunner{Bin: "tortureu-no-such-pgbench", DockerBin: "tortureu-no-such-docker"}.Preflight()
 	if err == nil {
-		t.Fatal("Preflight passed with no pgbench on PATH")
+		t.Fatal("Preflight passed with neither pgbench nor docker on PATH")
+	}
+	if !strings.Contains(err.Error(), "tortureu-no-such-docker") {
+		t.Errorf("error %q does not name the container route as the other way to get there", err)
+	}
+	if err := (PgbenchRunner{Bin: "tortureu-no-such-pgbench", DockerBin: "sh"}).Preflight(); err != nil {
+		t.Errorf("Preflight refused a machine with no pgbench but a working container route: %v", err)
 	}
 	if !strings.Contains(err.Error(), "install") {
 		t.Fatalf("error %q carries no install hint (R-CLI-5)", err)
@@ -389,9 +399,12 @@ func TestPgbenchRunner_MissingBinaryCarriesInstallHint(t *testing.T) {
 
 // spec: R-CLI-5
 func TestSchemathesisRunner_MissingBinaryCarriesInstallHint(t *testing.T) {
-	err := SchemathesisRunner{Bin: "tortureu-no-such-st"}.Preflight()
+	err := SchemathesisRunner{Bin: "tortureu-no-such-st", DockerBin: "tortureu-no-such-docker"}.Preflight()
 	if err == nil {
-		t.Fatal("Preflight passed with no schemathesis on PATH")
+		t.Fatal("Preflight passed with neither schemathesis nor docker on PATH")
+	}
+	if err := (SchemathesisRunner{Bin: "tortureu-no-such-st", DockerBin: "sh"}).Preflight(); err != nil {
+		t.Errorf("Preflight refused a machine with no schemathesis but a working container route: %v", err)
 	}
 	if !strings.Contains(err.Error(), "install") {
 		t.Fatalf("error %q carries no install hint (R-CLI-5)", err)
@@ -406,7 +419,7 @@ func TestRun_DBLoadPreflightsTheBinaryBeforeResetting(t *testing.T) {
 		Topology: &fakeTopology{},
 		Load:     &fakeLoadRunner{handle: newFakeLoadHandle()},
 		Applier:  &fakeApplier{},
-		DBLoad:   PgbenchRunner{Bin: "tortureu-no-such-pgbench"},
+		DBLoad:   PgbenchRunner{Bin: "tortureu-no-such-pgbench", DockerBin: "tortureu-no-such-docker"},
 	}, Options{DBLoad: true, DBURL: "postgresql://u:p@h:5432/d"})
 
 	if v.Status != verdict.StatusError || !strings.Contains(v.Error, "install") {
@@ -518,5 +531,97 @@ func TestKnobsFor_CoversRubyAndJavaClients(t *testing.T) {
 	// table is exactly how a wrong knob list reaches the wrong library.
 	if got := knobsFor("github.com/jackc/pgx/v5"); len(got) == 0 || got[0] != "MaxConns" {
 		t.Errorf("pgx knobs = %v, want the pgx list", got)
+	}
+}
+
+// netnsDBLoad is fakeDBLoad plus the namespace-binding hook the real
+// PgbenchRunner implements, so coDrivers' own wiring is provable without a
+// live daemon (the real join is proven in drive_real_test.go).
+type netnsDBLoad struct {
+	fakeDBLoad
+	netns string
+}
+
+func (f *netnsDBLoad) InNamespaceOf(container string) DBLoadRunner {
+	f.netns = container
+	return f
+}
+
+// netnsFuzzer is fakeFuzzer plus the same hook.
+type netnsFuzzer struct {
+	fakeFuzzer
+	netns string
+}
+
+func (f *netnsFuzzer) InNamespaceOf(container string) Fuzzer {
+	f.netns = container
+	return f
+}
+
+// spec: R-EXE-26
+// spec: R-EXE-27
+//
+// TBD-12: the co-driven tools must be told which container's network
+// namespace to join before they start, or they cannot reach a database/SUT
+// R-DC2-3 put on an internal-only network. Each is bound to the container
+// its *own* address names — the DB to the compose service `-db-url`'s host
+// names, the fuzzer to `target.service`, the same anchor the load path
+// (run.go's SetSUTContainer wiring) already uses — never to a container
+// inferred from the compose file.
+func TestCoDrivers_BindEachRunnerToTheContainerItsOwnAddressNames(t *testing.T) {
+	var asked []string
+	withFakeSUTDiscovery(t, func(service string) (string, error) {
+		asked = append(asked, service)
+		return service + "-container-1", nil
+	})
+
+	cfg := minimalConfig()
+	cfg.Target.OpenAPI = "openapi.yaml"
+	db := &netnsDBLoad{}
+	fz := &netnsFuzzer{}
+	c := newCoDrivers(cfg, Deps{DBLoad: db, Fuzz: fz}, Options{
+		DBLoad: true, DBURL: "postgresql://u:p@orders-db:5432/orders", Fuzz: true,
+	})
+	c.start()
+
+	if db.netns != "orders-db-container-1" {
+		t.Errorf("DB load bound to namespace %q, want the container of the compose service its own -db-url names", db.netns)
+	}
+	if fz.netns != "checkout-api-container-1" {
+		t.Errorf("fuzzer bound to namespace %q, want the SUT container the load generator joins", fz.netns)
+	}
+	if len(asked) != 2 || asked[0] != "orders-db" || asked[1] != "checkout-api" {
+		t.Errorf("discovery asked for %v, want [orders-db checkout-api]", asked)
+	}
+	if !db.started.Load() || !fz.started.Load() {
+		t.Error("namespace binding must not stop the runners from starting")
+	}
+}
+
+// spec: R-EXE-26
+//
+// The only address translation R-EXE-26 permits: the host becomes the
+// container's own loopback and *nothing else changes* — the port above all,
+// since an internal-only container publishes none and the caller's port is
+// therefore the only port its server can be listening on.
+func TestDSNInNamespace_RewritesOnlyTheHost(t *testing.T) {
+	got, ok := dsnInNamespace("postgresql://tortureu:s3cr%2Ft@orders-db:6543/orders?sslmode=disable")
+	if !ok {
+		t.Fatal("a plain conninfo URI was not rewritable")
+	}
+	if want := "postgresql://tortureu:s3cr%2Ft@127.0.0.1:6543/orders?sslmode=disable"; got != want {
+		t.Errorf("dsnInNamespace = %q, want %q", got, want)
+	}
+	// A DSN with no port at all still names one implicitly, and it is
+	// PostgreSQL's, not ours to invent.
+	if got, _ := dsnInNamespace("postgres://u@db/d"); got != "postgres://u@127.0.0.1:5432/d" {
+		t.Errorf("portless DSN = %q, want the default 5432 made explicit", got)
+	}
+	// Anything this rule cannot rewrite must say so rather than be guessed
+	// at: keyword conninfo, and a DSN that is not a URI at all.
+	for _, bad := range []string{"host=orders-db port=5432 dbname=orders", "orders", ""} {
+		if _, ok := dsnInNamespace(bad); ok {
+			t.Errorf("dsnInNamespace(%q) claimed to rewrite a form this rule does not cover", bad)
+		}
 	}
 }

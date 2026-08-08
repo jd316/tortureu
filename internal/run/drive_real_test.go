@@ -289,3 +289,167 @@ func TestSchemathesisRunner_UnreachableTargetIsAToolError(t *testing.T) {
 	}
 	t.Logf("unreachable target reported as: %v", res.Err)
 }
+
+// --- TBD-12: reaching a target R-DC2-3 isolated on an internal:true network ---
+//
+// Everything above drives a target with a published port. These two drive
+// one with none at all, which is the topology TortureU itself creates
+// (R-DC2-3) and the one both flags previously could not work in.
+
+// internalNetwork creates a real `internal: true` Docker network — the same
+// kind ComposeTopologyApplier's overlay creates for the SUT — and returns
+// its name.
+func internalNetwork(t *testing.T, name string) string {
+	t.Helper()
+	requireBinary(t, "docker")
+	if out, err := exec.Command("docker", "network", "create", "--internal", name).CombinedOutput(); err != nil {
+		t.Skipf("could not create an internal network (%v): %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("docker", "network", "rm", name).Run() })
+	return name
+}
+
+// requireNoPublishedPort fails the test if the container has any published
+// port: without that, the test would silently stop exercising the
+// internal-only case it exists for.
+func requireNoPublishedPort(t *testing.T, container string) {
+	t.Helper()
+	out, err := exec.Command("docker", "port", container).CombinedOutput()
+	if err == nil && strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("%s has a published port (%s) — this test no longer exercises the internal-only-network case", container, out)
+	}
+}
+
+// spec: R-EXE-26
+//
+// The real thing, in the real topology: a PostgreSQL reachable only on an
+// internal:true network, with no published port for the host to dial. A
+// host-process pgbench cannot reach it at all; pgbench run in a container
+// joining the database's own network namespace can, against the caller's
+// own -db-url with only its host replaced by that namespace's loopback.
+func TestPgbenchRunner_ReachesInternalOnlyPostgresViaContainerNamespace(t *testing.T) {
+	requireBinary(t, "docker")
+	suffix := fmt.Sprintf("tortureu-dbnetns-%d", time.Now().UnixNano()%1e6)
+	netName := internalNetwork(t, suffix+"-net")
+	dbName := suffix + "-db"
+
+	if out, err := exec.Command("docker", "run", "-d", "--rm", "--name", dbName, "--network", netName,
+		"-e", "POSTGRES_PASSWORD=torturepw", "-e", "POSTGRES_USER=tortureu", "-e", "POSTGRES_DB=torturedb",
+		"postgres:16-alpine").CombinedOutput(); err != nil {
+		t.Skipf("could not start a postgres container on an internal network (%v): %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", dbName).Run() })
+	requireNoPublishedPort(t, dbName)
+
+	deadline := time.Now().Add(90 * time.Second)
+	ready := false
+	for time.Now().Before(deadline) {
+		if err := exec.Command("docker", "exec", dbName, "psql", "-U", "tortureu", "-d", "torturedb", "-c", "select 1").Run(); err == nil {
+			ready = true
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if !ready {
+		t.Skip("postgres container never became ready")
+	}
+
+	// The caller's address: the compose-service host the SUT's own
+	// DATABASE_URL would name, since no port exists to publish.
+	dsn := fmt.Sprintf("postgresql://tortureu:torturepw@%s:5432/torturedb", dbName)
+
+	// The bug this fixes, confirmed rather than assumed: from the host,
+	// this database is unreachable.
+	if _, err := (PgbenchRunner{}).Start(dsn, 3*time.Second); err == nil {
+		t.Fatal("a host-process pgbench reached an internal-only database — this test no longer exercises the isolation it exists for")
+	}
+
+	h, err := (PgbenchRunner{}).InNamespaceOf(dbName).Start(dsn, 5*time.Second)
+	if err != nil {
+		t.Fatalf("pgbench could not reach an internal-only database from its own network namespace: %v", err)
+	}
+	time.Sleep(7 * time.Second)
+	res := h.Stop()
+	if res.Err != nil {
+		t.Fatalf("namespace-joined pgbench reported a tool error: %v", res.Err)
+	}
+	if res.TPS <= 0 || res.Transactions <= 0 {
+		t.Fatalf("no throughput against an internal-only database: %+v", res)
+	}
+	t.Logf("pgbench against an internal-only postgres: %.1f tps, %d transactions", res.TPS, res.Transactions)
+
+	// Nothing may outlive the run (R-EXE-5): Stop must leave no container.
+	out, _ := exec.Command("docker", "ps", "-a", "--filter", "name=tortureu-pgbench-", "--format", "{{.Names}}").Output()
+	if strings.TrimSpace(string(out)) != "" {
+		t.Errorf("Stop left pgbench containers behind: %s", out)
+	}
+}
+
+// spec: R-EXE-27
+//
+// The real thing: a SUT reachable only on an internal:true network, with no
+// published port, fuzzed by schemathesis joining that SUT's own network
+// namespace — pointed at target.base_url unchanged, which is exactly the
+// address k6 uses from inside the same namespace.
+func TestSchemathesisRunner_ReachesInternalOnlySUTViaContainerNamespace(t *testing.T) {
+	requireBinary(t, "docker")
+	suffix := fmt.Sprintf("tortureu-fuzznetns-%d", time.Now().UnixNano()%1e6)
+	netName := internalNetwork(t, suffix+"-net")
+	sutName := suffix + "-sut"
+
+	if out, err := exec.Command("docker", "run", "-d", "--rm", "--name", sutName, "--network", netName,
+		"nginx:alpine").CombinedOutput(); err != nil {
+		t.Skipf("could not start an nginx SUT on an internal network (%v): %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", sutName).Run() })
+	requireNoPublishedPort(t, sutName)
+
+	// A SUT with an operation that genuinely breaks, so the fuzz pass has a
+	// real finding to report rather than proving only that it connected.
+	conf := "server {\n listen 80;\n location /ok { return 200 \"ok\"; }\n location /boom { return 500 \"boom\"; }\n}\n"
+	if out, err := exec.Command("docker", "exec", sutName, "sh", "-c",
+		"printf '%s' "+shellQuote(conf)+" > /etc/nginx/conf.d/default.conf && nginx -s reload").CombinedOutput(); err != nil {
+		t.Skipf("could not configure the nginx SUT (%v): %s", err, out)
+	}
+	time.Sleep(time.Second)
+
+	dir := t.TempDir()
+	spec := filepath.Join(dir, "openapi.yaml")
+	if err := os.WriteFile(spec, []byte(fuzzTestSpec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// target.base_url as it is written for a container-namespace-joined
+	// load generator: the SUT's own port on its own loopback. Unreachable
+	// from the host, which is the whole problem.
+	baseURL := "http://localhost:80"
+	h, err := (SchemathesisRunner{MaxExamples: 3, Dir: dir}).InNamespaceOf(sutName).Start(spec, baseURL, 3*time.Minute)
+	if err != nil {
+		t.Fatalf("schemathesis could not start against an internal-only SUT: %v", err)
+	}
+	deadline := time.Now().Add(150 * time.Second)
+	for time.Now().Before(deadline) && !procExited(h) {
+		time.Sleep(200 * time.Millisecond)
+	}
+	res := h.Stop()
+
+	if res.Err != nil {
+		t.Fatalf("fuzzing an internal-only SUT was reported as a tool error: %v", res.Err)
+	}
+	if len(res.Failures) == 0 {
+		t.Fatal("no findings against an internal-only SUT whose /boom 500s — the fuzzer never reached it")
+	}
+	for _, f := range res.Failures {
+		t.Logf("fuzz failure: %s -> %s", f.Operation, f.Detail)
+	}
+
+	out, _ := exec.Command("docker", "ps", "-a", "--filter", "name=tortureu-fuzz-", "--format", "{{.Names}}").Output()
+	if strings.TrimSpace(string(out)) != "" {
+		t.Errorf("Stop left fuzz containers behind: %s", out)
+	}
+}
+
+// shellQuote wraps s in single quotes for `sh -c`, escaping any it contains.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}

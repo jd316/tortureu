@@ -12,6 +12,12 @@
 //     that does not exist). Its exit status alone therefore cannot tell a
 //     *result* from a *tool failure*, which is precisely the distinction
 //     R-VER-2 forbids conflating;
+//   - the same three hold for schemathesis's own official image, which is
+//     the same 4.24.3 CLI; container mode (InNamespaceOf, TBD-12) therefore
+//     changes only *where* the process runs, never how its output is read.
+//     Measured against a real internal:true SUT: the namespace-joined pass
+//     reaches it and reports its planted 500 as a `<failure>`, while from
+//     the host there is no published port to connect to at all;
 //   - its JUnit report can: `<failure>` is a response that broke a check
 //     (the SUT failing — a finding), `<error>` is a case that never ran at
 //     all (measured against an unreachable port: "Network Error /
@@ -31,10 +37,25 @@ import (
 )
 
 // schemathesisInstallHint follows R-CLI-5's shape.
-const schemathesisInstallHint = "install: pip install schemathesis (CLI name `st`) — https://schemathesis.readthedocs.io"
+const schemathesisInstallHint = "install: pip install schemathesis (CLI name `st`) — https://schemathesis.readthedocs.io, or install Docker, which lets TortureU run schemathesis's own official image instead"
 
 // schemathesisBins are the names the CLI is installed under, newest first.
 var schemathesisBins = []string{"st", "schemathesis"}
+
+// schemathesisImage is the official image used in container mode, pinned to
+// the same version this file's behaviour was measured against rather than
+// the floating `stable` tag (TBD-11's rule: no `latest`, in any spelling).
+const schemathesisImage = "schemathesis/schemathesis:4.24.3"
+
+// Where the spec goes in and the report comes out inside the container.
+// /tmp for K6Runner's reason: the image runs as a non-root user, and /tmp
+// is writable in every image this has to work with. Both are moved with
+// `docker cp` rather than a bind mount, again for K6Runner's reason — some
+// Docker setups restrict bind mounts to allow-listed host paths.
+const (
+	schemathesisContainerSpecBase = "/tmp/tortureu-fuzz-spec"
+	schemathesisContainerReport   = "/tmp/tortureu-fuzz-report.xml"
+)
 
 // SchemathesisRunner drives schemathesis.
 type SchemathesisRunner struct {
@@ -45,6 +66,37 @@ type SchemathesisRunner struct {
 	MaxExamples int
 	// Dir is where the JUnit report is written; defaults to os.TempDir().
 	Dir string
+	// Image is the container-mode image; defaults to schemathesisImage.
+	Image string
+	// DockerBin is the docker binary for container mode; defaults to
+	// "docker".
+	DockerBin string
+	// Netns is the container whose network namespace the fuzzer joins when
+	// base_url is not reachable from this host (R-EXE-27's Reach rule,
+	// TBD-12) — the same container the load generator joins, so both are
+	// pointed at the same thing. Empty means host-process mode only.
+	Netns string
+}
+
+// InNamespaceOf returns a copy of r bound to container's network namespace,
+// for the reason PgbenchRunner.InNamespaceOf gives.
+func (r SchemathesisRunner) InNamespaceOf(container string) Fuzzer {
+	r.Netns = container
+	return r
+}
+
+func (r SchemathesisRunner) image() string {
+	if r.Image != "" {
+		return r.Image
+	}
+	return schemathesisImage
+}
+
+func (r SchemathesisRunner) dockerBin() string {
+	if r.DockerBin != "" {
+		return r.DockerBin
+	}
+	return "docker"
 }
 
 // resolveBin returns the binary to run, or an error carrying an install
@@ -63,10 +115,39 @@ func (r SchemathesisRunner) resolveBin() (string, error) {
 }
 
 // Preflight reports a missing schemathesis before the run resets anything
-// (R-EXE-27, R-CLI-5).
+// (R-EXE-27, R-CLI-5). Docker satisfies it too, for the reason
+// PgbenchRunner.Preflight gives: running the official image in the SUT's
+// network namespace is the only route that reaches a SUT R-DC2-3 isolated,
+// so a machine with Docker and no `st` is not a machine that must be
+// refused.
 func (r SchemathesisRunner) Preflight() error {
+	if _, err := r.resolveBin(); err == nil {
+		return nil
+	}
+	if _, err := exec.LookPath(r.dockerBin()); err == nil {
+		return nil
+	}
 	_, err := r.resolveBin()
 	return err
+}
+
+// useContainer is PgbenchRunner.useContainer's rule for the fuzzer: dial
+// base_url from here first, and only join the SUT's namespace when that
+// address has nothing listening on this host — which is what R-DC2-3's
+// internal-only network guarantees. There is nothing to rewrite either way,
+// so unlike the DB case there is no un-rewritable form to bail out on.
+func (r SchemathesisRunner) useContainer(baseURL string) bool {
+	if r.Netns == "" {
+		return false
+	}
+	if _, err := r.resolveBin(); err != nil {
+		return true
+	}
+	addr, ok := urlAddr(baseURL)
+	if !ok {
+		return false
+	}
+	return !hostCanReach(addr)
 }
 
 func (r SchemathesisRunner) maxExamples() int {
@@ -86,35 +167,99 @@ func (r SchemathesisRunner) dir() string {
 // Start begins one fuzz pass. max bounds its own lifetime so a fuzzer that
 // outlives this process still stops (R-EXE-27).
 func (r SchemathesisRunner) Start(specPath, baseURL string, max time.Duration) (FuzzHandle, error) {
+	if r.useContainer(baseURL) {
+		return r.startContainer(specPath, baseURL, max)
+	}
+	return r.startHostProcess(specPath, baseURL, max)
+}
+
+// runArgs is schemathesis's own CLI contract, identical in both modes —
+// spec is a path this process can see in host mode and a path inside the
+// container in container mode, and report likewise.
+func (r SchemathesisRunner) runArgs(spec, baseURL, report string) []string {
+	return []string{"run", spec,
+		"-u", baseURL,
+		"-n", strconv.Itoa(r.maxExamples()),
+		"--report", "junit",
+		"--report-junit-path", report}
+}
+
+func (r SchemathesisRunner) startHostProcess(specPath, baseURL string, max time.Duration) (FuzzHandle, error) {
 	bin, err := r.resolveBin()
 	if err != nil {
 		return nil, err
 	}
-	report := filepath.Join(r.dir(), fmt.Sprintf("tortureu-fuzz-%d.xml", time.Now().UnixNano()))
-	cmd := exec.Command(bin, "run", specPath,
-		"-u", baseURL,
-		"-n", strconv.Itoa(r.maxExamples()),
-		"--report", "junit",
-		"--report-junit-path", report)
+	report := r.reportPath()
+	return startSchemathesis(exec.Command(bin, r.runArgs(specPath, baseURL, report)...), report, "", r.dockerBin(), max)
+}
+
+// startContainer runs the same schemathesis CLI inside its official image,
+// joined to r.Netns's network namespace — K6Runner's mechanism (load.go)
+// applied to the fuzzer, including its create / cp-in / start -a / cp-out /
+// rm shape, and for the same reason: `docker cp` works where a bind mount
+// may be refused.
+//
+// baseURL is passed through untouched. That is the whole of R-EXE-27's
+// Reach rule: inside this namespace it names exactly what it names for k6.
+func (r SchemathesisRunner) startContainer(specPath, baseURL string, max time.Duration) (FuzzHandle, error) {
+	// Keep the spec's extension: schemathesis picks its parser from it, and
+	// a YAML document handed over as extensionless would be read as JSON.
+	containerSpec := schemathesisContainerSpecBase + filepath.Ext(specPath)
+	createArgs := append([]string{"create", "--network", "container:" + r.Netns, r.image()},
+		r.runArgs(containerSpec, baseURL, schemathesisContainerReport)...)
+	out, err := exec.Command(r.dockerBin(), createArgs...).CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("create schemathesis container in %s's network namespace: %w: %s", r.Netns, err, out)
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 {
+		return nil, fmt.Errorf("create schemathesis container: docker printed no container id")
+	}
+	containerID := fields[len(fields)-1]
+
+	if out, err := exec.Command(r.dockerBin(), "cp", specPath, containerID+":"+containerSpec).CombinedOutput(); err != nil {
+		_ = exec.Command(r.dockerBin(), "rm", "-f", containerID).Run()
+		return nil, fmt.Errorf("copy the OpenAPI document into the schemathesis container: %w: %s", err, out)
+	}
+
+	h, err := startSchemathesis(exec.Command(r.dockerBin(), "start", "-a", containerID), r.reportPath(), containerID, r.dockerBin(), max)
+	if err != nil {
+		_ = exec.Command(r.dockerBin(), "rm", "-f", containerID).Run()
+		return nil, err
+	}
+	return h, nil
+}
+
+// reportPath is where the JUnit report lands on this host — written
+// directly by a host process, copied out of the container otherwise.
+func (r SchemathesisRunner) reportPath() string {
+	return filepath.Join(r.dir(), fmt.Sprintf("tortureu-fuzz-%d.xml", time.Now().UnixNano()))
+}
+
+// startSchemathesis launches cmd and wires the handle both modes share.
+func startSchemathesis(cmd *exec.Cmd, report, containerID, dockerBin string, max time.Duration) (FuzzHandle, error) {
 	buf := &syncBuffer{}
 	cmd.Stdout, cmd.Stderr = buf, buf
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("schemathesis: %w", err)
 	}
 
-	h := &schemathesisHandle{cmd: cmd, out: buf, report: report, exited: make(chan struct{})}
+	h := &schemathesisHandle{cmd: cmd, out: buf, report: report, exited: make(chan struct{}),
+		containerID: containerID, dockerBin: dockerBin}
 	go func() {
 		h.waitErr = cmd.Wait()
 		close(h.exited)
 	}()
 	// The upper bound is a backstop, not the normal path: Run stops the
 	// fuzzer when the load ends (R-EXE-27). Without it, a fuzz pass that
-	// hangs would outlive the run that started it.
+	// hangs would outlive the run that started it — and in container mode
+	// killing the `docker start` client alone would not stop the container,
+	// so the container is removed too.
 	h.bound = time.AfterFunc(max, func() {
 		select {
 		case <-h.exited:
 		default:
-			_ = cmd.Process.Kill()
+			h.kill()
 		}
 	})
 	return h, nil
@@ -125,6 +270,10 @@ type schemathesisHandle struct {
 	out    *syncBuffer
 	report string
 	bound  *time.Timer
+	// containerID is set in container mode only; dockerBin is how it is
+	// reached.
+	containerID string
+	dockerBin   string
 
 	exited  chan struct{}
 	waitErr error
@@ -145,8 +294,18 @@ func (h *schemathesisHandle) Stop() FuzzResult {
 		case <-h.exited:
 		default:
 			cutShort = true
-			_ = h.cmd.Process.Kill()
+			h.kill()
 			<-h.exited
+		}
+		// Container mode: the report is inside the container, so it has to
+		// come out before the container goes away — including after a kill,
+		// since schemathesis writes the report as it exits and a cut-short
+		// pass may still have written one.
+		if h.containerID != "" {
+			_ = exec.Command(h.dockerBin, "cp", h.containerID+":"+schemathesisContainerReport, h.report).Run()
+			// Unconditional, on every exit path: nothing this run started
+			// may outlive it (R-EXE-5).
+			_ = exec.Command(h.dockerBin, "rm", "-f", h.containerID).Run()
 		}
 		defer os.Remove(h.report)
 
@@ -170,6 +329,21 @@ func (h *schemathesisHandle) Stop() FuzzResult {
 		}
 	})
 	return h.result
+}
+
+// kill ends the fuzz pass now. In container mode killing the attached
+// `docker start` client is not enough — the container it is attached to
+// keeps running — so the container is killed too. Killed, not removed:
+// whatever report it managed to write still has to be copied out of it
+// afterwards, and removing it here would silently throw away the findings
+// of a pass the run merely cut short. Stop removes it once it has the file.
+func (h *schemathesisHandle) kill() {
+	if h.cmd.Process != nil {
+		_ = h.cmd.Process.Kill()
+	}
+	if h.containerID != "" {
+		_ = exec.Command(h.dockerBin, "kill", h.containerID).Run()
+	}
 }
 
 // junitSuites is the subset of schemathesis's JUnit report this package
