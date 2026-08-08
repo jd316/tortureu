@@ -210,7 +210,7 @@ func runInitCI(args []string, ciOut string, stdout, stderr io.Writer) int {
 func runInit(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	compose := fs.String("compose", "docker-compose.yml", "path to the compose file to detect")
+	compose := fs.String("compose", detect.DefaultComposePath, "path to the compose file to detect")
 	out := fs.String("out", "torture.yaml", "path to write the generated config")
 	// -ci is a bool, and the provider is the positional argument after it
 	// (`tortureu init --ci gitlab`), because the flag has to work both bare
@@ -226,13 +226,22 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 		return runInitCI(fs.Args(), *ciOut, stdout, stderr)
 	}
 
-	sys, err := detect.Detect(*compose)
+	// R-DET-15: an unset -compose resolves by the Compose Specification's
+	// own precedence, so a repo using compose.yaml (the canonical name, and
+	// what nearly every real project uses) works without a flag.
+	composePath, cerr := detect.ResolveComposeArg(*compose)
+	if cerr != nil {
+		fmt.Fprintf(stderr, "tortureu init: %v\n", cerr)
+		return 2
+	}
+
+	sys, err := detect.Detect(composePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "tortureu init: detect: %v\n", err)
 		return 2
 	}
 
-	result := buildInit(sys, *compose)
+	result := buildInit(sys, composePath)
 	if err := os.WriteFile(*out, result.YAML, 0o644); err != nil {
 		fmt.Fprintf(stderr, "tortureu init: write %s: %v\n", *out, err)
 		return 2

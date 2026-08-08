@@ -36,7 +36,7 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 func runCheckContracts(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("check contracts", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	compose := fs.String("compose", "docker-compose.yml", "path to the compose file to detect")
+	compose := fs.String("compose", detect.DefaultComposePath, "path to the compose file to detect")
 	baseline := fs.String("baseline", "", "baseline to compare against: a git ref (e.g. main) or a file path (required — tortureu does not guess a baseline)")
 	openapiSpec := fs.String("openapi-spec", "", "path to the current OpenAPI document; auto-detected by conventional filename next to the compose file if empty")
 	protoDir := fs.String("proto-dir", "", "directory buf breaking should check; defaults to the compose file's directory")
@@ -48,7 +48,16 @@ func runCheckContracts(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	sys, err := detect.Detect(*compose)
+	// R-DET-15: an unset -compose resolves by the Compose Specification's
+	// own precedence, so a repo using compose.yaml (the canonical name, and
+	// what nearly every real project uses) works without a flag.
+	composePath, cerr := detect.ResolveComposeArg(*compose)
+	if cerr != nil {
+		fmt.Fprintf(stderr, "tortureu check contracts: %v\n", cerr)
+		return 2
+	}
+
+	sys, err := detect.Detect(composePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "tortureu check contracts: detect: %v\n", err)
 		return 2

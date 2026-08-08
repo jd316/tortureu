@@ -53,8 +53,13 @@ func renderPrereqs(checks []PrereqCheck) string {
 				v = "found"
 			}
 			fmt.Fprintf(&b, "  [ok] %s: %s\n", c.Name, v)
-		} else {
+		} else if c.Required {
 			fmt.Fprintf(&b, "  [missing] %s — %s\n", c.Name, c.Hint)
+		} else {
+			// R-CLI-5: an optional tool's absence is not a problem to fix.
+			// "[missing]" reads as a failure and sends the reader to install
+			// something `run` never uses.
+			fmt.Fprintf(&b, "  [n/a] %s — %s\n", c.Name, c.Hint)
 		}
 	}
 	return b.String()
@@ -174,7 +179,7 @@ func buildDoctorReport(findings []doctor.Finding, reg *doctor.Registry, sys *det
 func runDoctor(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	compose := fs.String("compose", "docker-compose.yml", "path to the compose file to detect")
+	compose := fs.String("compose", detect.DefaultComposePath, "path to the compose file to detect")
 	// registryPath default is "" (not "registry.yaml"): the normal path is
 	// the registry embedded in the binary (R-COV-8), independent of the
 	// working directory, so `doctor` also works everywhere but this repo.
@@ -184,7 +189,16 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	sys, err := detect.Detect(*compose)
+	// R-DET-15: an unset -compose resolves by the Compose Specification's
+	// own precedence, so a repo using compose.yaml (the canonical name, and
+	// what nearly every real project uses) works without a flag.
+	composePath, cerr := detect.ResolveComposeArg(*compose)
+	if cerr != nil {
+		fmt.Fprintf(stderr, "tortureu doctor: %v\n", cerr)
+		return 2
+	}
+
+	sys, err := detect.Detect(composePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "tortureu doctor: detect: %v\n", err)
 		return 2

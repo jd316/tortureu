@@ -53,7 +53,11 @@ func Render(v Verdict) string {
 	// status=fail (the SUT broke an assertion). That distinction only helps a
 	// user if the tool says what broke — an error with no reason is
 	// indistinguishable from a shrug, so surface it prominently.
-	if v.Status == StatusError && v.Error != "" {
+	// R-VER-16: aborted too, not only error. An aborted run rendered
+	// "reset: failed" and nothing else, while the JSON carried the reason —
+	// R-VER-9 says one document, two renderings, so the human one may not
+	// be the lossy one.
+	if (v.Status == StatusError || v.Status == StatusAborted) && v.Error != "" {
 		fmt.Fprintf(&b, "\n  error: %s\n", v.Error)
 	}
 

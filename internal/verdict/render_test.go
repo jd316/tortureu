@@ -338,3 +338,18 @@ func TestRender_DoesNotTruncateANonHashCommit(t *testing.T) {
 		t.Errorf("non-hash commit was altered:\n%s", out)
 	}
 }
+
+// spec: R-VER-16
+//
+// The reason for an abort must reach the human rendering too, not only the
+// JSON. R-VER-9: one document, two renderings — the human one may not be
+// the lossy one.
+func TestRender_AbortedCarriesItsReason(t *testing.T) {
+	out := Render(Verdict{
+		Scenario: "s", Status: StatusAborted, Reset: "failed",
+		Error: "reset failed: bind source path does not exist: db/password.txt",
+	})
+	if !strings.Contains(out, "db/password.txt") {
+		t.Errorf("aborted rendering does not carry the reason:\n%s", out)
+	}
+}

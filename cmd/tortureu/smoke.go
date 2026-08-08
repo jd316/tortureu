@@ -22,7 +22,7 @@ func runSmoke(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("smoke", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	url := fs.String("url", "", "base URL to hit (required) — smoke has no torture.yaml to read a target from")
-	compose := fs.String("compose", "docker-compose.yml", "path to the compose file, used only to find the SUT's container for isolated-network reachability")
+	compose := fs.String("compose", detect.DefaultComposePath, "path to the compose file, used only to find the SUT's container for isolated-network reachability")
 	rate := fs.Float64("rate", 5, "requests per second")
 	duration := fs.Duration("duration", 10*time.Second, "total time to drive traffic")
 	timeout := fs.Duration("timeout", 3*time.Second, "per-request timeout")
@@ -41,7 +41,19 @@ func runSmoke(args []string, stdout, stderr io.Writer) int {
 	// smoke's direct-dial fast path works against any ordinarily-reachable
 	// URL with no compose file at all.
 	sutService := ""
-	if sys, err := detect.Detect(*compose); err != nil {
+	// R-DET-15: an unset -compose resolves by the Compose Specification's
+	// own precedence, so a repo using compose.yaml (the canonical name, and
+	// what nearly every real project uses) works without a flag.
+	// Resolution failure is not fatal here for the same reason detection
+	// failure is not: smoke's direct-dial fast path needs no compose file
+	// at all. Falling back to the raw flag keeps the "no compose file"
+	// message coming from detect, as before.
+	composePath := *compose
+	if resolved, cerr := detect.ResolveComposeArg(*compose); cerr == nil {
+		composePath = resolved
+	}
+
+	if sys, err := detect.Detect(composePath); err != nil {
 		fmt.Fprintf(stderr, "tortureu smoke: detect: %v (continuing without isolated-network reachability)\n", err)
 	} else {
 		sutService = sys.SUT

@@ -259,19 +259,28 @@ func TestCheckPrerequisitesReportsGenuinelyMissingK6(t *testing.T) {
 // The rendering side: buildDoctorReport must surface a missing
 // prerequisite by name, with its hint, not silently drop it.
 func TestBuildDoctorReportRendersMissingPrerequisite(t *testing.T) {
+	// docker is the required one. k6 is present-or-not-required (R-CLI-5):
+	// run executes it in a container, so its absence is not a problem to
+	// fix and must not render as one.
 	prereqs := []PrereqCheck{
-		{Name: "k6", Found: false, Hint: "install: https://k6.io/docs/get-started/installation/"},
-		{Name: "docker", Found: true, Version: "Docker version 24.0.0"},
+		{Name: "k6", Found: false, Hint: "not required — run executes k6 in the pinned grafana/k6 container"},
+		{Name: "docker", Found: false, Required: true, Hint: "install: https://docs.docker.com/get-docker/"},
 		{Name: "docker compose", Found: true, Version: "Docker Compose version v2.20.0"},
 	}
 	report := buildDoctorReport(nil, fixtureRegistry(), &detect.System{}, prereqs)
-	if !strings.Contains(report, "[missing] k6") {
-		t.Errorf("report does not flag the missing prerequisite:\n%s", report)
+	if !strings.Contains(report, "[missing] docker") {
+		t.Errorf("report does not flag the missing required prerequisite:\n%s", report)
 	}
-	if !strings.Contains(report, "https://k6.io/docs/get-started/installation/") {
+	if !strings.Contains(report, "https://docs.docker.com/get-docker/") {
 		t.Errorf("report does not carry the install hint:\n%s", report)
 	}
-	if !strings.Contains(report, "[ok] docker") {
+	if strings.Contains(report, "[missing] k6") {
+		t.Errorf("an optional tool is rendered as missing, which reads as a failure to fix:\n%s", report)
+	}
+	if !strings.Contains(report, "[n/a] k6") {
+		t.Errorf("report does not mark k6 as not-required:\n%s", report)
+	}
+	if !strings.Contains(report, "[ok] docker compose") {
 		t.Errorf("report does not confirm a present prerequisite:\n%s", report)
 	}
 }

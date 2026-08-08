@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/jdb316/tortureu/internal/detect"
 	"io"
 	"net"
 	"net/http"
@@ -34,7 +35,7 @@ func runCapture(args []string, stdout, stderr io.Writer) int {
 	listen := fs.String("listen", "127.0.0.1:0", "address the capturing proxy listens on")
 	out := fs.String("out", "cassette.jsonl", "path to write the scrubbed cassette (R-DC2-5: scrubbed on write)")
 	engine := fs.String("engine", "proxy", "capture engine: \"proxy\" (built-in scrubbing proxy) or \"keploy\" (delegate handoff, R-CLI-12)")
-	compose := fs.String("compose", "docker-compose.yml", "compose file the -engine keploy handoff is derived from")
+	compose := fs.String("compose", detect.DefaultComposePath, "compose file the -engine keploy handoff is derived from")
 	duration := fs.Duration("duration", 0, "stop capturing after this long; 0 runs until interrupted (Ctrl-C)")
 	if err := fs.Parse(args); err != nil {
 		return 2

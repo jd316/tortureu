@@ -390,7 +390,11 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 	if opts.NoReset {
 		v.Reset = "skipped"
 	} else if err := deps.Reset.Reset(cfg.Reset.Command); err != nil {
+		// R-VER-16: an aborted verdict must say why. "reset: failed" alone
+		// sends a user with a missing secret file looking for a bug in
+		// TortureU.
 		v.Reset = "failed"
+		v.Error = "reset failed: " + err.Error()
 		return finish(verdict.StatusAborted)
 	}
 	if av, ok := abortedEarly(); ok {

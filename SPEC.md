@@ -207,6 +207,27 @@ unmarshalling. Real compose files use `extends`, profiles, multiple files, `${VA
 and merge semantics; hand-rolled parsing silently misreads them, and a detection error is
 indistinguishable from a system with no dependencies.
 
+**R-DET-15** *(proposed)* — Where a caller does not name a compose file explicitly, TortureU
+**MUST** resolve one using the Compose Specification's own documented precedence:
+
+    compose.yaml  >  compose.yml  >  docker-compose.yaml  >  docker-compose.yml
+
+and **MUST** report which file it chose, so a repo with more than one is never silently read from
+the wrong one. When none exists, the error **MUST** name every filename that was looked for.
+
+Every entry point that takes a compose path defaults this way — `init`, `run`, `doctor`, `check`,
+`smoke`, `capture`, and the MCP tools — because a user meets whichever one they try first.
+
+This requirement exists because the default was `docker-compose.yml` alone, and that is now the
+*least* common spelling: of the 40 examples in Docker's own `docker/awesome-compose`, **37 use
+`compose.yaml`, 2 use `compose.yml`, and none use `docker-compose.yml`**. `tortureu init` failed on
+the first command against all three third-party repos it was tried on, before detection ran at all.
+A tool whose very first step fails on the canonical filename of the format it targets is not
+usable, whatever the rest of it does.
+
+*(found cross-checking the growth strategy's time-to-first-verdict gate against real repositories
+rather than against fixtures this project wrote; specified before the fix, per R-PROC-2)*
+
 **R-DET-10** — A `dep:` predicate whose only source is `lockfile` **MUST NOT** be inferred from a
 compose image, and vice versa. Mis-sourcing produces suggestions that never fire.
 
@@ -623,6 +644,24 @@ guessed one — a wrong unit is a wrong measurement, and this document is read a
 
 *(specified before the fix, per R-PROC-2; the defect was found cross-checking emitted output
 against `VERDICT.md` §1 and §4)*
+
+**R-VER-16** *(proposed)* — A verdict with `status: aborted` **MUST** carry the reason it aborted in
+its `error` field, and the reason **MUST** include the underlying tool's own output where there is
+any. `reset: failed` alone is not a reason.
+
+The reset command is a shell command TortureU runs on the user's behalf (**R-CFG-21**), so its
+failure is almost always something only its output explains — a missing secret file, a port already
+bound, an image that will not pull. `ShellResetter` used `cmd.Run()`, which discards stdout and
+stderr, and `internal/run` discarded the returned error as well, so a real first-run abort rendered
+as `reset: failed` with `"error": null` and nothing else anywhere.
+
+Measured: `tortureu run` on `docker/awesome-compose`'s `nginx-golang-postgres` aborts because that
+example needs a `db/password.txt` the repo does not ship. Docker says exactly that. TortureU said
+`reset: failed`. Aborting was correct; being undiagnosable was not — and this is a user's first
+run, which is where an unexplained failure costs most.
+
+*(specified before the fix, per R-PROC-2; found by measuring the growth strategy's
+time-to-first-verdict gate on repositories this project did not write)*
 **R-VER-13**'s chain was actually built for that finding, and **MUST** then be clamped to the
 ceiling `observability.max_confidence` already carries (**R-DET-6**, TBD-6): a finding may never
 claim more than the ceiling states. With no chain, confidence is unchanged from what
@@ -927,19 +966,30 @@ and no per-finding confidence — and **MUST NOT** be repurposed for other meani
 
 *(behaviour proposed by the implementer and specified before citation, per R-PROC-2)*
 
-**R-CLI-5** — `doctor` **MUST** report whether the tools a run needs (`k6`, `docker`,
-`docker compose`) are present on this machine, and `init` **MUST** warn about any that are missing
-without failing — writing a config is still useful on a machine that cannot yet run.
+**R-CLI-5** — `doctor` **MUST** report whether the tools a run needs are present on this machine,
+and `init` **MUST** warn about any that are missing without failing — writing a config is still
+useful on a machine that cannot yet run.
 
 Presence is what can be checked, so presence is what is claimed: a found binary is reported as
 found, never as working. Missing entries **MUST** carry an install hint.
 
-Without this the first failure arrives late: a user runs `init`, edits a config, runs `run`, and
-only then learns a prerequisite was absent the whole time. We do not bundle k6, so "k6 not on
-PATH" is the most likely first-run outcome for a new user, and for an audience whose stated
-barrier is fear of breaking things, a late failure after two steps of setup is where they give up.
-*(behaviour shipped in Task 8 and specified after the fact — the Task 8 implementer correctly
-escalated that no requirement covered it rather than inventing one)*
+**What `run` actually needs is `docker` and `docker compose` — not `k6` on `PATH`.** This
+requirement used to name k6 among them, from when a host-process k6 was the default. **R-DC2-3**'s
+`internal: true` topology ended that: Docker publishes no host port for a container whose only
+network is internal, so `run` always executes k6 in the pinned `grafana/k6` image sharing the SUT's
+network namespace, and the host-process path is never taken. A machine with no k6 runs the whole
+suite and the whole eval corpus today.
+
+So k6 **MUST NOT** be reported as a missing prerequisite. It **MAY** be reported as absent-and-not-
+required, and the report **MUST** say the container is used. Telling a new user to install a tool
+the tool does not use inverts the failure this requirement exists to prevent: instead of a late
+failure after two steps of setup, it is an unnecessary chore before step one — and for an audience
+whose stated barrier is fear of breaking things, the first instruction being wrong is worse than
+late.
+
+*(behaviour shipped in Task 8 and specified after the fact; the k6 correction came from a
+cross-check of the growth strategy's time-to-first-verdict gate, which is exactly the path this
+friction sits on)*
 
 **R-CLI-4** — `init` **MUST** write a `torture.yaml` that `run` accepts, including a minimal
 starter `load:` and `assert:` clearly marked as a starting point to edit.

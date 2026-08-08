@@ -13,23 +13,36 @@ type PrereqCheck struct {
 	Name    string
 	Found   bool
 	Version string // best-effort, empty when not found or not cheaply obtainable
-	Hint    string // how to get it; only meaningful when !Found
+	Hint    string // how to get it, or why its absence does not matter
+	// Required distinguishes "run cannot work without this" from "run does
+	// not use this" (R-CLI-5). k6 is the second: R-DC2-3's internal: true
+	// topology means Docker publishes no host port for the SUT, so run
+	// always executes k6 in the pinned grafana/k6 image sharing the SUT's
+	// network namespace. Reporting it as missing sent a new user to install
+	// a tool the tool never touches, on their first command.
+	Required bool
 }
 
-// checkPrerequisites checks the three things a real `run` needs: k6 (the
-// load engine), docker, and docker compose (the R-DC2-3 topology overlay
-// and the reset command's default). Nothing here is mocked in tests — it
-// is the real exec.LookPath against the process's real PATH — so a test
-// proves genuine absence by pointing PATH at an empty directory, not by
-// stubbing the check away.
+// checkPrerequisites checks what a real `run` needs: docker and docker
+// compose (the R-DC2-3 topology overlay and the reset command's default).
+// k6 is reported too, but as optional — see PrereqCheck.Required. Nothing
+// here is mocked in tests — it is the real exec.LookPath against the
+// process's real PATH — so a test proves genuine absence by pointing PATH at
+// an empty directory, not by stubbing the check away.
 func checkPrerequisites() []PrereqCheck {
 	k6 := checkBinary("k6", []string{"version"},
-		"install: https://k6.io/docs/get-started/installation/")
+		"not required — run executes k6 in the pinned "+k6ImageRef+" container, sharing the SUT's network namespace")
 	docker := checkBinary("docker", []string{"--version"},
 		"install: https://docs.docker.com/get-docker/")
+	docker.Required = true
 	compose := checkDockerCompose(docker.Found)
+	compose.Required = true
 	return []PrereqCheck{k6, docker, compose}
 }
+
+// k6ImageRef names the image `run` actually uses, so doctor's report and the
+// runner cannot drift apart.
+const k6ImageRef = "grafana/k6"
 
 // checkBinary reports whether name is on PATH, and if so, a best-effort
 // first line of `name <versionArgs...>` output. A version command that
@@ -71,7 +84,10 @@ func firstLine(s string) string {
 func missingPrerequisites(checks []PrereqCheck) []PrereqCheck {
 	var out []PrereqCheck
 	for _, c := range checks {
-		if !c.Found {
+		// Only required tools. An optional one listed under `init`'s
+		// "missing what run needs" header contradicts its own hint
+		// (R-CLI-5), and sends the reader to install something unused.
+		if !c.Found && c.Required {
 			out = append(out, c)
 		}
 	}

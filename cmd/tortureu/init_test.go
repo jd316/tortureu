@@ -391,7 +391,13 @@ func TestInitWarnsAboutMissingPrerequisiteButStillSucceeds(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "torture.yaml")); err != nil {
 		t.Errorf("torture.yaml was not written despite a missing prerequisite: %v", err)
 	}
-	if !strings.Contains(out.String(), "k6") {
-		t.Errorf("stdout does not name the missing prerequisite:\n%s", out.String())
+	// docker, not k6: k6 is not required (R-CLI-5) because run executes it
+	// in a container, so listing it under "missing what run needs" would
+	// contradict its own hint.
+	if !strings.Contains(out.String(), "docker") {
+		t.Errorf("stdout does not name the missing required prerequisite:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "- k6:") {
+		t.Errorf("stdout lists k6 as missing-and-needed; it is not required:\n%s", out.String())
 	}
 }
