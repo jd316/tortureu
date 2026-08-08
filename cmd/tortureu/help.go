@@ -20,6 +20,7 @@ Verbs:
   emit      generate a delegate-tier tool's config
   capture   ingest traffic
   replay    replay captured traffic as load
+  trend     record a verdict locally, show the cross-commit trend
 
 Run "tortureu <verb> -h" for verb-specific flags.
 `

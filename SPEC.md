@@ -611,8 +611,70 @@ findings in three of four runs. *(E1 → Task 4, 2026-08-08)*
 | `emit` | generate a `delegate`-tier tool's config |
 | `capture` | ingest traffic |
 | `replay` | capture → load, subject to R-DC2-4 |
+| `trend` | record a verdict locally → cross-commit trend |
 
 **R-CLI-2** — Every verb **MUST** be listed in `registry.yaml` as the `how:` of at least one tool.
+
+**R-CLI-14** *(proposed)* — `trend` **MUST** provide two modes over a local store of verdicts:
+`trend record <verdict.json>` appends one record for one verdict document, and `trend show` prints
+the series accumulated so far. `record` **MUST** accept `-` as stdin, so `tortureu run -json |
+tortureu trend record -` needs no intermediate file — the same composability reason `emit` prints to
+stdout (**R-CLI-8**).
+
+`show` **MUST** answer the two questions a cross-commit trend exists to answer, and **MUST** answer
+both:
+
+1. **did a number move** — for every numeric metric the store carries, its value at each recorded run
+   and the delta against the previous recorded run of the same scenario;
+2. **did a finding appear that was not there before** — per run, the findings that are new against
+   the previous run and the findings that were present before and are now gone.
+
+A finding's identity for that comparison **MUST** be its assertion text plus the fault named as its
+cause, **never** the verdict's `id` field. `f1` is a position in one run's ordered list (`VERDICT.md`
+§1 orders findings worst-first), so comparing `id`s across runs reports a change whenever the
+ordering changed and reports none when the first finding was replaced by a different one.
+
+`show` **MUST NOT** fail the process because a metric regressed. It exits `0` whenever the store
+could be read and `2` when it could not. Choosing the boundary at which a slower p99 becomes a red
+build is a threshold policy, and `torture.yaml` states none — the same reason `emit bencher` writes
+its `--threshold-*` flags as commented examples rather than picking one.
+
+**R-CLI-15** *(proposed)* — The store **MUST** be **JSONL**: one JSON object per line, append-only,
+at `.tortureu/trend.jsonl` by default and overridable with `-store`. Each record **MUST** carry a
+schema version. A record whose version this build does not understand, and a line that does not
+parse, **MUST** each be reported with their line number and skipped — never guessed at, and never
+silently dropped (**R-COV-6**). One corrupt tail line **MUST NOT** cost the reader the history above
+it.
+
+A record **MUST** be a *projection* of the verdict, not the verdict document itself: the run's
+identity (`run_id`, `scenario`, `started_at`, `duration_s`), its anchor (`commit`), its outcome
+(`status`, exit code), the numeric leaves of `metrics` flattened to dotted keys, and the finding
+keys **R-CLI-14** compares. Storing whole verdicts would make the file unreadable in a `git diff`
+and unbounded in size, and neither buys anything a trend joins on. Everything dropped is
+reconstructible from the verdict document the run already emitted; nothing dropped is *derivable*
+from the projection and then silently wrong.
+
+**R-CLI-16** *(proposed)* — `record` **MUST** be safe against concurrent writers — two CI jobs
+finishing at the same moment, on the same store. It **MUST** hold an advisory exclusive lock across
+a single append of one whole line, so the outcome is two complete records in some order, never one
+interleaved line that parses as neither run. It **MUST NOT** rewrite bytes it did not just append:
+a writer that can also modify history turns a torn write into unrecoverable data loss instead of one
+skippable line.
+
+**R-CLI-17** *(proposed)* — A verdict whose `commit` is empty — **R-VER-12**'s honest answer for a
+run made outside a git checkout — **MUST** still be recorded, **MUST NOT** enter the series, and
+**MUST** be reported by `show` as excluded, with the count and the reason. The two obvious
+alternatives are both worse: refusing to record loses a real run because of where it was run, and
+letting it join keyed on `""` collapses every anchorless run onto a single point and silently
+corrupts the trend those points sit in.
+
+The same distinction applies to outcome. A record whose status is `error` or `aborted` carries no
+measurement of the system under test (**R-VER-2**), so its metrics **MUST NOT** enter any delta;
+its row **MUST** still be shown, with its status, so the reader sees a gap in the series rather than
+a continuity that was never measured.
+
+*(all four proposed by the implementer and specified before citation, per R-PROC-2; they resolve
+TBD-1)*
 
 **R-CLI-11** — `init --ci [provider]` **MUST** write a CI pipeline that runs `tortureu run` and
 treats **R-VER-7**'s exit codes `0`–`4` as the contract. `provider` is `github` (default) or
@@ -1117,30 +1179,58 @@ nothing to suggest, and only the second is honest.
 
 ## 12. Open (TBD)
 
-- **TBD-1** — Verdict storage format for cross-commit trend tracking (SQLite / JSONL /
-  Bencher-compatible). **NARROWED 2026-08-09, still open.** The Bencher-compatible option is now
-  built (`tortureu emit bencher`, R-CLI-8) and it turns out **not to be a third storage format at
-  all**: Bencher Metric Format is a *projection* of the verdict computed at emit time, and the
-  history lives in Bencher's own server, so nothing new is stored on our side. Verified against
-  the real CLI (bencher 0.6.11) — a verdict document goes in, a report Bencher accepts comes out.
-  Two consequences worth keeping.
+- ~~**TBD-1**~~ — **RESOLVED 2026-08-09: JSONL, at `.tortureu/trend.jsonl`, read by
+  `tortureu trend` (R-CLI-14..17).** Verdict storage format for cross-commit trend tracking
+  (SQLite / JSONL / Bencher-compatible). The question was narrowed twice before it was answered,
+  and both narrowings are worth keeping because they are what made the remaining choice small.
 
-  First, the choice that remains is only about **local** comparison (SQLite / JSONL), i.e. what a
-  repo with no Bencher project gets. That is still blocked on runs worth comparing, so it stays
-  open.
+  **The Bencher-compatible option was never a third storage format.** `tortureu emit bencher`
+  (R-CLI-8) is built and verified against the real CLI (bencher 0.6.11): Bencher Metric Format is a
+  *projection* of one verdict computed at emit time, and the history lives on Bencher's server.
+  Nothing is stored on our side, so that option answers "where does a repo *with* a Bencher project
+  keep its trend" and says nothing about a repo without one. The two remain complementary rather
+  than competing: the same projection idea, one pointed at a server, one at a file.
 
-  Second, and more useful: implementing this exposed that the format was **not the binding
-  constraint**. Every trend needs a per-run anchor, and `verdict.Commit` — VERDICT.md §1's
-  `commit` field, the one it labels "for §12 trend tracking" — was **written by no producer in
-  this codebase**; `internal/run` never set it, so every verdict carried an empty anchor and any
-  storage format chosen would have been a store of unanchored rows. Bencher's own `--hash`
-  additionally rejects anything but a full 40-character git hash, so VERDICT.md's own example
-  value (`a3f19c2`) is refused.
+  **The binding constraint was the anchor, not the format.** Every trend joins on a per-run commit,
+  and `verdict.Commit` — VERDICT.md §1's `commit` field, the one it labels "for §12 trend tracking"
+  — was written by no producer in this codebase, so any format chosen would have been a store of
+  unanchored rows. That prerequisite is now closed by **R-VER-12**: `internal/run` resolves the full
+  40-character hash from the git HEAD of the repo containing the compose file, and leaves it empty
+  outside a checkout rather than inventing one. (Bencher's `--hash` rejects anything shorter — even
+  VERDICT.md's own example value `a3f19c2`.)
 
-  **That prerequisite is now closed**: R-VER-12 specifies the anchor and `internal/run` resolves it
-  from the git HEAD of the repo containing the compose file, as the full 40-character hash, empty
-  outside a checkout rather than a placeholder. What remains open here is genuinely only the local
-  storage-format choice above.
+  **Why JSONL and not SQLite**, now that the store has something real to hold:
+
+  - **It is the artefact that survives being committed.** A trend is only worth keeping if it
+    outlives the machine that produced it, which means it goes in the repo. A SQLite file is opaque
+    to `git diff`, rewrites pages on every insert so every run is whole-file binary churn, and
+    conflicts unmergeably when two branches each record a run. An append-only JSONL file diffs as
+    the one line it gained, and two branches that each appended merge by concatenation. A repo that
+    would rather not track it gitignores one path either way, so JSONL is strictly better on the
+    axis that actually differs.
+  - **The dependency cost is real and the query benefit is not.** SQLite in Go is either cgo
+    (`mattn/go-sqlite3`, which ends the single static binary D-6 exists for) or a very large pure-Go
+    transpilation (`modernc.org/sqlite`). `go.mod` currently has two direct dependencies. What that
+    buys is indexed query over a table whose row count is *one per run* — a few thousand rows after
+    years of CI. Reading the whole file and grouping in memory is not the slow path and will not
+    become one.
+  - **Concurrent writers do not need a database.** The one genuinely hard requirement — two parallel
+    CI jobs recording at the same instant — is satisfied by an advisory exclusive lock held across a
+    single append of one whole line (R-CLI-16). Measured: 40 concurrent `tortureu trend record`
+    processes against one store produced 40 whole records and zero unparseable lines, where the same
+    40 writes without the lock tore 17 of them. SQLite would solve the same problem with a
+    write-ahead log, a lock file and a `database is locked` failure mode; here the worst case is one
+    skippable line, and R-CLI-15 requires the reader to skip it by line number rather than lose the
+    history above it.
+  - **A verdict is already JSON.** The store is a projection of the document `run` emits, in the
+    same encoding, so nothing sits between "we have a verdict" and "we have a row" — which is also
+    why the projection is explicit (R-CLI-15) rather than the whole document: the file stays
+    readable and bounded.
+
+  What the resolution deliberately does **not** do: fail a build on a regression (R-CLI-14 — that is
+  a threshold policy nothing has stated), and enter an anchorless or unmeasured run into the series
+  (R-CLI-17 — a row with no anchor is kept and shown as excluded, never joined on `""`).
+
 
 - **TBD-14** — What SHAPE a `sql:` assertion (R-CFG-18) is. R-CFG-18 says a `sql:` entry is
   accepted for run-scoped data-integrity invariants; it does not say whether the expression is a

@@ -244,7 +244,7 @@ ok(not orphans, "every internal package has a caller" + (f" — UNWIRED: {orphan
 # `planned:`. The final review found ~34 entries instructing users to run verbs that exit 2,
 # and a header naming `tortureu suggest`, which is not a verb at all. Telling someone to run a
 # command that cannot run is the documentation form of "built but unreachable".
-IMPLEMENTED = {'init', 'run', 'doctor', 'mcp', 'smoke', 'check', 'emit', 'capture', 'replay'}
+IMPLEMENTED = {'init', 'run', 'doctor', 'mcp', 'smoke', 'check', 'emit', 'capture', 'replay', 'trend'}
 # Flags a how: may name. Verb-level checking is not enough: `tortureu run --db-load` passes a
 # verb check and still tells a user to pass a flag that does not exist.
 REAL_FLAGS = set()
@@ -320,7 +320,7 @@ print(f"     R-LIC-1 boundary applies to {len(agpl)} AGPL drive-tier tool(s): {'
 
 # ── R-CLI-2: every CLI verb must be the how: of at least one registry tool, so no verb exists
 # that the catalogue never mentions.
-VERBS = {'init', 'run', 'smoke', 'doctor', 'mcp', 'check', 'emit', 'capture', 'replay'}
+VERBS = {'init', 'run', 'smoke', 'doctor', 'mcp', 'check', 'emit', 'capture', 'replay', 'trend'}
 hows = ' '.join(str(t['how']) for d in reg['domains'] for t in d['tools'])
 unnamed = sorted(v for v in VERBS if f'tortureu {v}' not in hows)
 ok(not unnamed, "R-CLI-2: every verb is named by some tool's how:" + (f" — unnamed: {unnamed}" if unnamed else ""))

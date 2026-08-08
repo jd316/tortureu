@@ -208,7 +208,8 @@ domains:
     tools:
       - { id: k6-thresholds, tier: drive, when: always,       how: "assert: [http_req_duration: [...]]", note: "D-2: our assertion language, verbatim", licence: "AGPL-3.0 (k6)" }
       - { id: promql,    tier: drive,    when: always,        how: "assert: [{promql: ...}]", note: "everything k6 cannot see", licence: "Apache-2.0 (Prometheus)" }
-      - { id: bencher,   tier: delegate, when: always,        how: "tortureu emit bencher",   note: "turns one-shot runs into a trend" }
+      - { id: bencher,   tier: delegate, when: always,        how: "tortureu emit bencher",   note: "turns one-shot runs into a trend, on Bencher's server" }
+      - { id: tortureu-trend, tier: drive, when: always,        how: "tortureu trend show",     note: "the local half of the same trend: verdicts appended to a JSONL store, per-commit deltas and finding diffs, no service to sign up for (R-CLI-14, TBD-1)", licence: "MIT (this project)" }
       - { id: openslo,   tier: know,     when: never,         how: "openslo validate",        note: "rejected for v0 (D-2): built for burn-rate, not run-scoped" }
       - { id: sloth,     tier: know,     when: "platform:k8s", how: "sloth generate" }
       - { id: hyperfine, tier: know,     when: never,         how: "hyperfine '<cmd>'",       note: "statistically sound CLI benchmarking" }

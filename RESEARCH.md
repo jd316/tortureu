@@ -5,7 +5,7 @@ stack and drives every layer of backend torture — load, faults, replay, correc
 without them wiring five tools together. Usable directly by humans and by coding agents
 (Claude Code / Codex / Cursor) through a single MCP surface.
 
-**Status:** built and measured. 19 domains · 154 tools · 2 constraints · 9 decisions.
+**Status:** built and measured. 19 domains · 155 tools · 2 constraints · 9 decisions.
 This file is the **survey and rationale** — the *why*. `SPEC.md` is normative and `BENCHMARKS.md`
 carries the measured results; where any of them disagree with this file, they win.
 **Date:** 2026-08-08
@@ -18,12 +18,12 @@ carries the measured results; where any of them disagree with this file, they wi
 
 | Tier | Meaning | Count |
 |---|---|---|
-| **drive** | We execute it, on our clock, folded into one verdict. Needs co-execution. | 30 |
+| **drive** | We execute it, on our clock, folded into one verdict. Needs co-execution. | 31 |
 | **delegate** | We generate its config/command and hand off. Real output, separate timing. | 34 |
 | **know** | We name it, say when it applies, point at it. Zero integration cost. | 90 |
 
 The P0/P1/P2/SKIP columns below are **build order within a tier**, not coverage. Coverage is
-`drive`+`delegate`+`know` = all 154 tools, which is what makes "all in one place" true (see
+`drive`+`delegate`+`know` = all 155 tools, which is what makes "all in one place" true (see
 [Compliance](#compliance--all-in-one-place)).
 
 **Effort** — adapter cost: **S** = config/exec wrapper (<1d) · **M** = needs state/lifecycle mgmt (2–5d) · **L** = real subsystem (1w+)
@@ -345,7 +345,7 @@ off. `know` = we name it, say when it applies, point at it. **Every domain has n
 **Verdict: compliant.** 19/19 domains reachable from the CLI. The three tiers are honest about
 *depth* rather than pretending uniform integration:
 
-- **30 `drive`** — everything that must run **on one clock**. Co-execution is the whole product;
+- **31 `drive`** — everything that must run **on one clock**. Co-execution is the whole product;
   these are the only tools where wrapping adds something no vendor can.
 - **34 `delegate`** — real tools, real output, our config. No timing integration because they don't
   need it (a contract check is not a load phase).
@@ -384,9 +384,10 @@ off. `know` = we name it, say when it applies, point at it. **Every domain has n
 7  emit      delegate tier, one adapter at a time                   (35 tools)
 8  capture   keploy/goreplay ingest                                 (§6)
 9  replay    capture -> load, DC-2 rate ceiling enforced            (§6)
+10 trend     verdicts -> a local cross-commit trend                  (§12, TBD-1)
 ```
 
-All nine verbs appear as `how:` values in `registry.yaml`; that file and this list are checked
+All ten verbs appear as `how:` values in `registry.yaml`; that file and this list are checked
 against each other.
 
 ---

@@ -49,6 +49,8 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		return runReplay(rest, stdout, stderr)
 	case verb == "emit":
 		return runEmit(rest, stdout, stderr)
+	case verb == "trend":
+		return runTrend(os.Stdin, rest, stdout, stderr)
 	case stubVerbs[verb]:
 		fmt.Fprintf(stderr, "tortureu %s: not implemented in v0\n", verb)
 		return 2
