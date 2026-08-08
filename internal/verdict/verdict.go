@@ -62,11 +62,37 @@ type Candidate struct {
 	Knobs   []string `json:"knobs"`
 }
 
-// Finding is one entry in a verdict's findings list: why the run failed.
+// Finding is one entry in a verdict's findings list: why the run failed —
+// or, when Unevaluated is true, why it could not be told whether this
+// assertion held at all.
 type Finding struct {
-	ID            string      `json:"id"`
-	Confidence    Confidence  `json:"confidence"`
-	Broke         Broke       `json:"broke"`
+	ID         string     `json:"id"`
+	Confidence Confidence `json:"confidence"`
+	Broke      Broke      `json:"broke"`
+
+	// Unevaluated marks a finding as an assertion the run never checked at
+	// all — no measurement was taken, so there is nothing to compare against
+	// Broke's threshold. This MUST be structurally distinct from a real
+	// break (R-VER-8): before this field existed, "unevaluated" was only a
+	// string prefix in Broke.Observed, which a renderer could not
+	// distinguish from a genuine measured failure. A real first run proved
+	// this out: two never-evaluated assertions rendered as "✗ ... -> 0.583"
+	// with a passing-looking number next to a fail marker — worse than
+	// either a clear pass or a clear failure, and especially damaging for
+	// attribution evals expecting zero findings from a control case.
+	//
+	// When true: Broke.Observed and Broke.At/SustainedS carry no
+	// measurement (leave them unset) and Reason names why evaluation was
+	// impossible (e.g. "no Prometheus endpoint configured (-prom-url)").
+	// Confidence is still Ambiguous — an unevaluated assertion is not a
+	// confident attribution of anything — but not every Ambiguous finding is
+	// unevaluated (R-VER-3's ambiguous also covers >=2 measured candidate
+	// causes), so Unevaluated is its own field, not inferred from Confidence.
+	Unevaluated bool `json:"unevaluated,omitempty"`
+	// Reason explains why an Unevaluated finding could not be checked.
+	// Ignored (should be empty) when Unevaluated is false.
+	Reason string `json:"reason,omitempty"`
+
 	Cause         *Cause      `json:"cause,omitempty"`
 	Chain         []ChainHop  `json:"chain,omitempty"`
 	Candidates    []Candidate `json:"candidates,omitempty"`

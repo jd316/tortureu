@@ -12,7 +12,18 @@ import (
 func Render(v Verdict) string {
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "%s  %s", strings.ToUpper(string(v.Status)), v.Scenario)
+	// R-VER-8: exit 4 (inconclusive) means the run genuinely completed but
+	// every finding is ambiguous/unevaluated — the human header must agree
+	// with that exit code rather than reading FAIL when nothing was actually
+	// shown to have failed. This changes only the displayed word, not the
+	// underlying Status value (still "fail" in the JSON document, per
+	// R-VER-2's closed status enum) — one document, one renderer, no second
+	// source of truth (R-VER-9).
+	label := strings.ToUpper(string(v.Status))
+	if ExitCode(v) == 4 {
+		label = "INCONCLUSIVE"
+	}
+	fmt.Fprintf(&b, "%s  %s", label, v.Scenario)
 	if v.DurationS > 0 {
 		fmt.Fprintf(&b, "  %ds", v.DurationS)
 	}
@@ -46,6 +57,18 @@ func Render(v Verdict) string {
 	b.WriteString("\n")
 
 	for _, f := range v.Findings {
+		// R-VER-8: an unevaluated assertion gets its own marker and no
+		// comparison arrow — never a measured value next to a fail symbol,
+		// since no measurement was taken to compare.
+		if f.Unevaluated {
+			fmt.Fprintf(&b, "  ? %s — not evaluated", f.Broke.Assertion)
+			if f.Reason != "" {
+				fmt.Fprintf(&b, ": %s", f.Reason)
+			}
+			fmt.Fprintf(&b, "\n    [confidence: %s]\n\n", f.Confidence)
+			continue
+		}
+
 		fmt.Fprintf(&b, "  ✗ %s -> %s", f.Broke.Assertion, f.Broke.Observed)
 		if f.Broke.At != "" {
 			fmt.Fprintf(&b, "   at %s", f.Broke.At)

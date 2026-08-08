@@ -214,3 +214,98 @@ func TestRender_ErrorVerdictShowsReasonAndStaysDistinctFromFail(t *testing.T) {
 		t.Errorf("error verdict rendered as FAIL; fail and error must stay visually distinct")
 	}
 }
+
+// spec: R-VER-8
+// An unevaluated assertion (never measured, nothing to compare) MUST render
+// structurally distinct from a genuinely broken one — not merely a string
+// prefix a renderer could accidentally treat the same way. Before this fix,
+// "unevaluated" was only text inside Broke.Observed, and Render used the
+// same ✗ marker and -> comparison arrow for both: a real run showed
+// "✗ http_req_duration: p(95)<2000 -> 0.583" for an assertion that was
+// never checked, with 0.583 actually satisfying the threshold — a
+// false-looking failure next to a passing-looking number. Prove: an
+// unevaluated finding never renders with ✗ or ->, uses its own marker, and a
+// genuinely broken finding still does use ✗ and ->.
+func TestRender_UnevaluatedFindingIsStructurallyDistinctFromBroken(t *testing.T) {
+	unevaluated := Finding{
+		ID:          "f1",
+		Confidence:  Ambiguous,
+		Unevaluated: true,
+		Broke:       Broke{Assertion: "http_req_duration: p(95)<2000"},
+		Reason:      "no Prometheus endpoint configured (-prom-url)",
+	}
+	broken := Finding{
+		ID:         "f2",
+		Confidence: Caused,
+		Broke: Broke{
+			Assertion: "http_req_failed: rate<0.01",
+			Observed:  "0.2",
+			At:        "peak",
+		},
+	}
+
+	uHuman := Render(Verdict{Scenario: "api", Status: StatusFail, Findings: []Finding{unevaluated}})
+	bHuman := Render(Verdict{Scenario: "api", Status: StatusFail, Findings: []Finding{broken}})
+
+	if strings.Contains(uHuman, "✗") {
+		t.Errorf("unevaluated finding rendered with the broken-assertion marker ✗; render:\n%s", uHuman)
+	}
+	if strings.Contains(uHuman, "->") {
+		t.Errorf("unevaluated finding rendered a comparison arrow -> (implies a value was checked); render:\n%s", uHuman)
+	}
+	if !strings.Contains(uHuman, "?") {
+		t.Errorf("unevaluated finding does not carry its own marker; render:\n%s", uHuman)
+	}
+	if !strings.Contains(uHuman, "not evaluated") {
+		t.Errorf("unevaluated finding does not say it was never evaluated; render:\n%s", uHuman)
+	}
+	if !strings.Contains(uHuman, unevaluated.Reason) {
+		t.Errorf("unevaluated finding does not surface its reason; render:\n%s", uHuman)
+	}
+
+	if !strings.Contains(bHuman, "✗") || !strings.Contains(bHuman, "->") {
+		t.Errorf("genuinely broken finding lost its ✗/-> rendering; render:\n%s", bHuman)
+	}
+}
+
+// spec: R-VER-8
+// If every finding in a run is unevaluated, the run is inconclusive (exit 4)
+// — the human status line MUST agree with that exit code, not read FAIL when
+// nothing was actually shown to have failed. Mixing in even one genuinely
+// broken finding must still read FAIL (exit 1): only an all-unevaluated (or
+// otherwise all-ambiguous) run is inconclusive.
+func TestRender_AllUnevaluatedFindingsReadsInconclusiveNotFail(t *testing.T) {
+	allUnevaluated := Verdict{
+		Scenario: "api",
+		Status:   StatusFail,
+		Findings: []Finding{
+			{ID: "f1", Confidence: Ambiguous, Unevaluated: true,
+				Broke: Broke{Assertion: "http_req_duration: p(95)<2000"}, Reason: "no -prom-url"},
+			{ID: "f2", Confidence: Ambiguous, Unevaluated: true,
+				Broke: Broke{Assertion: "http_req_failed: rate<0.5"}, Reason: "no -prom-url"},
+		},
+	}
+	human := Render(allUnevaluated)
+	if strings.Contains(human, "FAIL") {
+		t.Errorf("all-unevaluated verdict rendered FAIL; must agree with exit 4 (inconclusive); render:\n%s", human)
+	}
+	if !strings.Contains(human, "exit 4") {
+		t.Errorf("all-unevaluated verdict did not show exit 4; render:\n%s", human)
+	}
+
+	mixed := Verdict{
+		Scenario: "api",
+		Status:   StatusFail,
+		Findings: append(append([]Finding{}, allUnevaluated.Findings...), Finding{
+			ID: "f3", Confidence: Caused,
+			Broke: Broke{Assertion: "http_req_failed: rate<0.01", Observed: "0.2", At: "peak"},
+		}),
+	}
+	mixedHuman := Render(mixed)
+	if !strings.Contains(mixedHuman, "FAIL") {
+		t.Errorf("mixed unevaluated+broken verdict should still read FAIL (exit 1); render:\n%s", mixedHuman)
+	}
+	if !strings.Contains(mixedHuman, "exit 1") {
+		t.Errorf("mixed unevaluated+broken verdict should exit 1; render:\n%s", mixedHuman)
+	}
+}
