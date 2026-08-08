@@ -1,2 +1,2 @@
-time="2026-08-08T15:04:58Z" level=info msg="TORTUREU_PHASE_START ramp_up 1786201498031" source=console
-time="2026-08-08T15:05:03Z" level=info msg="TORTUREU_PHASE_START peak 1786201503033" source=console
+time="2026-08-08T15:40:16Z" level=info msg="TORTUREU_PHASE_START ramp_up 1786203616633" source=console
+time="2026-08-08T15:40:21Z" level=info msg="TORTUREU_PHASE_START peak 1786203621634" source=console

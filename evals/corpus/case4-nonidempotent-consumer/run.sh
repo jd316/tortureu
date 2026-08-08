@@ -1,38 +1,52 @@
 #!/bin/bash
 # run.sh -- case 4's own runner, invoked by evals/run_case.sh instead of a
-# plain `tortureu run` because this case needs two live dependencies
-# (Redpanda/Pandaproxy, for -broker-url; Prometheus, for -prom-url) that a
-# plain docker-compose service can never give the ORCHESTRATOR (a host
-# process, not a container) reach to, once DC-2 topology enforcement moves
-# them onto the internal:true SUT network.
+# plain `tortureu run` because -broker-url/-prom-url still cannot reach a
+# compose-managed Redpanda/Prometheus once DC-2 topology enforcement moves
+# them onto the internal:true SUT network -- even after internal/run's
+# fallbackTransport fix (commit 562ffd2), which was supposed to close
+# exactly this gap. Re-verified this round with the fix in place; see the
+# finding below for why it still doesn't reach in-stack here.
 #
-# THE FINDING THIS SCRIPT WORKS AROUND (reported, not fixed -- internal/run
-# is out of this task's scope): K6Runner was fixed (round 2 of this eval)
-# to run k6 as a container joined to the SUT's own network namespace,
-# sidestepping DC-2's "no host-published ports on an internal:true network"
-# effect. internal/applier.BrokerApplier and internal/run.HTTPPromQuerier
-# received no equivalent fix -- both are plain net/http calls made directly
-# from the orchestrator's own host process, which cannot "join" a Docker
-# network namespace the way a container can. So -broker-url and -prom-url,
-# as documented CLI flags, cannot reach ANY target compose has moved onto
-# the SUT network -- which, after DC-2 enforcement, is every compose
-# service. This is the same defect class as round 1's original blocker,
-# now shown to affect two more of the product's own host-side integrations
-# that round 1 never exercised.
+# ROUND 1 OF THIS FINDING (fixed): K6Runner runs k6 as a container joined
+# to the SUT's own network namespace, sidestepping DC-2's "no
+# host-published ports on an internal:true network" effect. BrokerApplier
+# and HTTPPromQuerier had no equivalent until fallbackTransport: try a
+# direct HTTP call, and on failure, tunnel via `docker run --network
+# container:<id> alpine nc localhost <port>` into the target's own netns.
 #
-# The workaround: run Redpanda and Prometheus as containers THIS script
+# ROUND 2 (this round): fallbackTransport's tunnel is itself broken for an
+# IPv4-only listener, which Redpanda's Pandaproxy is. Reproduced directly,
+# outside any TortureU code: `docker run --network container:<redpanda-id>
+# alpine:3.20 nc -v localhost 8082` fails every time (rc=1); the identical
+# call against `127.0.0.1` instead of `localhost` succeeds every time
+# (rc=0, "open"). Redpanda's own /proc/net/tcp inside that netns shows it
+# bound to 0.0.0.0 (IPv4 only, no IPv6 listener at all). BusyBox nc (the
+# image containerNetDialer uses) resolves the bare hostname "localhost" to
+# ::1 first and does not fall back to the A record when that connection is
+# refused -- so the tunnel silently connects to nothing, the subprocess
+# exits, and the Go http.Transport on the other end of that pipe sees a
+# bare EOF (exactly the error this eval's own tortureu run reproduced:
+# "create consumer: ... EOF" once the direct attempt correctly failed and
+# the fallback correctly triggered). containerNetDialer's own dial target
+# is hardcoded as the literal string "localhost" (internal/run/inreach.go),
+# not "127.0.0.1" -- a one-word difference between working and not, for
+# any IPv4-only-bound service, which plenty of real container images are
+# by default. Reported, not patched (internal/run is out of this task's
+# scope).
+#
+# The workaround (unchanged in shape from before this round, still
+# necessary): run Redpanda and Prometheus as containers THIS script
 # manages directly, on a dedicated user-defined bridge network (so
 # container-name DNS resolution works at all -- Docker's implicit default
 # "bridge" network does not do this, unlike a user-defined one or the one
-# docker-compose always creates; discovered the hard way while building
-# this), each with a host-published port for this script's own reach, then
-# additionally connected to tortureu_sut (with a DNS alias, for Redpanda)
-# once that network exists, so checkout-api can reach them by the same
-# container-name convention docker-compose would normally provide. This is
+# docker-compose always creates), each with a host-published port for this
+# script's own reach, then additionally connected to tortureu_sut (with a
+# DNS alias, for Redpanda) once that network exists, so checkout-api can
+# reach them the same way docker-compose would normally provide. This is
 # test-harness engineering, not evidence the gap doesn't exist: a real
-# user driving `tortureu run -broker-url ... -prom-url ...` against their
-# own docker-compose.yml, with no such hand-built dual-homing, would see
-# exactly the connection-refused/EOF errors this script works around.
+# user driving `tortureu run -broker-url http://redpanda:8082 ...` against
+# their own docker-compose.yml would hit the identical EOF this script
+# works around.
 set -u
 
 CASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
