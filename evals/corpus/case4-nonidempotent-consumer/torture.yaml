@@ -18,14 +18,11 @@ egress:
   # fault; it exists only to satisfy the parser.
   hosts:
     orders: { class: internal }
-    # redpanda:8082 (Pandaproxy) is referenced by checkout-api's own
-    # REDPANDA_PROXY env var but is not a compose service in this fixture
-    # (see docker-compose.yml's and run.sh's header comments for why) --
-    # detect.detectExternalHosts flags any env-referenced host that isn't
-    # an in-compose service as an external, unclassified host by default
-    # (R-DET-4), which DC-2's default-deny then aborts the run over.
-    # Classified internal here because that is what it is architecturally,
-    # even though this fixture stands it up outside compose.
+    # redpanda:8082 (Pandaproxy) -- redpanda's compose-recognized "kafka"
+    # image type auto-classifies redpanda:9092 (the default Kafka port)
+    # internal, but 8082 is a second port on the same service that
+    # detect's default-port table doesn't know about, so it still needs an
+    # explicit declaration to avoid R-DET-4/DC-2's unclassified-host abort.
     redpanda:8082: { class: internal }
 
 reset:

@@ -47,6 +47,17 @@ declare -A PREBUILT_IMAGES=(
   [case5-no-circuit-breaker]="e1-case5-dep:latest:dep"
 )
 
+# Case 4's promql: assert and duplicate fault need the orchestrator to
+# reach a live Prometheus and a live broker admin API, both moved onto the
+# internal:true SUT network by DC-2 enforcement same as everything else.
+# internal/run.fallbackTransport (a direct call first, falling back to a
+# Docker network-namespace tunnel on failure) makes -broker-url/-prom-url
+# work against the compose service name directly -- no host-published
+# port, no standalone-container workaround needed any more.
+declare -A EXTRA_ARGS=(
+  [case4-nonidempotent-consumer]="-broker-url http://redpanda:8082 -prom-url http://prometheus:9090"
+)
+
 run_one_case() {
   local case_dir="$1"
   local case_name
@@ -102,17 +113,8 @@ run_one_case() {
   fi
 
   rm -f "$overlay"
-  if [ -x "$case_dir/run.sh" ]; then
-    # Cases needing more than a plain `tortureu run` (live dependencies the
-    # orchestrator's own -broker-url/-prom-url flags need host reach to,
-    # which DC-2 topology enforcement removes -- see case 4's run.sh for
-    # the full finding) bring their own runner. It owns its case's
-    # cleanup; the generic cleanup() above still runs afterward as a
-    # backstop but should find nothing left to do.
-    "$case_dir/run.sh" "$TORTUREU_BIN" "$out" "$errout"
-  else
-    (cd "$case_dir" && "$TORTUREU_BIN" run -config torture.yaml -json) >"$out" 2>"$errout"
-  fi
+  local extra="${EXTRA_ARGS[$case_name]:-}"
+  (cd "$case_dir" && "$TORTUREU_BIN" run -config torture.yaml -json $extra) >"$out" 2>"$errout"
   local rc=$?
   local status findings
   status="$(python3 -c "import json,sys

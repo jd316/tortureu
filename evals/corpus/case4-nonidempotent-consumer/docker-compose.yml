@@ -5,17 +5,49 @@ services:
       - "8080:8080"
     environment:
       REDPANDA_PROXY: "http://redpanda:8082"
+    depends_on:
+      topic-init:
+        condition: service_completed_successfully
 
-# Redpanda and Prometheus are deliberately NOT compose services here. See
-# evals/corpus/case4-nonidempotent-consumer/run.sh's own header comment for
-# why: internal/run.ComposeTopologyApplier moves every non-proxy compose
-# service exclusively onto the internal:true SUT network (R-DC2-3), and
-# nothing published there is reachable from the host once that happens
-# (the same defect this eval found for k6 in round 1 -- fixed there, but
-# never generalized to internal/applier.BrokerApplier or
-# internal/run.HTTPPromQuerier, both of which are plain host processes
-# with no "join the SUT's network namespace" equivalent to K6Runner's
-# fix). Running them as standalone containers dual-homed onto the SUT
-# network (default bridge + tortureu_sut, once it exists) is a test
-# harness workaround, not a fix to that gap -- see run.sh and
-# evals/results/summary.json's case 4 entry for the full finding.
+  redpanda:
+    image: redpandadata/redpanda:latest
+    command:
+      - redpanda
+      - start
+      - --node-id=0
+      - --smp=1
+      - --memory=512M
+      - --overprovisioned
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+      - --pandaproxy-addr=0.0.0.0:8082
+      - --advertise-pandaproxy-addr=redpanda:8082
+
+  # Pandaproxy's REST API has no topic-create endpoint (only the Kafka
+  # admin protocol does), and letting the first produce auto-create it was
+  # observed, empirically, to hang Pandaproxy for 5+ seconds per attempt
+  # (an E1 finding worth knowing on its own -- see evals/results/summary.json).
+  # Pre-creating the topic with rpk sidesteps that path entirely.
+  topic-init:
+    image: redpandadata/redpanda:latest
+    depends_on:
+      - redpanda
+    entrypoint:
+      - sh
+      - -c
+      - |
+        until rpk topic create orders --brokers redpanda:9092 || rpk topic list --brokers redpanda:9092 2>/dev/null | grep -q '^orders '; do
+          sleep 1
+        done
+
+  # No host-published port needed any more: internal/run's fallbackTransport
+  # (commit 562ffd2, tunnel fixed in e39fe6e) lets the orchestrator itself
+  # reach this over Docker's network-namespace tunnel once a direct dial to
+  # -prom-url fails, the same way it already reaches redpanda for
+  # -broker-url. See evals/results/summary.json's case 4 entry for the
+  # round-by-round history of this working.
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
