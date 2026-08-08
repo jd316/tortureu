@@ -6,8 +6,19 @@ services:
       - "8080:8080"
     environment:
       DEP_URL: "http://dep:9090/slow"
-    depends_on:
-      - dep
+    # No depends_on: internal/run's R-EXE-20 rename mechanism disables the
+    # original "dep" service via a never-activated compose profile, and
+    # `docker compose` treats a profile-disabled service referenced by
+    # another service's depends_on as an "undefined service", hard-failing
+    # `up` before anything starts. Confirmed directly (E1 finding): the
+    # base_url/DEP_URL wiring above needs no ordering guarantee anyway
+    # (checkout-api's HTTP client dials dep lazily, per request, and
+    # `docker compose up -d --wait` already waits for both containers to
+    # report running), so removing depends_on doesn't touch the planted
+    # defect. Flagged as a real, reportable interaction between R-EXE-20
+    # and any docker-compose.yml that uses depends_on on an internal
+    # target -- an extremely common pattern -- not something worked around
+    # in internal/run itself, which is out of this task's edit scope.
 
   dep:
     image: e1-case1-dep:latest
