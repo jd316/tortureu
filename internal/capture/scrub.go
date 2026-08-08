@@ -27,15 +27,15 @@ const Redacted = "[SCRUBBED]"
 // scrubbed unconditionally: their entire value is credential-shaped by
 // definition, never just part of it.
 var sensitiveHeaders = map[string]bool{
-	"Authorization":       true,
-	"Proxy-Authorization": true,
-	"Cookie":              true,
-	"Set-Cookie":          true,
-	"X-Api-Key":           true,
-	"X-Auth-Token":        true,
-	"X-Access-Token":      true,
-	"X-Csrf-Token":        true,
-	"X-Session-Token":     true,
+	"Authorization":        true,
+	"Proxy-Authorization":  true,
+	"Cookie":               true,
+	"Set-Cookie":           true,
+	"X-Api-Key":            true,
+	"X-Auth-Token":         true,
+	"X-Access-Token":       true,
+	"X-Csrf-Token":         true,
+	"X-Session-Token":      true,
 	"X-Amz-Security-Token": true,
 }
 

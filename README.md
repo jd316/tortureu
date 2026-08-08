@@ -74,8 +74,8 @@ What it does give you is the *candidate config surface* — library plus knob na
 
 | Document | What it is |
 |---|---|
-| [`SPEC.md`](SPEC.md) | normative. 120 numbered requirements. Build against this. |
-| [`RESEARCH.md`](RESEARCH.md) | the survey: 152 tools across 19 domains, and why each is driven, delegated or merely named |
+| [`SPEC.md`](SPEC.md) | normative. 122 numbered requirements. Build against this. |
+| [`RESEARCH.md`](RESEARCH.md) | the survey: 154 tools across 19 domains, and why each is driven, delegated or merely named |
 | [`VERDICT.md`](VERDICT.md) | verdict schema, exit codes, MCP surface |
 | [`BENCHMARKS.md`](BENCHMARKS.md) | how this gets evaluated, and what we refuse to claim |
 | [`registry.yaml`](registry.yaml) | the tool catalog |

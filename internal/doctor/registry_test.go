@@ -16,13 +16,24 @@ func TestLoadRegistryCountsMatchSourceOfTruth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRegistry: %v", err)
 	}
-	// registry.yaml is the source of truth (R-COV-1): these counts are
-	// derived from the file, not restated by hand.
-	if got := reg.DomainCount(); got != 19 {
-		t.Fatalf("DomainCount() = %d, want 19", got)
+	// registry.yaml is the source of truth (R-COV-1), so derive the expected
+	// counts from the parsed file rather than restating them here. The prior
+	// version hardcoded 151/152 while its own comment claimed otherwise, and
+	// broke on every registry edit — a test that must be updated whenever the
+	// data changes is not checking the data, it is duplicating it.
+	wantDomains := len(reg.Domains)
+	wantTools := 0
+	for _, d := range reg.Domains {
+		wantTools += len(d.Tools)
 	}
-	if got := reg.ToolCount(); got != 152 {
-		t.Fatalf("ToolCount() = %d, want 152", got)
+	if wantDomains == 0 || wantTools == 0 {
+		t.Fatal("registry parsed as empty — nothing to check against")
+	}
+	if got := reg.DomainCount(); got != wantDomains {
+		t.Fatalf("DomainCount() = %d, want %d (domains actually parsed)", got, wantDomains)
+	}
+	if got := reg.ToolCount(); got != wantTools {
+		t.Fatalf("ToolCount() = %d, want %d (tools actually parsed)", got, wantTools)
 	}
 }
 
@@ -39,11 +50,22 @@ func TestLoadEmbeddedRegistryWorksFromAnyWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadEmbeddedRegistry: %v", err)
 	}
-	if got := reg.DomainCount(); got != 19 {
-		t.Fatalf("DomainCount() = %d, want 19", got)
+	// Derived from the embedded file itself, for the same reason as above:
+	// a hardcoded count here would break on every registry edit without
+	// checking anything the parse does not already tell us.
+	wantDomains := len(reg.Domains)
+	wantTools := 0
+	for _, d := range reg.Domains {
+		wantTools += len(d.Tools)
 	}
-	if got := reg.ToolCount(); got != 152 {
-		t.Fatalf("ToolCount() = %d, want 152", got)
+	if wantDomains == 0 || wantTools == 0 {
+		t.Fatal("embedded registry parsed as empty — the embed is not working")
+	}
+	if got := reg.DomainCount(); got != wantDomains {
+		t.Fatalf("DomainCount() = %d, want %d", got, wantDomains)
+	}
+	if got := reg.ToolCount(); got != wantTools {
+		t.Fatalf("ToolCount() = %d, want %d", got, wantTools)
 	}
 }
 

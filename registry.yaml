@@ -116,7 +116,9 @@ domains:
     name: Traffic capture & replay
     coverage: delegate
     tools:
-      - { id: goreplay,  tier: delegate, when: "has:traffic-capture", how: "tortureu replay --from <pcap>", note: "replay 1x-100x. DC-2 rate ceiling applies", planned: replay }
+      - { id: tortureu-capture, tier: drive, when: always,     how: "tortureu capture -upstream <url>", note: "recording proxy; scrubs credentials before writing (R-CLI-9)", licence: "MIT (this project)" }
+      - { id: tortureu-replay,  tier: drive, when: always,     how: "tortureu replay -from <cassette>", note: "replays a captured cassette; R-DC2-4 multiplier guard applies (R-CLI-10)", licence: "MIT (this project)" }
+      - { id: goreplay,  tier: know,     when: "has:traffic-capture", how: "gor --input-raw :80 --output-file", note: "we do not drive goreplay: `tortureu capture` records via its own proxy and writes JSONL cassettes, not pcap" }
       - { id: keploy,    tier: delegate, when: always,        how: "tortureu capture --engine keploy", note: "eBPF -> tests + auto-mocks. integrate, never reimplement", planned: capture }
       - { id: mitmproxy, tier: know,     when: never,         how: "mitmdump -w out.flows",   note: "interactive capture + scriptable rewrite" }
       - { id: vcr,       tier: know,     when: always,        how: "language-specific",       note: "cassettes belong in the app's own suite" }

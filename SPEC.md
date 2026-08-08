@@ -438,6 +438,22 @@ findings in three of four runs. *(E1 → Task 4, 2026-08-08)*
 
 **R-CLI-2** — Every verb **MUST** be listed in `registry.yaml` as the `how:` of at least one tool.
 
+**R-CLI-9** — `capture` **MUST** scrub credential-shaped data — auth headers, cookies, bearer
+tokens, credential-shaped body and query fields — from an exchange **before** it is written to the
+cassette. No code path may persist an unscrubbed byte. *(satisfies R-DC2-5, closes TBD-8)*
+
+The test for this **MUST** read the written file back from disk and assert the credential is absent.
+Asserting on an in-memory value proves the struct was scrubbed, not the artefact — and the artefact
+is what gets committed to someone's repo.
+
+**R-CLI-10** — `replay` **MUST** drive a cassette written by `capture` as load against `-target`,
+honouring `-multiplier` and `-allow-real-traffic` through the **same** `internal/egress`
+`R-DC2-4` guard `run` uses. Reimplementing that guard would create a second, weaker path to the
+same dangerous capability — replay above 1x against a real host is exactly what turns a test into
+someone else's outage.
+
+*(both proposed by the implementer and specified before citation, per R-PROC-2)*
+
 **R-CLI-8** — `emit <tool>` **MUST** generate a runnable command or config for a `delegate`-tier
 tool from `torture.yaml`, **to stdout by default** so it composes (`tortureu emit pumba > chaos.sh`).
 *(closes TBD-2)*
@@ -851,10 +867,9 @@ nothing to suggest, and only the second is honest.
   trace-ingestion pipeline exists in v0, and fabricating hops would be worse than omitting them.
   Binding once OpenTelemetry ingestion ships, which is also what raises confidence from
   `correlated` to `caused` (D-4). Raised by Task 7.
-- **TBD-8** — **R-DC2-5** (secret-scrub captured traffic on write) has no capture/replay pipeline
-  to attach to in v0, so there is no write path to scrub. It becomes binding the moment `capture`
-  ships and **MUST** be implemented in the same change, never after: scrubbing retrofitted onto an
-  existing corpus means the unscrubbed cassettes already exist. Raised by the Task 6 implementer.
+- ~~**TBD-8**~~ — **RESOLVED**: `capture` shipped **with** scrubbing in the same change, as the
+  requirement demanded. R-CLI-9 now carries it, and the proof reads the written file back from disk
+  rather than asserting on an in-memory struct.
 
 ---
 

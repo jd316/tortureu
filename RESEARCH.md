@@ -5,7 +5,7 @@ stack and drives every layer of backend torture — load, faults, replay, correc
 without them wiring five tools together. Usable directly by humans and by coding agents
 (Claude Code / Codex / Cursor) through a single MCP surface.
 
-**Status:** built and measured. 19 domains · 152 tools · 2 constraints · 9 decisions.
+**Status:** built and measured. 19 domains · 154 tools · 2 constraints · 9 decisions.
 This file is the **survey and rationale** — the *why*. `SPEC.md` is normative and `BENCHMARKS.md`
 carries the measured results; where any of them disagree with this file, they win.
 **Date:** 2026-08-08
@@ -18,12 +18,12 @@ carries the measured results; where any of them disagree with this file, they wi
 
 | Tier | Meaning | Count |
 |---|---|---|
-| **drive** | We execute it, on our clock, folded into one verdict. Needs co-execution. | 28 |
-| **delegate** | We generate its config/command and hand off. Real output, separate timing. | 35 |
-| **know** | We name it, say when it applies, point at it. Zero integration cost. | 89 |
+| **drive** | We execute it, on our clock, folded into one verdict. Needs co-execution. | 30 |
+| **delegate** | We generate its config/command and hand off. Real output, separate timing. | 34 |
+| **know** | We name it, say when it applies, point at it. Zero integration cost. | 90 |
 
 The P0/P1/P2/SKIP columns below are **build order within a tier**, not coverage. Coverage is
-`drive`+`delegate`+`know` = all 152 tools, which is what makes "all in one place" true (see
+`drive`+`delegate`+`know` = all 154 tools, which is what makes "all in one place" true (see
 [Compliance](#compliance--all-in-one-place)).
 
 **Effort** — adapter cost: **S** = config/exec wrapper (<1d) · **M** = needs state/lifecycle mgmt (2–5d) · **L** = real subsystem (1w+)
@@ -337,7 +337,7 @@ off. `know` = we name it, say when it applies, point at it. **Every domain has n
 | 17 | Agent surfaces | 5 | 1 | 0 | 4 | `mcp` |
 | 18 | **Event-driven / async** | 8 | 4 | 2 | 2 | `run` `assert:` |
 | 19 | **Resilience config audit** | 8 | 4 | 0 | 4 | `doctor` |
-| | **Total** | **152** | **28** | **35** | **89** | |
+| | **Total** | **154** | **30** | **34** | **90** | |
 
 > Counts are generated from `registry.yaml`, not hand-maintained — an earlier hand-count in this
 > table was wrong by 14 tools. If they drift again, the registry is the truth.
