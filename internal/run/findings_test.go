@@ -26,6 +26,89 @@ func TestEvaluateThresholds_HeldThresholdIsListedAsPassed(t *testing.T) {
 	}
 }
 
+// spec: R-VER-1
+func TestEvaluateThresholds_BrokenThresholdReportsMeasuredValue(t *testing.T) {
+	// VERDICT.md §1 is normative for field names (SPEC.md §6) and its own
+	// worked example shows "observed": "4218ms" — an actual measured
+	// value, not a restatement of pass/fail. R-VER-1 ("every run MUST emit
+	// one verdict document") is the umbrella requirement that document
+	// conform to that normative schema; there is no more specific R-VER-n
+	// for "observed must be a real value" than the schema itself.
+	metrics := map[string]any{
+		"http_req_duration": map[string]any{
+			"contains": "time",
+			"values":   map[string]any{"p(95)": 4218.0},
+			"thresholds": map[string]any{
+				"p(95)<500": map[string]any{"ok": false},
+			},
+		},
+	}
+	_, findings := evaluateThresholds(metrics, oneFault(), detect.System{})
+	if len(findings) != 1 {
+		t.Fatalf("findings = %v, want exactly one", findings)
+	}
+	if got := findings[0].Broke.Observed; got != "4218ms" {
+		t.Errorf("Broke.Observed = %q, want the measured p(95) value \"4218ms\" — a symbol (✗) already says it broke; Observed must say what happened", got)
+	}
+}
+
+// spec: R-VER-1
+func TestEvaluateThresholds_HeldThresholdReportsMeasuredValue(t *testing.T) {
+	metrics := map[string]any{
+		"http_req_failed": map[string]any{
+			"values": map[string]any{"rate": 0.003},
+			"thresholds": map[string]any{
+				"rate<0.01": map[string]any{"ok": true},
+			},
+		},
+	}
+	passed, _ := evaluateThresholds(metrics, oneFault(), detect.System{})
+	if len(passed) != 1 {
+		t.Fatalf("passed = %v, want exactly one", passed)
+	}
+	if got := passed[0].Observed; got != "0.003" {
+		t.Errorf("Observed = %q, want the measured rate value \"0.003\"", got)
+	}
+}
+
+// spec: R-VER-1
+func TestEvaluateThresholds_FallsBackToNotMeasuredWhenValueUnavailable(t *testing.T) {
+	// The honesty rule: when this package genuinely cannot read the
+	// measured value (no "values" object here), it must say so explicitly
+	// rather than reuse text that implies a number was found.
+	metrics := map[string]any{
+		"http_req_duration": map[string]any{
+			"thresholds": map[string]any{"p(95)<500": map[string]any{"ok": false}},
+		},
+	}
+	_, findings := evaluateThresholds(metrics, oneFault(), detect.System{})
+	if got := findings[0].Broke.Observed; got != "not measured" {
+		t.Errorf("Broke.Observed = %q, want \"not measured\" — no values object was available to read a real number from", got)
+	}
+}
+
+// spec: R-VER-8
+func TestEvaluatePromqlAsserts_UnevaluatedAssertStillReadsUnevaluatedNotMeasured(t *testing.T) {
+	// Regression guard: adding measured-value reporting must not make an
+	// unevaluated assertion (no -prom-url configured) look like a measured
+	// pass, which would undo the Critical fixed in the previous round.
+	asserts := []config.AssertEntry{{"promql": "up == 1"}}
+	passed, findings := evaluatePromqlAsserts(asserts, nil, oneFault(), detect.System{})
+	if len(passed) != 0 {
+		t.Fatalf("passed = %v, want empty — an unevaluated assertion must never be listed as held", passed)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("findings = %v, want exactly one", findings)
+	}
+	got := findings[0].Broke.Observed
+	if !strings.Contains(got, "not evaluated") {
+		t.Errorf("Broke.Observed = %q, want it to say \"not evaluated\" — distinct from \"not measured\", which means something else (an evaluated assertion whose value this package could not read)", got)
+	}
+	if strings.Contains(got, "not measured") {
+		t.Errorf("Broke.Observed = %q must not say \"not measured\" — that would blur an assertion that never ran with one that ran but had no readable value", got)
+	}
+}
+
 // oneFault/twoFaults are placeholder fault lists for tests that only care
 // about the *count* (confidence), not attribution — see
 // TestEvaluateThresholds_SingleActiveFaultRecordsItAsCause etc. for tests

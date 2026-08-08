@@ -2,6 +2,7 @@ package run
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/jdb316/tortureu/internal/config"
@@ -156,6 +157,64 @@ func evaluateSQLAsserts(asserts []config.AssertEntry) []verdict.Finding {
 	return findings
 }
 
+// thresholdComparisonOps are tried in this order only to find the earliest
+// occurring operator in an expression; "<=" appearing before "<" would
+// otherwise make no difference since both start at the same index for an
+// expression that actually contains "<=".
+var thresholdComparisonOps = []string{"<=", ">=", "==", "!=", "<", ">"}
+
+// thresholdStatKey extracts the k6 summary statistic name a threshold
+// expression names — everything before its comparison operator
+// ("p(95)<500" -> "p(95)", "rate<0.01" -> "rate"). ok is false when no
+// known comparison operator appears at all.
+func thresholdStatKey(expr string) (string, bool) {
+	idx := -1
+	for _, op := range thresholdComparisonOps {
+		if i := strings.Index(expr, op); i != -1 && (idx == -1 || i < idx) {
+			idx = i
+		}
+	}
+	if idx == -1 {
+		return "", false
+	}
+	return strings.TrimSpace(expr[:idx]), true
+}
+
+// measuredValue reads the actual measured statistic a threshold expression
+// names out of k6's own per-metric "values" object (VERDICT.md §1's
+// "observed": "4218ms" — a real measured value, not a restatement of
+// pass/fail: the ✗/✓ already says that). Metrics k6 marks
+// `"contains": "time"` get k6's own "ms" unit appended; anything else
+// (rate, count) is unitless, matching k6's own summary. ok is false
+// whenever the value genuinely cannot be read — no "values" object, an
+// unrecognized stat key, or a non-numeric value — so the caller reports
+// "not measured" instead of fabricating a number (the honesty rule this
+// package applies everywhere: never emit `caused` without traces, never a
+// guessed knob, and now never a value that wasn't actually read).
+func measuredValue(m map[string]any, expr string) (string, bool) {
+	statKey, ok := thresholdStatKey(expr)
+	if !ok {
+		return "", false
+	}
+	values, ok := m["values"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	raw, ok := values[statKey]
+	if !ok {
+		return "", false
+	}
+	v, ok := raw.(float64)
+	if !ok {
+		return "", false
+	}
+	formatted := strconv.FormatFloat(v, 'f', -1, 64)
+	if contains, _ := m["contains"].(string); contains == "time" {
+		formatted += "ms"
+	}
+	return formatted, true
+}
+
 // faultWindow renders a fault's declared anchor as the two-element
 // [start, end] window VERDICT.md's Cause.window carries. end is only
 // meaningful when for: is present (R-CFG-10: absent means "until end of
@@ -198,7 +257,9 @@ func attribute(f *verdict.Finding, faults []config.Fault, deps []detect.Dep, lan
 // internal/k6 already passes over) and are skipped here. faults are every
 // fault declared for this run (used for Cause/Candidates attribution, see
 // attribute); deps are internal/detect's dependency list (D-9's client
-// libraries, for Candidates).
+// libraries, for Candidates). Both Passed and Finding entries carry the
+// actual measured statistic (see measuredValue), falling back to the
+// honest "not measured" only when it genuinely cannot be read.
 func evaluateThresholds(metrics map[string]any, faults []config.Fault, sys detect.System) ([]verdict.Passed, []verdict.Finding) {
 	var passed []verdict.Passed
 	var findings []verdict.Finding
@@ -229,15 +290,19 @@ func evaluateThresholds(metrics map[string]any, faults []config.Fault, sys detec
 			result, _ := thresholds[expr].(map[string]any)
 			ok, _ := result["ok"].(bool)
 			assertion := fmt.Sprintf("%s: %s", name, expr)
+			observed, measured := measuredValue(m, expr)
+			if !measured {
+				observed = "not measured"
+			}
 			if ok {
-				passed = append(passed, verdict.Passed{Assertion: assertion, Observed: "threshold held"})
+				passed = append(passed, verdict.Passed{Assertion: assertion, Observed: observed})
 				continue
 			}
 			finding := verdict.Finding{
 				Confidence: confidenceFor(len(faults)),
 				Broke: verdict.Broke{
 					Assertion: assertion,
-					Observed:  "threshold breached",
+					Observed:  observed,
 				},
 			}
 			attribute(&finding, faults, sys.Deps, sys.Lang)

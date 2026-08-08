@@ -44,6 +44,35 @@ type promResponse struct {
 	Error string `json:"error"`
 }
 
+// promVectorResult is one element of a Prometheus vector-typed result:
+// {"metric": {...}, "value": [<unix ts>, "<value string>"]}.
+type promVectorResult struct {
+	Value []json.RawMessage `json:"value"`
+}
+
+// firstResultValue extracts the actual measured number Prometheus returned
+// for the first result of a vector-typed query — VERDICT.md §1's
+// "observed": "4218ms" is a real measured value, not a restatement of
+// pass/fail, and this is the promql-path equivalent of findings.go's
+// measuredValue for k6 thresholds. ok is false for any shape this cannot
+// confidently read (a scalar/matrix result type, or a malformed value
+// pair) — the caller falls back to reporting the result count instead of
+// fabricating a number.
+func firstResultValue(pr promResponse) (string, bool) {
+	if pr.Data.ResultType != "vector" || len(pr.Data.Result) == 0 {
+		return "", false
+	}
+	var vr promVectorResult
+	if err := json.Unmarshal(pr.Data.Result[0], &vr); err != nil || len(vr.Value) != 2 {
+		return "", false
+	}
+	var value string
+	if err := json.Unmarshal(vr.Value[1], &value); err != nil {
+		return "", false
+	}
+	return value, true
+}
+
 // Query implements PromQuerier.
 func (q HTTPPromQuerier) Query(expr string) (bool, string, error) {
 	reqURL := q.BaseURL + "/api/v1/query?" + url.Values{"query": {expr}}.Encode()
@@ -64,9 +93,14 @@ func (q HTTPPromQuerier) Query(expr string) (bool, string, error) {
 		return false, "", fmt.Errorf("run: promql: query failed: %s", pr.Error)
 	}
 	holds := len(pr.Data.Result) > 0
-	observed := fmt.Sprintf("%d result(s)", len(pr.Data.Result))
 	if !holds {
-		observed = "no results (condition did not hold)"
+		return false, "no results (condition did not hold)", nil
 	}
-	return holds, observed, nil
+	if v, ok := firstResultValue(pr); ok {
+		return true, v, nil
+	}
+	// Non-vector result type (scalar/matrix): still holds, but this
+	// package does not confidently parse a single value out of that shape
+	// — report the count rather than guess at one.
+	return true, fmt.Sprintf("%d result(s)", len(pr.Data.Result)), nil
 }
