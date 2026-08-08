@@ -662,6 +662,23 @@ run, which is where an unexplained failure costs most.
 
 *(specified before the fix, per R-PROC-2; found by measuring the growth strategy's
 time-to-first-verdict gate on repositories this project did not write)*
+
+**R-EXE-28** *(proposed)* — `run` **MUST** refuse, before reset and before any load, when
+`target.base_url` is empty. It **MUST NOT** start load against it.
+
+k6 given no base URL requests `"/"` with no scheme and every single request fails
+(`unsupported protocol scheme ""`). The run then completes and produces a verdict whose
+`http_req_failed` rate is 1.0 — a document that looks like a finding about the user's service and
+is entirely an artefact of a missing config field. That is the worst failure this project has: not
+a crash, but a confident wrong answer.
+
+Measured on `docker/awesome-compose`'s `flask-redis`: `init` wrote no `base_url`, `run` fired a
+full load of failing requests, and returned exit 4 with a wall of k6 warnings. The refusal must
+name the field and say it is not detected, per **R-CLI-4**'s rule against writing an empty required
+field.
+
+*(specified before the fix, per R-PROC-2; found measuring time-to-first-verdict on a third-party
+repository)*
 **R-VER-13**'s chain was actually built for that finding, and **MUST** then be clamped to the
 ceiling `observability.max_confidence` already carries (**R-DET-6**, TBD-6): a finding may never
 claim more than the ceiling states. With no chain, confidence is unchanged from what
@@ -1499,6 +1516,18 @@ nothing to suggest, and only the second is honest.
   SUT with `docker port` reporting nothing published, where host `pgbench` fails to resolve the DSN
   host and host schemathesis cannot connect — and namespace-joined runs of both reach them,
   sustaining ~1000 tps and reporting the SUT's planted `500` as a finding.
+
+- **TBD-15** — Whether `init` should derive `target.base_url` from the SUT's published compose port.
+  It does not today: `buildInit` writes `compose:` and `service:` and no `base_url` at all, so every
+  new user must hand-edit before their first useful run. The information is usually right there —
+  `flask-redis`'s SUT declares `'8000:8000'` — but `detect.System` records published ports only for
+  *dependencies* (`Dep.Address`), never for the SUT, so exposing it is a detection change rather
+  than a formatting one.
+
+  Not guessed in the meantime: a service may publish several ports, or none (the R-DC2-3 case,
+  where the SUT is deliberately unreachable from the host), and picking one silently would produce
+  a `base_url` that looks detected and is wrong. **R-EXE-28** makes the empty case a loud refusal
+  rather than a meaningless verdict, which is the safe half; this TBD is the convenient half.
 
 - **TBD-5** — Whether to adopt the `grafana/k6-summary` JSON Schema once it leaves
   work-in-progress, replacing our own `handleSummary()` shape.

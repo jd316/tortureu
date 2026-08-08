@@ -386,6 +386,16 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 		return fail("drive-tier co-execution refused", err)
 	}
 
+	// R-EXE-28: k6 with no base URL requests "/" with no scheme, every
+	// request fails, and the verdict's http_req_failed rate of 1.0 reads as
+	// a finding about the user's service while being an artefact of a
+	// missing field. Refuse here — before reset, before load — rather than
+	// return a confident wrong answer.
+	if strings.TrimSpace(cfg.Target.BaseURL) == "" {
+		return fail("target.base_url is empty",
+			errors.New("nothing to send load to; `tortureu init` does not detect a base URL (SPEC.md TBD-15), so set target.base_url to the SUT's reachable address, e.g. http://localhost:8000"))
+	}
+
 	// 1. Reset (R-CFG-20/21, R-EXE-2), unless --no-reset.
 	if opts.NoReset {
 		v.Reset = "skipped"
