@@ -40,3 +40,25 @@ func TestScheduleFaults_WaitsForPhaseMarkerNotWallClock(t *testing.T) {
 		t.Errorf("applyCalls = %d, want 1 after the peak marker arrived", applier.applyCalls.Load())
 	}
 }
+
+// spec: R-EXE-19
+func TestScheduleFaults_RecordsErrorWhenLoadEndsBeforePhaseAnchorFires(t *testing.T) {
+	// R-EXE-19's own stated worst failure mode: "a declared fault that
+	// never fires; the run completes, the verdict reads pass, and the user
+	// concludes their system withstood a fault that was never applied."
+	// This reproduces it one branch over from where it was fixed for
+	// passed-over verbs: a phase-anchored fault whose phase never starts
+	// because the load ended first (markers channel closes) must not
+	// vanish silently.
+	f := config.Fault{Name: "spike_pause", At: "spike", Target: "checkout-api", Verb: "pause", Inject: map[string]any{"pause": true}}
+	markers := make(chan PhaseMarker)
+	close(markers) // load ended; "spike" never started
+
+	done, teardown := scheduleFaults([]config.Fault{f}, markers, time.Now(), &fault.Manager{}, &trackingApplier{}, nil, nil, nil)
+	defer teardown()
+
+	errs := <-done
+	if len(errs) == 0 {
+		t.Fatal("errs is empty, want an error naming spike_pause — a fault whose phase never started must not disappear silently (R-EXE-19)")
+	}
+}

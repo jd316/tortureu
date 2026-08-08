@@ -221,13 +221,14 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 
 	// R-EXE-16: a signal must tear everything down no matter when it
 	// arrives — before load starts, mid-load, or in the window between the
-	// load finishing and the scheduler's own goroutines draining. A
-	// previous version only checked for a caught signal inside the one
-	// select guarding handle.Done(), so a signal in any other window ran
-	// fault.Manager's own teardown (which manager.WatchSignals triggers
-	// internally, unconditionally) but never reached teardownExpiring,
-	// silently leaving for:-duration faults applied. This watcher runs for
-	// Run's entire body instead, so there is no such window.
+	// load finishing and the scheduler's own goroutines draining. This
+	// package used to call fault.Manager.WatchSignals for this, but that
+	// only ever knew about fault.Manager's own tracked faults; a signal in
+	// most windows never reached teardownExpiring (the for:-duration faults
+	// tracked outside Manager, see scheduler.go), silently leaving them
+	// applied. fault.Manager.WatchSignals is not called anywhere in this
+	// file any more — this package now arms its own signal.Notify for
+	// Run's entire body instead, precisely so there is no such window.
 	var aborted atomic.Bool
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -361,9 +362,22 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 	}
 	// R-EXE-19: a fault that couldn't be routed to a wired owner fails the
 	// run instead of silently proceeding as if it had been applied.
+	// approximationNote entries (R-EXE-22) are not failures — split them
+	// out and surface them as verdict warnings instead of failing the run
+	// over a rate that was merely rounded, not unrouted.
 	if schedErrs := <-schedDone; len(schedErrs) > 0 {
-		teardownAll()
-		return finish(verdict.StatusError)
+		var realErrs []error
+		for _, e := range schedErrs {
+			if note, ok := e.(approximationNote); ok {
+				addWarning(v, note.msg)
+				continue
+			}
+			realErrs = append(realErrs, e)
+		}
+		if len(realErrs) > 0 {
+			teardownAll()
+			return finish(verdict.StatusError)
+		}
 	}
 	if av, ok := abortedEarly(); ok {
 		return av
@@ -378,18 +392,25 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 
 	thresholdPassed, thresholdFindings := evaluateThresholds(metrics, cfg.Faults, sys)
 	promPassed, promFindings := evaluatePromqlAsserts(cfg.Assert, deps.Prom, cfg.Faults, sys)
+	sqlFindings := evaluateSQLAsserts(cfg.Assert)
 
 	// 6. Tear down every fault (R-EXE-5), before the verdict is emitted.
 	teardownAll()
 
 	v.Passed = append(thresholdPassed, promPassed...)
-	v.Findings = append(thresholdFindings, promFindings...)
+	// IDs are assigned once, here, after every finding source is merged —
+	// not inside evaluateThresholds/evaluatePromqlAsserts/evaluateSQLAsserts,
+	// each of which used to number its own findings from f1: two sources
+	// could then emit the same ID, making one of them unaddressable by an
+	// agent calling explain_failure (it returns the first match).
+	findings := append(append(thresholdFindings, promFindings...), sqlFindings...)
+	for i := range findings {
+		findings[i].ID = fmt.Sprintf("f%d", i+1)
+	}
+	v.Findings = findings
 
 	if warning, ok := throughputWarning(cfg, metrics); ok {
-		if v.Artifacts == nil {
-			v.Artifacts = map[string]any{}
-		}
-		v.Artifacts["warnings"] = append(asStringSlice(v.Artifacts["warnings"]), warning)
+		addWarning(v, warning)
 	}
 
 	status := verdict.StatusPass
@@ -397,6 +418,19 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 		status = verdict.StatusFail
 	}
 	return finish(status)
+}
+
+// addWarning appends msg to the verdict's Artifacts["warnings"] list.
+// verdict.Verdict has no dedicated warnings field (escalated in the Task 7
+// report); Artifacts is the least-invented place to put one without editing
+// the read-only verdict package. Used for R-EXE-4's throughput-shortfall
+// warning and R-EXE-22's error_rate rate-approximation note — both
+// informational, neither a reason to fail the run.
+func addWarning(v *verdict.Verdict, msg string) {
+	if v.Artifacts == nil {
+		v.Artifacts = map[string]any{}
+	}
+	v.Artifacts["warnings"] = append(asStringSlice(v.Artifacts["warnings"]), msg)
 }
 
 // internalNetworkFaultTargets returns the deduplicated "host:port" targets

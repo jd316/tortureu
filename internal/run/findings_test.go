@@ -205,12 +205,31 @@ func TestEvaluateThresholds_UnknownClientLibraryGetsNoFabricatedKnobs(t *testing
 	}
 }
 
-// spec: R-CFG-17
-func TestEvaluatePromqlAsserts_SkipsUnrunAssertionsWithNoQuerierRatherThanPassingThem(t *testing.T) {
+// spec: R-VER-8
+// spec: R-COV-6
+func TestEvaluatePromqlAsserts_NoQuerierProducesUnevaluatedFindingNotSilentPass(t *testing.T) {
+	// A previous version returned passed=nil, findings=nil here — the
+	// assertion vanished entirely, which left Run's `len(Findings) == 0 =>
+	// pass` check with nothing to see: a torture.yaml whose asserts are all
+	// promql: with no -prom-url configured ran green having evaluated
+	// nothing (R-VER-8's "a green that means we couldn't tell";
+	// R-COV-6's "unevaluable must never read as false" — nor, by the same
+	// reasoning, as true/pass). An unevaluated assertion must be visible as
+	// its own thing: neither Passed nor a genuine broken Finding.
 	asserts := []config.AssertEntry{{"promql": "up == 1"}}
 	passed, findings := evaluatePromqlAsserts(asserts, nil, oneFault(), detect.System{})
-	if len(passed) != 0 || len(findings) != 0 {
-		t.Errorf("passed=%v findings=%v, want both empty — an unrun assertion must not look like a held one (R-VER-5)", passed, findings)
+	if len(passed) != 0 {
+		t.Errorf("passed = %v, want empty — an unrun assertion must not look like a held one (R-VER-5)", passed)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("findings = %v, want exactly one unevaluated finding", findings)
+	}
+	f := findings[0]
+	if f.Confidence != verdict.Ambiguous {
+		t.Errorf("Confidence = %q, want ambiguous — an unevaluated assertion is not a confident attribution of anything", f.Confidence)
+	}
+	if !strings.Contains(f.Broke.Observed, "not evaluated") {
+		t.Errorf("Broke.Observed = %q, want it to say the assertion was never evaluated, not that it broke", f.Broke.Observed)
 	}
 }
 
@@ -221,6 +240,30 @@ type fakeQuerier struct {
 }
 
 func (f fakeQuerier) Query(expr string) (bool, string, error) { return f.holds, f.observed, f.err }
+
+// spec: R-VER-8
+// spec: R-CFG-18
+func TestEvaluateSQLAsserts_AlwaysUnevaluated(t *testing.T) {
+	// sql: is parsed (R-CFG-18) but no package anywhere evaluates a SQL
+	// assertion — the honest report is "not evaluated", every time, not
+	// silence (which would let a sql:-only assert: block run green having
+	// checked nothing, R-VER-8) and not a fabricated pass or fail.
+	asserts := []config.AssertEntry{{"sql": "select count(*) from orders where status = 'orphaned'"}}
+	findings := evaluateSQLAsserts(asserts)
+	if len(findings) != 1 {
+		t.Fatalf("findings = %v, want exactly one", findings)
+	}
+	f := findings[0]
+	if f.Confidence != verdict.Ambiguous {
+		t.Errorf("Confidence = %q, want ambiguous", f.Confidence)
+	}
+	if !strings.Contains(f.Broke.Observed, "not evaluated") {
+		t.Errorf("Broke.Observed = %q, want it to say the assertion was never evaluated", f.Broke.Observed)
+	}
+	if !strings.HasPrefix(f.Broke.Assertion, "sql:") {
+		t.Errorf("Broke.Assertion = %q, want it to name the sql: assertion", f.Broke.Assertion)
+	}
+}
 
 // spec: R-CFG-17
 func TestEvaluatePromqlAsserts_FailedQueryIsAFinding(t *testing.T) {

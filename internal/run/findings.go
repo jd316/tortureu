@@ -120,6 +120,42 @@ func buildCandidates(f config.Fault, deps []detect.Dep, lang string) []verdict.C
 	return candidates
 }
 
+// unevaluatedFinding represents an assertion this package could not
+// evaluate at all — distinct from both a held assertion (Passed) and a
+// genuinely broken one (R-VER-8: "a green that means we couldn't tell" is
+// exactly the failure mode this exists to prevent; R-COV-6: "unevaluable
+// must never read as false" — nor, by the same reasoning, as true).
+// Confidence is Ambiguous so verdict.ExitCode's existing "status: fail with
+// every finding ambiguous => exit 4 (inconclusive)" rule fires when every
+// finding in a run is one of these — verdict.Verdict has no separate
+// "unevaluated" list of its own to populate instead (escalated in the
+// Task 7 report: a dedicated field would be cleaner than overloading
+// Findings this way, but that is internal/verdict's call, not this
+// package's to make unilaterally).
+func unevaluatedFinding(assertion, reason string) verdict.Finding {
+	return verdict.Finding{
+		Confidence: verdict.Ambiguous,
+		Broke:      verdict.Broke{Assertion: assertion, Observed: "not evaluated: " + reason},
+	}
+}
+
+// evaluateSQLAsserts reports every sql: assert entry (R-CFG-18) as
+// unevaluated: no package anywhere in this codebase evaluates a SQL
+// assertion against a real database, so the honest answer for every one,
+// always, is "not evaluated" — never a silent skip (R-VER-8) and never a
+// guessed pass or fail.
+func evaluateSQLAsserts(asserts []config.AssertEntry) []verdict.Finding {
+	var findings []verdict.Finding
+	for _, entry := range asserts {
+		expr, ok := entry["sql"].(string)
+		if !ok {
+			continue
+		}
+		findings = append(findings, unevaluatedFinding("sql: "+expr, "no SQL evaluation capability exists in this build"))
+	}
+	return findings
+}
+
 // faultWindow renders a fault's declared anchor as the two-element
 // [start, end] window VERDICT.md's Cause.window carries. end is only
 // meaningful when for: is present (R-CFG-10: absent means "until end of
@@ -198,7 +234,6 @@ func evaluateThresholds(metrics map[string]any, faults []config.Fault, sys detec
 				continue
 			}
 			finding := verdict.Finding{
-				ID:         fmt.Sprintf("f%d", len(findings)+1),
 				Confidence: confidenceFor(len(faults)),
 				Broke: verdict.Broke{
 					Assertion: assertion,
@@ -214,14 +249,14 @@ func evaluateThresholds(metrics map[string]any, faults []config.Fault, sys detec
 
 // evaluatePromqlAsserts evaluates every promql: entry in assert: (R-CFG-17)
 // — the signals k6 cannot observe. A nil querier means no Prometheus
-// endpoint was configured; such entries cannot be evaluated and are skipped
-// rather than silently treated as passing (an unrun assertion must not look
-// like a held one, R-VER-5). faults/deps feed Cause/Candidates attribution,
-// same as evaluateThresholds.
+// endpoint was configured (-prom-url was empty); such entries are reported
+// as unevaluated (R-VER-8, R-COV-6), never silently dropped and never
+// treated as passing (an unrun assertion must not look like a held one,
+// R-VER-5). faults/deps feed Cause/Candidates attribution, same as
+// evaluateThresholds. IDs are assigned once by the caller after every
+// finding source is merged (Run, run.go) — not here, where two independent
+// slices numbering from f1 would collide once combined.
 func evaluatePromqlAsserts(asserts []config.AssertEntry, querier PromQuerier, faults []config.Fault, sys detect.System) ([]verdict.Passed, []verdict.Finding) {
-	if querier == nil {
-		return nil, nil
-	}
 	var passed []verdict.Passed
 	var findings []verdict.Finding
 	for _, entry := range asserts {
@@ -229,11 +264,14 @@ func evaluatePromqlAsserts(asserts []config.AssertEntry, querier PromQuerier, fa
 		if !ok {
 			continue
 		}
-		holds, observed, err := querier.Query(expr)
 		assertion := "promql: " + expr
+		if querier == nil {
+			findings = append(findings, unevaluatedFinding(assertion, "no Prometheus endpoint configured (-prom-url)"))
+			continue
+		}
+		holds, observed, err := querier.Query(expr)
 		if err != nil {
 			findings = append(findings, verdict.Finding{
-				ID:         fmt.Sprintf("f%d", len(findings)+1),
 				Confidence: verdict.Ambiguous,
 				Broke:      verdict.Broke{Assertion: assertion, Observed: "query error: " + err.Error()},
 			})
@@ -244,7 +282,6 @@ func evaluatePromqlAsserts(asserts []config.AssertEntry, querier PromQuerier, fa
 			continue
 		}
 		finding := verdict.Finding{
-			ID:         fmt.Sprintf("f%d", len(findings)+1),
 			Confidence: confidenceFor(len(faults)),
 			Broke:      verdict.Broke{Assertion: assertion, Observed: observed},
 		}

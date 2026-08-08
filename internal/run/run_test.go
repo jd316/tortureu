@@ -100,6 +100,83 @@ func minimalConfig() *config.Config {
 	}
 }
 
+// spec: R-VER-8
+func TestRun_AllUnevaluatedAssertsNeverExitZero(t *testing.T) {
+	// A torture.yaml whose assert: block is entirely promql: (or sql:, see
+	// findings_test.go's TestEvaluateSQLAsserts_AlwaysUnevaluated), with no
+	// -prom-url configured, must not run green: nothing was actually
+	// checked. R-VER-8's exit 4 exists precisely for "we could not tell" —
+	// a run like this must land there, never at exit 0.
+	cfg := minimalConfig()
+	cfg.Assert = []config.AssertEntry{{"promql": "orders_total == payments_total"}}
+	sys := detect.System{}
+
+	handle := newFakeLoadHandle()
+	handle.done <- LoadResult{SummaryJSON: []byte(`{"metrics":{}}`)}
+
+	v := Run(cfg, sys, Deps{
+		Reset:    &fakeResetter{},
+		Topology: &fakeTopology{},
+		Load:     &fakeLoadRunner{handle: handle},
+		Applier:  &fakeApplier{},
+		Prom:     nil, // no -prom-url configured
+	}, Options{})
+
+	if verdict.ExitCode(*v) == 0 {
+		t.Fatalf("ExitCode = 0, want non-zero — every assertion in this run was unevaluated, not passing (status=%q, findings=%v)", v.Status, v.Findings)
+	}
+	if verdict.ExitCode(*v) != 4 {
+		t.Errorf("ExitCode = %d, want 4 (inconclusive) — the trigger is status:fail with every finding ambiguous, which an all-unevaluated run satisfies", verdict.ExitCode(*v))
+	}
+	if len(v.Findings) == 0 {
+		t.Error("Findings is empty, want the unevaluated promql assertion recorded as a finding, not silently dropped")
+	}
+}
+
+// spec: R-VER-3
+func TestRun_FindingIDsAreUniqueAcrossMergedSources(t *testing.T) {
+	// evaluateThresholds and evaluatePromqlAsserts each used to number
+	// their own findings from f1, so a run with a broken k6 threshold AND
+	// an unevaluated promql assertion could emit two findings sharing ID
+	// "f1" — the second unaddressable by an agent calling explain_failure
+	// (it returns the first match).
+	cfg := minimalConfig()
+	cfg.Assert = []config.AssertEntry{
+		{"http_req_duration": []string{"p(95)<500"}},
+		{"promql": "orders_total == payments_total"},
+	}
+	sys := detect.System{}
+
+	handle := newFakeLoadHandle()
+	handle.done <- LoadResult{SummaryJSON: []byte(`{
+		"metrics": {
+			"http_req_duration": {"thresholds": {"p(95)<500": {"ok": false}}}
+		}
+	}`)}
+
+	v := Run(cfg, sys, Deps{
+		Reset:    &fakeResetter{},
+		Topology: &fakeTopology{},
+		Load:     &fakeLoadRunner{handle: handle},
+		Applier:  &fakeApplier{},
+		Prom:     nil,
+	}, Options{})
+
+	if len(v.Findings) != 2 {
+		t.Fatalf("Findings = %v, want exactly two (one broken threshold, one unevaluated promql assert)", v.Findings)
+	}
+	seen := map[string]bool{}
+	for _, f := range v.Findings {
+		if f.ID == "" {
+			t.Errorf("finding %+v has no ID", f)
+		}
+		if seen[f.ID] {
+			t.Errorf("finding ID %q used more than once — an agent calling explain_failure could not address the second one", f.ID)
+		}
+		seen[f.ID] = true
+	}
+}
+
 // spec: R-EXE-20
 func TestRun_FailsLoudlyWhenInternalFaultTargetCannotBeIntercepted(t *testing.T) {
 	// A fault targeting a class: internal dependency with a network verb

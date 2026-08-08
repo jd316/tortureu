@@ -144,7 +144,14 @@ func scheduleFaultsWithQueue(faults []config.Fault, markers <-chan PhaseMarker, 
 		for len(phaseAnchored) > 0 {
 			m, ok := <-markers
 			if !ok {
-				break // load ended before every phase-anchored fault's phase started
+				// R-EXE-19's own worst failure mode: a declared fault that
+				// never fires must never disappear silently. Every fault
+				// still waiting for a phase that will now never start (the
+				// load ended first) is recorded as a failure, not dropped.
+				for _, f := range phaseAnchored {
+					addErr(fmt.Errorf("fault %q: load ended before phase %q started — the fault never fired (R-EXE-19)", f.Name, f.At))
+				}
+				break
 			}
 			var remaining []config.Fault
 			for _, f := range phaseAnchored {
@@ -214,16 +221,20 @@ func routePassedOver(act fault.Action, mockApplier MockApplier, classes map[stri
 		if err != nil {
 			return fmt.Errorf("fault %q: %w", f.Name, err)
 		}
-		// _ discards ErrorRateApplied (R-EXE-22: whether r.Rate had to be
-		// rounded to WireMock's cycle resolution). Surfacing that into the
-		// verdict is a verdict-assembly concern outside this round's
-		// wiring scope — escalated in the Task 7 report rather than
-		// silently dropped without comment.
-		undo, _, err := mockApplier.ApplyErrorRate(f.Name, er)
+		undo, applied, err := mockApplier.ApplyErrorRate(f.Name, er)
 		if err != nil {
 			return fmt.Errorf("fault %q: %w", f.Name, err)
 		}
 		expiring.add(onceUndo(undo))
+		if applied.Approximated {
+			// R-EXE-22: report the rounding rather than let it reach a user
+			// silently — this is not a failure, so it travels back as an
+			// approximationNote Run recognizes and reroutes to a verdict
+			// warning instead of failing the run over it.
+			return approximationNote{msg: fmt.Sprintf(
+				"fault %q: error_rate requested %.3f, applied %.3f (rounded to WireMock's cycle resolution, R-EXE-22)",
+				f.Name, applied.Requested, applied.Applied)}
+		}
 		return nil
 
 	case "internal/queuefault":
@@ -280,6 +291,18 @@ func onceUndo(undo func() error) func() error {
 		return err
 	}
 }
+
+// approximationNote is a non-fatal note carried through the same error
+// channel scheduleFaults uses for real failures (R-EXE-22): WireMock's
+// error_rate mechanism can only hit certain rates exactly
+// (errorRateCycleLen states), and a caller tuning a threshold needs to know
+// when a requested rate got rounded. It implements error only so it can
+// travel through addErr/errs without a second channel; Run splits it back
+// out (by type) before deciding whether the run failed, and surfaces its
+// message as a verdict warning instead (see run.go).
+type approximationNote struct{ msg string }
+
+func (n approximationNote) Error() string { return n.msg }
 
 // expireTracker holds the once-wrapped undo funcs for faults applied
 // outside fault.Manager (see scheduleFaults), so Run's panic/signal paths
