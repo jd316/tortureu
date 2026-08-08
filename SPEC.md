@@ -354,6 +354,96 @@ resource limits.
 **R-EXE-5** — Faults **MUST** be torn down on exit, including on abort or panic. A crashed run
 **MUST NOT** leave a proxy degrading a developer's stack.
 
+### 5.1 Co-driven load sources (`--db-load`, `--fuzz`)
+
+`registry.yaml` registers two further `drive`-tier tools whose front door is a `run` flag:
+`pgbench` (`when: dep:postgresql`, `how: tortureu run --db-load`) and `schemathesis`
+(`when: spec:openapi`, `how: tortureu run --fuzz`). `drive` is the whole claim (R-SCOPE-3): both
+are **co-executed on the run's own clock**, folded into the one verdict. Emitting a script and
+handing it off would be `delegate`, and the registry does not say `delegate`.
+
+**R-EXE-26** — `run --db-load` **MUST** co-execute `pgbench` against the detected PostgreSQL
+dependency *while* the HTTP load and the faults run, so the database is saturated independently of
+the application (R-SCOPE-2, R-EXE-1). Its lifecycle **MUST** bind to the run clock exactly as
+faults do:
+
+- it **MUST** start on k6's first phase marker (**R-EXE-8**) — not on TortureU's own wall clock,
+  and not before load exists, so "under load" is a fact rather than a hope;
+- it **MUST** be terminated when the load ends, and on abort, signal or panic, through the **same**
+  teardown path faults use (**R-EXE-5**, **R-EXE-16**). A crashed run **MUST NOT** leave pgbench
+  hammering a developer's database;
+- it **MUST** carry its own upper duration bound, so a pgbench that outlives the orchestrator that
+  spawned it still stops by itself.
+
+Refusals — this flag **MUST NOT** silently no-op, which is this project's worst failure mode:
+
+- **no trigger**: if detection reports no dependency of type `postgresql` (R-DET-9), the run
+  **MUST** fail with `status: error` (exit `2`), naming the absent trigger condition;
+- **no credentials**: the connection string is supplied by `-db-url` and by nothing else. TortureU
+  **MUST NOT** guess a user, password, host, port or database name, nor read one out of the
+  compose file. Absent `-db-url` **MUST** be an error naming the flag;
+- **no binary**: `pgbench` absent from `PATH` **MUST** be reported with an install hint in the
+  manner of **R-CLI-5**, never as an obscure failure;
+- every refusal above **MUST** happen *before* reset and before any load starts. Discovering the
+  flag was unusable after a run has already perturbed the stack teaches the user nothing.
+
+`pgbench`'s own initialization (`pgbench -i`) **creates and drops tables named `pgbench_*`** in the
+target database. That is a write against the caller's data, so the flag's help text **MUST** say
+so; it is not something a user may discover from the effects.
+
+Results: what the DB load achieved (tps, client count, duration, and whether it was cut short by
+the load ending first) **MUST** appear in the verdict as an artifact — a run that claims DB
+pressure has to be able to show it. pgbench failing to run at all (unreachable database, bad DSN,
+missing binary) is **TortureU** failing: `status: error` (**R-VER-2**). A SUT that degrades under
+DB pressure is a *result* and surfaces through the run's own assertions, never as an `error`.
+
+**R-EXE-27** — `run --fuzz` **MUST** co-execute `schemathesis` against the system under test's
+OpenAPI specification, on the same clock and with the same lifecycle binding **R-EXE-26** states
+(start on the first phase marker; terminated at load end, abort, signal or panic through the shared
+teardown path; own upper duration bound). Fuzzing *under load and faults* is the point: the cheap
+500s a fuzzer finds against an idle service are not the interesting ones.
+
+Refusals, in the same shape as **R-EXE-26**:
+
+- **no trigger**: `spec:openapi` false in detection's `Coverage` (R-COV-5) **MUST** be an error
+  naming the absent trigger, never a silent skip;
+- **no spec path**: the document fuzzed is `target.openapi` from `torture.yaml`, or `-fuzz-spec`.
+  It **MUST NOT** be guessed by scanning for conventional filenames — a fuzzer pointed at the
+  wrong document reports confident nonsense. The URL fuzzed is `target.base_url`, equally
+  un-guessable and equally an error when absent;
+- **no binary**: `schemathesis` (or its `st` alias) absent from `PATH` **MUST** carry an install
+  hint per **R-CLI-5**;
+- all three **MUST** be checked before reset and before load.
+
+Findings: each failing operation schemathesis reports **MUST** become a finding in the verdict
+(**R-VER-1**). **R-VER-2's distinction is load-bearing here**: a fuzzer finding a `500` is the
+system under test breaking (`fail`, exit `1`), *not* TortureU failing — schemathesis exiting
+non-zero **because it found failures** **MUST NOT** be reported as `status: error`. Only a
+schemathesis that could not run at all (missing binary, unparseable spec, unreachable target) is
+`error`.
+
+The two are distinguishable in schemathesis's own machine-readable output, and the implementation
+**MUST** use that rather than its exit status alone: its JUnit report emits `<failure>` for a
+response that broke a check (a *result*) and `<error>` for a case it could not execute at all
+(network failure, so *no* result) — while the process exits `1` for either. A run whose report is
+all `<error>` and no `<failure>` **MUST** be `status: error`; a run carrying both reports the
+failures as findings **and** warns that some cases could not be executed, never silently dropping
+either half.
+
+Confidence per **R-VER-3**, assigned per finding:
+
+| Run declared | Confidence | Why |
+|---|---|---|
+| no faults | `correlated` | the fuzzer's own request is the sole candidate cause, and it is reported verbatim |
+| ≥1 fault | `ambiguous` | the injected fault is a second candidate cause and no traces exist to separate them |
+
+A fuzz pass cut short by the load ending first **MUST** report what it found **plus** a warning
+that it was cut short. Reporting a truncated fuzz run as a clean one is the silent-omission failure
+this project rejects everywhere.
+
+*(both proposed by the implementer and specified before citation, per R-PROC-2; the `pgbench` and
+`schemathesis` registry entries named these flags with nothing behind them)*
+
 ---
 
 ## 6. Verdict
@@ -403,6 +493,16 @@ findings is not inconclusive — it is a pass (`0`). `inconclusive` is deliberat
 value: the run genuinely failed its assertions, and only the *attribution* is unusable, so the
 distinction belongs in the exit code rather than in the document's status. *(closes the gap the
 Task 3 review flagged)*
+
+**R-VER-11** — The verdict **MUST** carry the observability coverage detection reported for this
+repo (**R-DET-6**) and the maximum confidence it permits, in `VERDICT.md` §1's `observability`
+block. A verdict that omits it renders the zero value — `traces/metrics/logs` all false and an
+empty ceiling — for every run, which is a *false* statement about repos that do have tracing, and
+silence about the ceiling for repos that do not. Both are the silent omission this project rejects,
+and the ceiling is exactly what tells a user why their findings say `correlated` and not `caused`.
+
+*(the field existed in `VERDICT.md` §1 and in `internal/verdict` and was never populated by
+`internal/run`; specified here before the fix, per R-PROC-2)*
 
 **R-VER-9** — Human output **MUST** be rendered from the same verdict document as machine output.
 No second code path.
@@ -946,6 +1046,31 @@ nothing to suggest, and only the second is honest.
   wrong in a consumer repo, which has no TortureU source to build. The generated step is therefore
   marked in-file as the one line the user must adapt, rather than emitting an install command for a
   distribution channel that does not exist. Resolves when v0 ships an installable artefact.
+
+- **TBD-13** — Whether the keploy handoff `capture -engine keploy` generates (R-CLI-12) actually
+  records a session end to end. keploy 3.6.11's flags, its `keploy config --generate` output and
+  its acceptance of a partial `keploy.yml` were verified against the real binary; the recording
+  itself was not. The generated command *was* run against a real two-service compose stack: as an
+  unprivileged user it stops in keploy's eBPF setup (`/proc/sys/kernel/perf_event_paranoid`
+  permission denied); as root it gets past that, starts keploy's agent container beside the stack
+  and creates a container named exactly the `container_name:` we derived `--container-name` from —
+  then dies on Docker Desktop file sharing refusing keploy's own `./keploy` output mount, for every
+  path tried. Both stops are this machine's configuration, not the generated command. Resolves when
+  the handoff is exercised on a host with root and an unrestricted Docker bind-mount policy. Until
+  then the generated command is stated as generated, never as run — which is exactly what
+  `delegate` tier (R-SCOPE-3) promises and all it promises.
+
+- **TBD-12** — How `--db-load` (R-EXE-26) and `--fuzz` (R-EXE-27) reach a SUT or database that
+  **R-DC2-3** has put on an `internal: true` network. Both drive a real third-party binary as a
+  subprocess, so neither can use the container-network-namespace join `internal/run`'s k6 path
+  (`SetSUTContainer`, load.go) or its `fallbackTransport` (inreach.go) use — a subprocess dials
+  from the host's own namespace. v0 therefore runs both as host processes against the address the
+  caller supplied (`-db-url`, `target.base_url`), which covers a published port and a
+  non-DC-2-isolated stack, and **fails loudly** (`status: error`) when the address is unreachable
+  rather than reporting zero DB load or zero fuzz findings. Resolves by giving both runners the
+  same `docker run --network container:<id>` mode `K6Runner` already has, which also needs a
+  stated rule for translating the caller's address into that namespace — the part that must not be
+  guessed, and the reason it is not done here.
 
 - **TBD-5** — Whether to adopt the `grafana/k6-summary` JSON Schema once it leaves
   work-in-progress, replacing our own `handleSummary()` shape.
