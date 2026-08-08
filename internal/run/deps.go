@@ -63,7 +63,7 @@ func NewRealDepsFull(toxiproxyURL, promURL, mockURL, brokerURL string) Deps {
 	return Deps{
 		Reset:        ShellResetter{},
 		Topology:     ComposeTopologyApplier{},
-		Load:         K6Runner{},
+		Load:         &K6Runner{},
 		Applier:      applier,
 		QueueApplier: queue,
 		MockApplier:  mock,

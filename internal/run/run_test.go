@@ -178,6 +178,92 @@ func TestRun_FindingIDsAreUniqueAcrossMergedSources(t *testing.T) {
 	}
 }
 
+// fakeContainerAwareLoadRunner is a fakeLoadRunner that also implements
+// SetSUTContainer, so Run's optional wiring (the interface{ SetSUTContainer
+// } duck type) actually engages for it.
+type fakeContainerAwareLoadRunner struct {
+	fakeLoadRunner
+	sutContainer string
+}
+
+func (f *fakeContainerAwareLoadRunner) SetSUTContainer(name string) {
+	f.sutContainer = name
+}
+
+// withFakeSUTDiscovery overrides discoverSUTContainer for the duration of a
+// test and restores it afterward — this package's own docker-backed tests
+// prove the real implementation; this lets Run's wiring around it be
+// proven without a live daemon.
+func withFakeSUTDiscovery(t *testing.T, fn func(service string) (string, error)) {
+	t.Helper()
+	orig := discoverSUTContainer
+	discoverSUTContainer = fn
+	t.Cleanup(func() { discoverSUTContainer = orig })
+}
+
+// spec: R-DC2-3
+func TestRun_WiresSUTContainerIntoLoadRunnerAfterTopologyApply(t *testing.T) {
+	// R-DC2-3's own network makes the SUT's published ports unreachable
+	// from the host (the eval-found bug this fixes): a LoadRunner that
+	// knows how to run k6 sharing the SUT's network namespace instead
+	// needs to be told which container that is. Run must discover it
+	// after Topology.Apply and before Load.Start.
+	cfg := minimalConfig()
+	sys := detect.System{}
+	withFakeSUTDiscovery(t, func(service string) (string, error) {
+		if service != cfg.Target.Service {
+			t.Errorf("discoverSUTContainer called with %q, want %q", service, cfg.Target.Service)
+		}
+		return "checkout-api-container-1", nil
+	})
+
+	handle := newFakeLoadHandle()
+	handle.done <- LoadResult{SummaryJSON: []byte(`{"metrics":{}}`)}
+	load := &fakeContainerAwareLoadRunner{fakeLoadRunner: fakeLoadRunner{handle: handle}}
+
+	Run(cfg, sys, Deps{
+		Reset:    &fakeResetter{},
+		Topology: &fakeTopology{},
+		Load:     load,
+		Applier:  &fakeApplier{},
+	}, Options{})
+
+	if load.sutContainer != "checkout-api-container-1" {
+		t.Errorf("SetSUTContainer received %q, want the discovered container name", load.sutContainer)
+	}
+}
+
+// spec: R-VER-2
+func TestRun_FailsLoudlyWhenSUTContainerCannotBeDiscovered(t *testing.T) {
+	// A LoadRunner that needs the SUT's container to run k6 against it at
+	// all (R-DC2-3's fix) must not silently fall back to the host-process
+	// path this task's eval proved is always connection-refused against an
+	// internal-only SUT — that would quietly reintroduce the exact bug.
+	cfg := minimalConfig()
+	sys := detect.System{}
+	withFakeSUTDiscovery(t, func(service string) (string, error) {
+		return "", errors.New("no running container found")
+	})
+
+	load := &fakeContainerAwareLoadRunner{fakeLoadRunner: fakeLoadRunner{handle: newFakeLoadHandle()}}
+	v := Run(cfg, sys, Deps{
+		Reset:    &fakeResetter{},
+		Topology: &fakeTopology{},
+		Load:     load,
+		Applier:  &fakeApplier{},
+	}, Options{})
+
+	if v.Status != verdict.StatusError {
+		t.Fatalf("Status = %q, want error", v.Status)
+	}
+	if load.called {
+		t.Error("Load.Start was called despite SUT container discovery failing")
+	}
+	if !strings.Contains(v.Error, "SUT container") {
+		t.Errorf("Error = %q, want it to name the actual cause", v.Error)
+	}
+}
+
 // spec: R-VER-2
 func TestRun_TopologyApplyFailureSetsErrorReason(t *testing.T) {
 	// R-VER-2: status:error means the tool itself broke, distinct from

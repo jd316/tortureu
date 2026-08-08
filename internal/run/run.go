@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"sync"
@@ -343,6 +344,28 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 		}
 	}
 
+	// R-DC2-3's own network puts the SUT where the host cannot reach its
+	// published ports at all (Docker does not publish ports for a
+	// container whose only network is internal — the eval that found this
+	// confirmed it independently of any fixture). A LoadRunner that
+	// supports SetSUTContainer (K6Runner does) gets the SUT's actual
+	// container name so it can run k6 sharing that container's network
+	// namespace instead of dialing a published port that doesn't exist
+	// (see load.go's package doc comment for the full mechanism). Discovery
+	// only runs at all when the LoadRunner asks for it — every test using
+	// a fake LoadRunner (the overwhelming majority) never shells out to
+	// docker. If it asks and discovery fails, the run fails loudly here
+	// rather than silently falling back to the host-process path this
+	// task's eval proved is always connection-refused against an
+	// internal-only SUT — a fallback would just reintroduce the bug quietly.
+	if setter, ok := deps.Load.(interface{ SetSUTContainer(string) }); ok {
+		sutContainer, err := discoverSUTContainer(cfg.Target.Service)
+		if err != nil {
+			return fail("locate SUT container for the load generator's network attachment", err)
+		}
+		setter.SetSUTContainer(sutContainer)
+	}
+
 	script, err := k6.Compile(cfg)
 	if err != nil {
 		return fail("compile k6 script", err)
@@ -448,6 +471,25 @@ func addWarning(v *verdict.Verdict, msg string) {
 		v.Artifacts = map[string]any{}
 	}
 	v.Artifacts["warnings"] = append(asStringSlice(v.Artifacts["warnings"]), msg)
+}
+
+// discoverSUTContainer finds the actual Docker container name compose
+// created for service, by the same compose-applied label ComposeTopologyApplier's
+// own Apply brings up, mirroring the discovery pattern this package's
+// Docker-backed tests already use (findContainer in dc2_enforcement_test.go)
+// — a package var, not a plain function, so a test can substitute a fake
+// without needing a live daemon to exercise Run's wiring around it (see
+// TestRun_WiresSUTContainerIntoLoadRunnerAfterTopologyApply).
+var discoverSUTContainer = func(service string) (string, error) {
+	out, err := exec.Command("docker", "ps", "--filter", "label=com.docker.compose.service="+service, "--format", "{{.Names}}").Output()
+	if err != nil {
+		return "", fmt.Errorf("docker ps: %w", err)
+	}
+	names := strings.Fields(string(out))
+	if len(names) == 0 {
+		return "", fmt.Errorf("no running container found for compose service %q", service)
+	}
+	return names[0], nil
 }
 
 // internalNetworkFaultTargets returns the deduplicated "host:port" targets

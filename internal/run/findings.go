@@ -196,11 +196,40 @@ func measuredValue(m map[string]any, expr string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	values, ok := m["values"].(map[string]any)
+	formatted, ok := lookupStat(m, statKey)
+	if !ok && statKey == "rate" {
+		// k6's own threshold syntax names a Rate-typed metric's aggregation
+		// function "rate" (e.g. "rate<0.01"), but real k6 --summary-export
+		// output names that same number "value" on the metric object
+		// itself (confirmed against a real k6 run's actual JSON:
+		// http_req_failed: {"value": 0, "passes": 0, "fails": 5, ...} — no
+		// "rate" key at all). Fall back to it rather than report "not
+		// measured" for data that is, in fact, right there.
+		formatted, ok = lookupStat(m, "value")
+	}
 	if !ok {
 		return "", false
 	}
-	raw, ok := values[statKey]
+	if contains, _ := m["contains"].(string); contains == "time" {
+		formatted += "ms"
+	}
+	return formatted, true
+}
+
+// lookupStat reads key directly off the metric object m — real k6
+// --summary-export JSON puts every statistic (avg/min/med/max/p(NN)) there
+// directly, not nested under a "values" sub-object, discovered running a
+// real k6 container against a real SUT end to end (Task 7's R-DC2-3 load-
+// path fix). The "values" fallback is kept for any summary shape that does
+// nest them (e.g. an older or different export mode) rather than assuming
+// the flat shape is the only one that will ever be seen.
+func lookupStat(m map[string]any, key string) (string, bool) {
+	raw, ok := m[key]
+	if !ok {
+		if values, ok2 := m["values"].(map[string]any); ok2 {
+			raw, ok = values[key]
+		}
+	}
 	if !ok {
 		return "", false
 	}
@@ -208,11 +237,7 @@ func measuredValue(m map[string]any, expr string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	formatted := strconv.FormatFloat(v, 'f', -1, 64)
-	if contains, _ := m["contains"].(string); contains == "time" {
-		formatted += "ms"
-	}
-	return formatted, true
+	return strconv.FormatFloat(v, 'f', -1, 64), true
 }
 
 // faultWindow renders a fault's declared anchor as the two-element

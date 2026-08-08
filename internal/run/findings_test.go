@@ -87,6 +87,47 @@ func TestEvaluateThresholds_FallsBackToNotMeasuredWhenValueUnavailable(t *testin
 	}
 }
 
+// spec: R-VER-1
+func TestEvaluateThresholds_ReadsRealK6SummaryShapeNotNestedUnderValues(t *testing.T) {
+	// Regression test: this exact shape is what real k6 --summary-export
+	// actually produces (captured running a real k6 container against a
+	// real SUT end to end for Task 7's R-DC2-3 load-path fix) — stats
+	// directly on the metric object, no "values" wrapper, and a Rate-typed
+	// metric's number under "value", not "rate". The original
+	// implementation assumed a nested "values" shape that real k6 never
+	// actually produces, so every threshold in a real run reported "not
+	// measured" despite the number being right there in the summary.
+	metrics := map[string]any{
+		"http_req_duration": map[string]any{
+			"avg": 0.522, "min": 0.461942, "med": 0.510763, "max": 0.572009,
+			"p(90)": 0.571025, "p(95)": 0.5715169999999999,
+			"contains":   "time",
+			"thresholds": map[string]any{"p(95)<2000": map[string]any{"ok": true}},
+		},
+		"http_req_failed": map[string]any{
+			"value": 0.0, "passes": 0.0, "fails": 5.0,
+			"thresholds": map[string]any{"rate<0.5": map[string]any{"ok": true}},
+		},
+	}
+	passed, findings := evaluateThresholds(metrics, oneFault(), detect.System{})
+	if len(findings) != 0 {
+		t.Fatalf("findings = %v, want none (both thresholds held)", findings)
+	}
+	if len(passed) != 2 {
+		t.Fatalf("passed = %v, want two", passed)
+	}
+	byAssertion := map[string]string{}
+	for _, p := range passed {
+		byAssertion[p.Assertion] = p.Observed
+	}
+	if got := byAssertion["http_req_duration: p(95)<2000"]; got != "0.5715169999999999ms" {
+		t.Errorf("p(95) observed = %q, want the real flat-shape value with ms appended", got)
+	}
+	if got := byAssertion["http_req_failed: rate<0.5"]; got != "0" {
+		t.Errorf("rate observed = %q, want the real \"value\" field (0), not \"not measured\"", got)
+	}
+}
+
 // spec: R-VER-8
 func TestEvaluatePromqlAsserts_UnevaluatedAssertStillReadsUnevaluatedNotMeasured(t *testing.T) {
 	// Regression guard: adding measured-value reporting must not make an
