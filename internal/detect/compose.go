@@ -178,6 +178,15 @@ func Detect(composePath string) (*System, error) {
 		sys.Obs.MaxConfidence = "correlated"
 	}
 
+	// R-DET-4: a host named in a service's environment: or env_file that
+	// isn't itself an in-compose service is an external host — the
+	// realistic way an app is told which partner API to call.
+	internalNames := make(map[string]bool, len(names))
+	for _, name := range names {
+		internalNames[name] = true
+	}
+	detectExternalHosts(project.Services, workingDir, internalNames, sys)
+
 	if err := detectLockfiles(workingDir, sys); err != nil {
 		return nil, err
 	}
