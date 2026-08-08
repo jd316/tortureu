@@ -36,25 +36,30 @@ assert:
 ## What comes back
 
 ```
-FAIL  checkout-spike                                              280s
+FAIL  checkout-spike  280s
 
-  ✗ http_req_duration p(95)<500 -> 4218ms
-    caused by  pg_slow (postgres:5432, latency)         [confidence: correlated]
+  ✗ http_req_duration: p(95)<500 -> threshold breached
+    caused by  pg_slow (postgres:5432)  [confidence: correlated]
 
-    look at:  jackc/pgx   MaxConns, MinConns, ConnConfig.ConnectTimeout
+    look at:  jackc/pgx MaxConns, ConnConfig.ConnectTimeout
 
-  ✓ http_req_failed rate<0.01          0.003
+  ✓ http_req_failed: rate<0.01     threshold held
 
-  egress: 2 internal, 0 unclassified                              exit 1
+  egress: 1 mocked, 1 blocked, 0 real          exit 1
 ```
 
-It names a *candidate config surface*, not a `file:line` — finding the exact constant is the job of
-whoever (or whatever) reads this.
+That is verbatim output, not an illustration. Which means its limits are visible too:
 
-Confidence reads `correlated`, not `caused`: attribution is by fault window, since one fault was
-active when the assertion broke. `caused` requires trace data spanning the window, and trace
-ingestion is not built yet ([`TBD-9`](SPEC.md)). The tool reports the confidence it actually has —
-a per-hop causal chain would need those traces, so it is omitted rather than invented.
+- **`threshold breached`, not `4218ms`.** The verdict currently reports that a threshold was
+  crossed, not the value that crossed it. Getting the number in there is the next thing worth
+  doing.
+- **`correlated`, not `caused`.** Attribution is by fault window — one fault was active when the
+  assertion broke. `caused` needs trace data spanning that window, and trace ingestion is not
+  built ([`TBD-9`](SPEC.md)). No per-hop causal chain is shown for the same reason: it would have
+  to be invented.
+
+What it does give you is the *candidate config surface* — library plus knob names, never a
+`file:line`. Finding the exact constant is the job of whoever, or whatever, reads this.
 
 ## Design
 
