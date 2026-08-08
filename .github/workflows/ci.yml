@@ -16,6 +16,12 @@ jobs:
       # miscount, 17 dead predicates and an unparseable example.
       - run: python3 check.py
 
+      # The DC-2 enforcement test and its negative control skip when Docker is absent, which
+      # would make the project's central guarantee unproven in CI while still reporting green.
+      # Fail loudly instead: on ubuntu-latest Docker is present, so absence means something broke.
+      - name: docker must be available (DC-2 evidence depends on it)
+        run: docker info > /dev/null
+
       - run: go vet ./...
       - run: go test ./... -race
       # `gofmt -l | test -s /dev/stdin` silently always passes on a pipe — verified.

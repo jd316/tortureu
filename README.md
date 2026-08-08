@@ -5,8 +5,14 @@
 One CLI that drives load and fault injection **on the same clock**, against your local
 `docker-compose` stack, and returns a single verdict naming what broke and why.
 
-> **Status: pre-alpha.** The design is complete and specified; the implementation has just started.
-> Nothing here works yet. Watch the repo rather than installing it.
+> **Status: alpha.** The core works and is proven against real Docker: load and faults on one
+> clock, topological egress isolation, fault interception on internal dependencies, and a verdict
+> that names the causing fault. `init`, `run` and `doctor` are real verbs.
+>
+> **Not yet:** `smoke`, `check`, `emit`, `capture` and `replay` exit 2 (`not implemented in v0`),
+> and `mcp` lists its tool surface without speaking a transport — the five MCP tools exist as a
+> library, not yet as a server. Trace ingestion is absent, so verdicts report `correlated`
+> attribution rather than `caused`. See [`SPEC.md` §12](SPEC.md) for what is deliberately open.
 
 ## The problem
 
@@ -30,23 +36,25 @@ assert:
 ## What comes back
 
 ```
-FAIL  checkout-spike                                    280s  commit a3f19c2
+FAIL  checkout-spike                                              280s
 
-  ✗ http_req_duration p(99)<1500 -> 4218ms   at peak+12s, sustained 47s
-    caused by  pg_slow (postgres:5432, +300ms)              [confidence: caused]
+  ✗ http_req_duration p(95)<500 -> 4218ms
+    caused by  pg_slow (postgres:5432, latency)         [confidence: correlated]
 
-    postgres      query latency   4ms -> 304ms
-    pgx pool      acquire wait    0ms -> 3.9s   queue 47/20
-    checkout-api  p99           210ms -> 4218ms
-    client        retry rate    0.1/s -> 84/s
+    look at:  jackc/pgx   MaxConns, MinConns, ConnConfig.ConnectTimeout
 
-    20-conn pool + 3x retry turned 300ms of dep latency into 4.2s of user latency.
+  ✓ http_req_failed rate<0.01          0.003
 
-    look at:  jackc/pgx        MaxConns, ConnConfig.ConnectTimeout
+  egress: 2 internal, 0 unclassified                              exit 1
 ```
 
 It names a *candidate config surface*, not a `file:line` — finding the exact constant is the job of
-whoever (or whatever) reads this. `tortureu mcp` hands the same structure to a coding agent.
+whoever (or whatever) reads this.
+
+Confidence reads `correlated`, not `caused`: attribution is by fault window, since one fault was
+active when the assertion broke. `caused` requires trace data spanning the window, and trace
+ingestion is not built yet ([`TBD-9`](SPEC.md)). The tool reports the confidence it actually has —
+a per-hop causal chain would need those traces, so it is omitted rather than invented.
 
 ## Design
 

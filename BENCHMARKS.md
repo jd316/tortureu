@@ -110,16 +110,20 @@ mechanism.
 
 ---
 
-## Running them
+## Running them — **planned, not built**
+
+None of this exists yet. There is no `Makefile`, no `benchmarks/` directory, and no CI job that
+gates on a benchmark. It is written down as the intended shape, not as instructions you can follow:
 
 ```
-make bench      # B1, B2 — needs docker, ~10 min
-make eval       # E1, E2 — needs docker, ~40 min
-make bench-ci   # B2 + E1 subset, gates PRs on regression
+make bench      # B1, B2 — needs docker, ~10 min          (planned)
+make eval       # E1, E2 — needs docker, ~40 min          (planned)
+make bench-ci   # B2 + E1 subset, gates PRs on regression (planned)
 ```
 
-Results land in `benchmarks/results/<date>-<commit>.json` and are tracked over time
-(§12 `bencher`). Regressions in B2 overhead or E1 attribution fail CI.
+Results would land in `benchmarks/results/<date>-<commit>.json` and be tracked over time. Until
+that exists, no number in this file has been measured — see Status at the bottom, which has said so
+from the start.
 
 ---
 
