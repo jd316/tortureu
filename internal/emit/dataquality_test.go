@@ -41,8 +41,8 @@ faults:
     inject: { latency: 300ms }
 assert:
   - http_req_duration: ["p(95)<500"]
-  - sql: 'select * from orders where total is null'
-  - sql: 'select * from payments p left join orders o on o.id = p.order_id where o.id is null'
+  - sql: 'select count(*) from orders where total is null'
+  - sql: 'select count(*) from payments p left join orders o on o.id = p.order_id where o.id is null'
 `
 
 func sodaPostgresSystem() *detect.System {
@@ -126,27 +126,63 @@ func TestSoda_RefusesToScanWithNoActiveCheck(t *testing.T) {
 	}
 }
 
-// spec: R-CFG-18 — every sql: assert is carried into the checks file, and
-// none of them is activated: TortureU cannot tell whether a given SQL
-// expression is a failing-rows query or a boolean invariant, and guessing
-// turns a passing invariant into a failing check or the reverse.
-func TestSoda_CarriesEverySQLAssertWithoutGuessingItsShape(t *testing.T) {
+// spec: R-CFG-18 — a sql: assert is a violation count (one row, one column,
+// non-negative, holds iff zero), which is exactly soda's user-defined-metric
+// shape. Each assert therefore becomes an ACTIVE check bounding that count at
+// zero — the emitter no longer carries them commented out, because TBD-14 is
+// resolved and there is no longer a shape to guess.
+func TestSoda_EmitsAnActiveViolationCountCheckPerAssert(t *testing.T) {
 	out, err := Soda(mustParse(t, sodaFixture), sodaPostgresSystem())
 	if err != nil {
 		t.Fatalf("Soda: %v", err)
 	}
-	for _, want := range []string{"orders where total is null", "left join orders"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("sql: assert %q was dropped:\n%s", want, out)
+	doc := sodaExtractYAML(t, out, "SODA_CHECKS")
+	checks, ok := doc["checks"].([]any)
+	if !ok {
+		t.Fatalf("expected a top-level `checks:` list, got keys %v", sodaKeys(doc))
+	}
+	if len(checks) != 2 {
+		t.Fatalf("expected one active check per sql: assert, got %d: %#v", len(checks), checks)
+	}
+	wantSQL := []string{
+		"select count(*) from orders where total is null",
+		"select count(*) from payments p left join orders o on o.id = p.order_id where o.id is null",
+	}
+	for i, c := range checks {
+		entry, ok := c.(map[string]any)
+		if !ok || len(entry) != 1 {
+			t.Fatalf("check %d is not a single-key mapping: %#v", i+1, c)
+		}
+		metric := fmt.Sprintf("tortureu_sql_assert_%d", i+1)
+		body, ok := entry[metric+" = 0"].(map[string]any)
+		if !ok {
+			t.Fatalf("check %d must bound %s at 0 (the invariant holds iff there are no violations), got %v",
+				i+1, metric, sodaKeys(entry))
+		}
+		query, _ := body[metric+" query"].(string)
+		if strings.TrimSpace(query) != wantSQL[i] {
+			t.Errorf("check %d must carry the assert's SQL verbatim, got %q", i+1, query)
 		}
 	}
-	checks := sodaSection(t, out, "SODA_CHECKS")
-	for _, line := range strings.Split(checks, "\n") {
+}
+
+// spec: R-CFG-18 — with no sql: assert to evaluate there is nothing to
+// check, and the emitted checks file must stay inert so the script's
+// no-active-check guard refuses the scan rather than passing on nothing.
+func TestSoda_NoSQLAssertsLeavesNoActiveCheck(t *testing.T) {
+	cfg := mustParse(t, strings.ReplaceAll(strings.ReplaceAll(sodaFixture,
+		"  - sql: 'select count(*) from orders where total is null'\n", ""),
+		"  - sql: 'select count(*) from payments p left join orders o on o.id = p.order_id where o.id is null'\n", ""))
+	out, err := Soda(cfg, sodaPostgresSystem())
+	if err != nil {
+		t.Fatalf("Soda: %v", err)
+	}
+	for _, line := range strings.Split(sodaSection(t, out, "SODA_CHECKS"), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		t.Errorf("emitted an ACTIVE soda check we have no basis to shape: %q", line)
+		t.Errorf("emitted an active check with no sql: assert to base it on: %q", line)
 	}
 }
 
@@ -249,6 +285,7 @@ func TestSoda_AcceptedByRealSodaCore(t *testing.T) {
 		t.Fatalf("Soda: %v", err)
 	}
 	configuration := sodaSection(t, out, "SODA_CONFIGURATION")
+	checks := sodaSection(t, out, "SODA_CHECKS")
 
 	const net = "tortureu-soda-verify"
 	run := func(name string, args ...string) (string, error) {
@@ -280,9 +317,16 @@ func TestSoda_AcceptedByRealSodaCore(t *testing.T) {
 	if !ready {
 		t.Fatal("postgres never became ready")
 	}
-	if o, err := run("docker", "exec", "-e", "PGPASSWORD=tortureu", "postgres",
-		"psql", "-U", "postgres", "-c",
-		"create table orders (id int, total numeric); insert into orders values (1, 10), (2, null);"); err != nil {
+	psql := func(sql string) (string, error) {
+		return run("docker", "exec", "-e", "PGPASSWORD=tortureu", "postgres",
+			"psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1", "-c", sql)
+	}
+	// Seeded so BOTH emitted checks are violated: one order with no total,
+	// and one payment pointing at an order that does not exist.
+	if o, err := psql("create table orders (id int, total numeric); " +
+		"insert into orders values (1, 10), (2, null); " +
+		"create table payments (id int, order_id int); " +
+		"insert into payments values (1, 1), (2, 99);"); err != nil {
 		t.Fatalf("seed: %v\n%s", err, o)
 	}
 
@@ -310,19 +354,23 @@ func TestSoda_AcceptedByRealSodaCore(t *testing.T) {
 		return string(b), code
 	}
 
-	// One violating row exists, so soda 3.x must exit 2 (failures).
-	failing := "checks:\n  - failed rows:\n      name: rows with no total\n      fail query: |\n        select * from orders where total is null\n"
-	got, code := scan(failing)
+	// The emitted checks, unedited, against a database that violates both:
+	// soda 3.x must exit 2 (check failures).
+	got, code := scan(checks)
 	if code != 2 {
-		t.Fatalf("expected soda exit 2 (check failures), got %d:\n%s", code, got)
+		t.Fatalf("expected soda exit 2 (check failures) from the emitted checks, got %d:\n%s", code, got)
 	}
-	t.Logf("soda reported the failure through the emitted configuration:\n%s", got)
+	t.Logf("soda failed the emitted checks against violating data:\n%s", got)
 
-	// No violating row, so the same configuration must produce a clean pass.
-	passing := "checks:\n  - failed rows:\n      name: negative totals\n      fail query: |\n        select * from orders where total < 0\n"
-	got, code = scan(passing)
-	if code != 0 {
-		t.Fatalf("expected soda exit 0 (all passed), got %d:\n%s", code, got)
+	// Repair both invariants and scan the SAME emitted checks again: the
+	// verdict must flip, or the checks are not measuring anything.
+	if o, err := psql("update orders set total = 0 where total is null; " +
+		"delete from payments where order_id not in (select id from orders);"); err != nil {
+		t.Fatalf("repair: %v\n%s", err, o)
 	}
-	t.Logf("soda passed through the emitted configuration:\n%s", got)
+	got, code = scan(checks)
+	if code != 0 {
+		t.Fatalf("expected soda exit 0 (all passed) once the invariants hold, got %d:\n%s", code, got)
+	}
+	t.Logf("soda passed the emitted checks once the data was repaired:\n%s", got)
 }

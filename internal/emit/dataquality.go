@@ -3,11 +3,14 @@
 // how: "tortureu emit soda", note "YAML-first checks, lighter than GE").
 // R-CLI-8 proposed.
 //
-// Why this handoff earns its place: `internal/run` reports EVERY `sql:`
-// assertion (R-CFG-18) as unevaluated — "no SQL evaluation capability exists
-// in this build" (findings.go). Soda is that capability, run as a separate
-// pass. This emitter is the bridge between an assertion the run can only
-// admit it did not check and a tool that can check it.
+// Why this handoff earns its place: `tortureu run` now evaluates `sql:`
+// assertions itself (R-CFG-18, internal/run/sqlassert.go), but only inside a
+// run, only against the one database the run was pointed at, and only for the
+// two engines whose client it can exec. Soda is the standing, scheduled,
+// broader form of the same check — the same violation-count shape, run as its
+// own pass, over data sources this project does not reach (snowflake among
+// them). The two agree on the shape, so an assert means the same thing in
+// both places.
 //
 // WHICH SODA. This emits the 3.x model (configuration.yml + checks.yml +
 // `soda scan`), pinned to 3.5.6, not the current 4.x contracts model. Three
@@ -46,9 +49,13 @@
 //     parser and documentation, not on an observed connection. Snowflake in
 //     particular cannot be verified here at all: it is a hosted service and
 //     there is no account.
-//   - NOT VERIFIED: no emitted check was ever executed, because this file
-//     emits no active check. See below — that is the design, not a gap in
-//     the testing.
+//   - VERIFIED: the ACTIVE checks this file now emits (R-CFG-18's
+//     violation-count shape, `<metric> = 0` plus a `<metric> query:`) were
+//     run by a real soda-core 3.5.6 against a real postgres:16 holding an
+//     orders table. With two violating rows soda reported
+//     `tortureu_sql_assert_1 = 0 [FAILED] check_value: 2.0` and exited 2;
+//     with the violating rows deleted it reported PASSED and exited 0. The
+//     assert's SQL goes through verbatim — no column alias is required.
 //
 // What it refuses to invent:
 //
@@ -59,14 +66,14 @@
 //     table name, and detection stops at compose + lockfiles (D-3) — it has
 //     never seen a schema. No row_count, no schema check, no freshness
 //     check is emitted, because each would have to name a table we made up.
-//   - The SHAPE of a `sql:` assert. R-CFG-18 says a `sql:` entry is accepted
-//     for run-scoped data-integrity invariants; it does not say whether the
-//     expression is a query whose returned ROWS are failures (soda's `fail
-//     query`) or a boolean/aggregate the value of which is compared. Those
-//     two readings invert each other's verdict on the same SQL. So each
-//     `sql:` assert is carried into checks.yml VERBATIM but COMMENTED OUT,
-//     with both shapes written out next to it, and the scan refuses to run
-//     until a human has chosen. See SPEC.md §12, TBD-14.
+//   - The SHAPE of a `sql:` assert — and it no longer has to. TBD-14 is
+//     resolved: R-CFG-18 makes a `sql:` expression a VIOLATION COUNT (one
+//     row, one column, non-negative, holding iff zero), which is soda's
+//     user-defined-metric shape exactly. Each assert is therefore emitted as
+//     an ACTIVE check bounding that count at 0, with the SQL verbatim. The
+//     failing-rows reading is not guessed at and not offered: a row-selecting
+//     query is written `select count(*) from (<query>) t`, and `tortureu run`
+//     refuses the unwrapped form for the same reason.
 //   - A green result from nothing. soda 3.x exits 0 on a checks file with no
 //     valid check, logging only "No valid checks found, 0 checks evaluated."
 //     A CI step that passes because it checked nothing is the exact failure
@@ -129,19 +136,18 @@ const sodaHeader = `#!/usr/bin/env bash
 #
 #   bash this-script.sh
 #
-# Soda Core runs YAML-declared data-quality checks against a real database.
-# It is the capability ` + "`tortureu run`" + ` does not have: every sql: assertion in
-# torture.yaml (R-CFG-18) comes back from a run marked "unevaluated — no SQL
-# evaluation capability exists in this build". This is where you evaluate them.
+# Soda Core runs YAML-declared data-quality checks against a real database, on
+# its own schedule, outside a load run. Every sql: assertion in torture.yaml
+# (R-CFG-18) is emitted below as an ACTIVE check: a sql: expression is a
+# violation count — one row, one column, non-negative — and the invariant
+# holds if and only if that count is 0, which is what each "= 0" bound says.
+# ` + "`tortureu run`" + ` evaluates the same asserts in the same shape during a run;
+# this is the standing form of the same question.
 #
-# BEFORE THIS DOES ANYTHING: open the checks file below. Every sql: assert
-# from torture.yaml is in it, verbatim and commented out, because TortureU
-# cannot tell whether your SQL means "rows returned here are failures" or "the
-# value this computes must satisfy a bound" — and those two readings give
-# opposite verdicts on the same query. Choose the shape, uncomment it, and run
-# this again. Until then this script exits without scanning, on purpose: soda
-# exits 0 on a checks file with no valid check, and a green CI step that
-# checked nothing is worse than a red one.
+# If torture.yaml declares no sql: assertion there is nothing to check, and
+# this script exits without scanning on purpose: soda exits 0 on a checks file
+# with no valid check, and a green CI step that checked nothing is worse than
+# a red one.
 #
 # No credentials are emitted. Every one is a ${VAR} reference soda 3.x
 # resolves from the environment at scan time.
@@ -339,50 +345,43 @@ func sodaSQLAsserts(cfg *config.Config) []string {
 	return out
 }
 
-// sodaChecks renders checks.yml. Every emitted line is a comment, and the
-// emitted script refuses to scan while that is still true — see this file's
-// header for why the shape of a `sql:` assert may not be guessed.
+// sodaChecks renders checks.yml: one ACTIVE check per sql: assert, in the
+// shape R-CFG-18 mandates. A `sql:` expression is a violation count — one
+// row, one column, a non-negative number, holding iff it is zero — which is
+// exactly soda's user-defined-metric shape (`<metric> = 0` plus a
+// `<metric> query:`), so the translation is one-to-one and needs no guess.
+// Verified against a real soda-core 3.5.6 and a real postgres:16 (see this
+// file's VERIFICATION STATUS): the emitted check reports check_value 2.0 and
+// exits 2 with two violating rows present, and exits 0 with none — with the
+// assert's SQL passed through verbatim and no column alias required.
 func sodaChecks(sqlAsserts []string) string {
 	var b strings.Builder
 	b.WriteString("# Generated by tortureu emit soda — soda 3.x SodaCL.\n" +
 		"#\n" +
-		"# NOTHING HERE IS ACTIVE YET. Read this before uncommenting.\n" +
+		"# Each check below is one sql: assertion from torture.yaml (R-CFG-18), whose\n" +
+		"# expression is a VIOLATION COUNT: exactly one row, exactly one column, a\n" +
+		"# non-negative number, and the invariant holds if and only if it is 0. That is\n" +
+		"# what `<metric> = 0` bounds here, and the SQL is passed through verbatim.\n" +
 		"#\n" +
-		"# Each block below is one sql: assertion from torture.yaml (R-CFG-18),\n" +
-		"# verbatim. R-CFG-18 does not say which SHAPE the SQL is, and soda's two\n" +
-		"# shapes give opposite verdicts on the same query:\n" +
-		"#\n" +
-		"#   failed rows + fail query   ->  every ROW the query returns is a failure\n" +
-		"#   <metric> query + a bound   ->  the single VALUE the query computes is compared\n" +
-		"#\n" +
-		"# A query written as \"select the rows that violate the invariant\" wants the\n" +
-		"# first. One written as \"select count(*) of violations\" wants the second, and\n" +
-		"# under the first it would fail on every run, including the runs where the\n" +
-		"# count is zero. Pick the one you meant; TortureU will not pick for you.\n")
+		"# If a check errors with \"query does not return a single value\", the SQL is not\n" +
+		"# in R-CFG-18's shape — a row-selecting query becomes\n" +
+		"#   select count(*) from (<your query>) t\n" +
+		"# and `tortureu run` refuses the same shape for the same reason (TBD-14).\n")
 	if len(sqlAsserts) == 0 {
-		b.WriteString("#\n# torture.yaml declares no sql: assertions, so there is nothing here to shape.\n" +
-			"# Add one (R-CFG-18) and re-run tortureu emit soda.\n")
+		b.WriteString("#\n# torture.yaml declares no sql: assertions, so there is no check to emit and\n" +
+			"# nothing here is active. Add one (R-CFG-18) and re-run tortureu emit soda;\n" +
+			"# until then the generated script refuses to scan rather than passing on a\n" +
+			"# checks file soda would evaluate zero checks from.\n")
 		return b.String()
 	}
+	b.WriteString("\nchecks:\n")
 	for i, expr := range sqlAsserts {
-		fmt.Fprintf(&b, "\n# --- sql: assertion %d ------------------------------------------------\n", i+1)
-		b.WriteString("# shape A — the query selects violating rows:\n")
-		b.WriteString("# checks:\n")
-		b.WriteString("#   - failed rows:\n")
-		fmt.Fprintf(&b, "#       name: %s\n", sodaCheckName(expr))
-		b.WriteString("#       fail query: |\n")
+		fmt.Fprintf(&b, "  # %s\n", sodaCheckName(expr))
+		fmt.Fprintf(&b, "  - %s = 0:\n", sodaMetricName(i))
+		fmt.Fprintf(&b, "      %s query: |\n", sodaMetricName(i))
 		for _, line := range strings.Split(strings.TrimRight(expr, "\n"), "\n") {
-			fmt.Fprintf(&b, "#         %s\n", line)
+			fmt.Fprintf(&b, "        %s\n", line)
 		}
-		b.WriteString("#\n# shape B — the query computes one number to bound (edit the bound):\n")
-		b.WriteString("# checks:\n")
-		fmt.Fprintf(&b, "#   - %s = 0:\n", sodaMetricName(i))
-		fmt.Fprintf(&b, "#       %s query: |\n", sodaMetricName(i))
-		for _, line := range strings.Split(strings.TrimRight(expr, "\n"), "\n") {
-			fmt.Fprintf(&b, "#         %s\n", line)
-		}
-		fmt.Fprintf(&b, "#       # NOTE: shape B needs the query to return ONE row and ONE column,\n"+
-			"#       # aliased %s — soda matches the metric name to the column.\n", sodaMetricName(i))
 	}
 	return b.String()
 }

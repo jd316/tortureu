@@ -295,7 +295,26 @@ metrics. TortureU **MUST NOT** define its own metric DSL. *(D-2)*
 **R-CFG-17** — A `promql:` entry **MUST** be accepted for signals k6 cannot observe (retry rate,
 pool saturation, queue depth, data integrity).
 
-**R-CFG-18** — A `sql:` entry **MUST** be accepted for run-scoped data-integrity invariants.
+**R-CFG-18** — A `sql:` entry **MUST** be accepted for run-scoped data-integrity invariants, and its
+expression **MUST** be a **violation count**: a query returning **exactly one row and exactly one
+column, holding a non-negative number** — how many rows violate the invariant. The invariant holds
+if and only if that number is `0`. *(resolves TBD-14)*
+
+- Any other result — more than one row, more than one column, `NULL`, a value that is not a number,
+  or a negative number — **MUST** be a **tool error** (**R-VER-2** `error`), never a pass and never
+  a fail. A rows-shaped query (`select * from orders where total is null`) is therefore *refused
+  with its shape named*, not silently reinterpreted; the rows shape is written
+  `select count(*) from (<rows query>) t`.
+- The database connection **MUST** be supplied explicitly. TortureU **MUST NOT** infer, default or
+  guess a host, user, password or database name, and **MUST** refuse with a message naming what is
+  missing.
+- With no connection supplied, every `sql:` entry **MUST** be reported unevaluated (**R-VER-8**) —
+  never as a held assertion (**R-VER-5**).
+- A database that cannot be reached, or a query the engine rejects, **MUST** be a tool error
+  (**R-VER-2**), never a passing invariant. A violated invariant is a **result** (`fail`).
+- A held `sql:` assertion **MUST** report its observed violation count (`0`) and a broken one the
+  count it actually measured, so the verdict carries a measured value rather than a restatement of
+  pass/fail (**R-VER-5**).
 
 **R-CFG-19** — An empty or absent `assert:` block **MUST** be an error. A run that cannot fail is
 not a test.
@@ -1232,22 +1251,46 @@ nothing to suggest, and only the second is honest.
   (R-CLI-17 — a row with no anchor is kept and shown as excluded, never joined on `""`).
 
 
-- **TBD-14** — What SHAPE a `sql:` assertion (R-CFG-18) is. R-CFG-18 says a `sql:` entry is
-  accepted for run-scoped data-integrity invariants; it does not say whether the expression is a
-  query whose returned **rows** are the violations, or one whose single computed **value** is
-  compared against a bound. The two readings invert each other's verdict on the same SQL: read as
-  failing-rows, `select count(*) from orders where total is null` fails on every run including the
-  ones where the count is zero.
+- ~~**TBD-14**~~ — **RESOLVED 2026-08-09: a `sql:` expression is a VIOLATION COUNT.** The question
+  was what SHAPE a `sql:` assertion (R-CFG-18) is: a query whose returned **rows** are the
+  violations, or one whose single computed **value** is compared against a bound. The two readings
+  invert each other's verdict on the same SQL — read as failing-rows,
+  `select count(*) from orders where total is null` fails on every run including the ones where the
+  count is zero. R-CFG-18 now states the shape: one row, one column, a non-negative number, and the
+  invariant holds iff it is `0`. Anything else is a tool error.
 
-  This was invisible while nothing evaluated `sql:` at all — `internal/run` reports every one as
-  unevaluated (R-VER-8), and an unevaluated assertion has no shape. It becomes a real fork the
-  moment a tool can run them: soda-core has both shapes (`failed rows` + `fail query` versus a
-  user-defined metric query with a bound), and `tortureu emit soda` (R-CLI-8) must pick one to
-  emit an active check. It therefore emits **neither**, carrying every `sql:` assert into the
-  generated checks file verbatim but commented out with both shapes written next to it, and the
-  generated script refuses to scan while no check is active — because soda exits 0 on a checks
-  file with no valid check, and a green result that checked nothing is worse than a red one.
-  Resolves by amending R-CFG-18 to state the shape (or to require a per-entry discriminator).
+  **Why the count and not the predicate.** The polarity that would have matched `promql:` (R-CFG-17,
+  where the user writes the condition they want to *hold*) is `select count(*) = 0 from ...` — a
+  boolean. That reading cannot be made safe across the two engines this project supports, because
+  **MySQL has no boolean type**: `count(*) = 0` comes back as `1`/`0`, indistinguishable from a
+  count. Under the predicate reading, a user who writes the plain count query on MySQL and has
+  three violations gets back `3`, which is truthy, and the invariant reads **pass** — a green that
+  means the opposite of the truth, the single failure mode R-VER-8 exists to prevent. Under the
+  violation-count reading the mirrored mistake (`count(*) = 0` on MySQL, returning `1`) reads as
+  *one violation* and **fails**. Only one of the two readings has a fail-safe worst case, and that
+  decides it; the polarity difference against `promql:` costs a sentence of documentation, which is
+  cheaper than a false green. What the two escape hatches *do* keep identical is their lifecycle:
+  unevaluated when no endpoint is configured, a real measured value on the verdict, and a backend
+  that cannot be reached is a tool error rather than a verdict.
+
+  **The rows shape is not lost, and it is not ambiguous.** Any rows query becomes
+  `select count(*) from (<rows query>) t`, so nothing expressible before is inexpressible now. A
+  rows-shaped query written directly returns many rows and/or many columns, which R-CFG-18 makes an
+  error naming the shape it got — so the failing-rows reading cannot be *silently* taken. A user
+  cannot write an ambiguous `sql:` entry: every query either is the one legal shape or is refused.
+
+  **Why not a per-entry discriminator supporting both shapes.** A discriminator adds a second place
+  the shape can be wrong — the config claims `rows:` while the SQL computes a count, and nothing can
+  detect the mismatch, because a one-row one-column result is a perfectly good "one violating row".
+  One shape, checked against the result the engine actually returns, makes the wrong shape
+  unrepresentable instead of merely discouraged.
+
+  **Downstream, this unblocks `tortureu emit soda`** (R-CLI-8), which emitted every `sql:` assert
+  commented out with both shapes written next to it precisely because of this TBD. Soda's
+  user-defined-metric check (`<metric> = 0` plus a `<metric> query:`) requires exactly one row and
+  one column — the same shape R-CFG-18 now mandates — so the emitter now emits an **active** check
+  per assert, in that shape, and its refuse-to-scan-with-no-active-check guard is left in place for
+  the case where `torture.yaml` declares no `sql:` assert at all.
 - ~~**TBD-2**~~ — **RESOLVED**: `emit` prints to stdout by default (R-CLI-8), so its output composes with a shell redirect rather than requiring a path argument.
 - ~~**TBD-11**~~ — **RESOLVED 2026-08-09, except for one constant that only a tag can set.** How
   `tortureu` itself reaches a CI runner (R-CLI-11). The old answer — build it from the checked-out
