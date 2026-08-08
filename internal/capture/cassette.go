@@ -33,7 +33,31 @@ type Entry struct {
 	RespBody         string              `json:"resp_body,omitempty"`
 	RespBodyEncoding string              `json:"resp_body_encoding,omitempty"`
 	DurationMS       int64               `json:"duration_ms"`
+
+	// CallNS and ReturnNS are the exchange's absolute call and return
+	// instants (R-CLI-13): integer nanoseconds on a single monotonic
+	// timeline whose origin is the start of the recording session. They
+	// are comparable only against other entries in the SAME cassette, and
+	// are deliberately not wall-clock — a clock step mid-capture would
+	// reorder operations that did not reorder.
+	//
+	// They exist because a linearizability check is defined entirely by
+	// which operations overlapped in real time, and Seq cannot express
+	// overlap. DurationMS stays even though ReturnNS-CallNS derives it:
+	// it is what a human reads in a `git diff` of a cassette.
+	//
+	// Both are additive. A cassette written before R-CLI-13 has neither,
+	// which decodes as 0/0 — see HasHistory, and never read that as "the
+	// exchange happened at time zero".
+	CallNS   int64 `json:"call_ns,omitempty"`
+	ReturnNS int64 `json:"return_ns,omitempty"`
 }
+
+// HasHistory reports whether this entry carries the R-CLI-13 call/return
+// instants a real-time-overlap consumer (a linearizability checker) needs.
+// A pre-R-CLI-13 cassette answers false, which is the R-COV-6 "cannot
+// evaluate" case, not "no overlap".
+func (e Entry) HasHistory() bool { return e.ReturnNS > e.CallNS && e.CallNS > 0 }
 
 // encodeBody turns already-scrubbed bytes into an Entry's text field plus
 // its encoding marker.

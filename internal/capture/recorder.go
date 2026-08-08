@@ -50,9 +50,30 @@ type Recorder struct {
 	// vanishing. Defaults to io.Discard.
 	ErrOut io.Writer
 
-	mu    sync.Mutex // serializes Out writes and seq increments
+	mu    sync.Mutex // serializes Out writes, seq increments and epoch init
 	seq   int
 	count int
+	// epoch is the origin of the cassette's monotonic timeline (R-CLI-13),
+	// fixed on the first request this Recorder serves. Every Entry's
+	// CallNS/ReturnNS is a duration from it, so instants are comparable
+	// within one cassette and carry no wall-clock meaning.
+	epoch time.Time
+}
+
+// since returns nanoseconds from this Recorder's epoch, fixing the epoch on
+// first use. time.Time carries a monotonic reading, so Sub is immune to a
+// wall-clock step — which is the whole point: a clock jump mid-capture
+// must not reorder operations that did not reorder.
+func (rec *Recorder) since(t time.Time) int64 {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if rec.epoch.IsZero() {
+		rec.epoch = t
+	}
+	// A nonzero floor: 0 is the "no instants recorded" value a
+	// pre-R-CLI-13 cassette decodes to, so the very first call must not
+	// be indistinguishable from it (see Entry.HasHistory).
+	return t.Sub(rec.epoch).Nanoseconds() + 1
 }
 
 // Count returns how many exchanges have been captured so far.
@@ -78,6 +99,7 @@ func stripHopByHop(h http.Header) {
 // ServeHTTP implements http.Handler: forward, capture, scrub, persist.
 func (rec *Recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	start := time.Now()
+	callNS := rec.since(start)
 
 	reqBody, err := io.ReadAll(req.Body)
 	if err != nil {
@@ -120,7 +142,9 @@ func (rec *Recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(respBody)
 
-	elapsed := time.Since(start)
+	end := time.Now()
+	elapsed := end.Sub(start)
+	returnNS := rec.since(end)
 
 	// Scrubbing happens here, before anything reaches WriteEntry — the
 	// R-DC2-5 boundary this whole package exists to hold. See
@@ -148,6 +172,8 @@ func (rec *Recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		RespBody:         respBodyText,
 		RespBodyEncoding: respBodyEnc,
 		DurationMS:       elapsed.Milliseconds(),
+		CallNS:           callNS,
+		ReturnNS:         returnNS,
 	}
 	writeErr := WriteEntry(rec.Out, entry)
 	if writeErr == nil {

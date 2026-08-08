@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -32,18 +33,30 @@ func runCapture(args []string, stdout, stderr io.Writer) int {
 	upstream := fs.String("upstream", "", "upstream base URL to record traffic to/from (required)")
 	listen := fs.String("listen", "127.0.0.1:0", "address the capturing proxy listens on")
 	out := fs.String("out", "cassette.jsonl", "path to write the scrubbed cassette (R-DC2-5: scrubbed on write)")
-	engine := fs.String("engine", "proxy", "capture engine; v0 supports only \"proxy\" (registry.yaml's keploy/eBPF integration is not yet built)")
+	engine := fs.String("engine", "proxy", "capture engine: \"proxy\" (built-in scrubbing proxy) or \"keploy\" (delegate handoff, R-CLI-12)")
+	compose := fs.String("compose", "docker-compose.yml", "compose file the -engine keploy handoff is derived from")
 	duration := fs.Duration("duration", 0, "stop capturing after this long; 0 runs until interrupted (Ctrl-C)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
-	if *upstream == "" {
-		fmt.Fprintln(stderr, "tortureu capture: -upstream is required")
+	// Engine selection happens before -upstream is required, because
+	// -upstream is the proxy engine's input and means nothing to keploy.
+	// An unknown engine never falls back (R-CLI-12): a silent fallback
+	// would leave the user believing keploy ran and produced eBPF-derived
+	// mocks when what ran was our own HTTP proxy.
+	switch *engine {
+	case "proxy":
+	case "keploy":
+		return runCaptureKeploy(*compose, stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "tortureu capture: -engine %q is not a capture engine; supported: %s\n",
+			*engine, strings.Join(captureEngines, ", "))
 		return 2
 	}
-	if *engine != "proxy" {
-		fmt.Fprintf(stderr, "tortureu capture: -engine %q not supported in v0; only \"proxy\" is implemented\n", *engine)
+
+	if *upstream == "" {
+		fmt.Fprintln(stderr, "tortureu capture: -upstream is required")
 		return 2
 	}
 	upstreamURL, err := url.Parse(*upstream)
@@ -96,5 +109,24 @@ func runCapture(args []string, stdout, stderr io.Writer) int {
 	_ = srv.Shutdown(shutdownCtx)
 
 	fmt.Fprintf(stdout, "tortureu capture: stopped, %d exchange(s) captured to %s\n", rec.Count(), *out)
+	return 0
+}
+
+// captureEngines is the closed set of -engine values (R-CLI-12), listed
+// back to the user on an unrecognised one so the answer to "what did I
+// mistype" is in the error itself.
+var captureEngines = []string{"proxy", "keploy"}
+
+// runCaptureKeploy is the delegate handoff (R-CLI-12): generate keploy's
+// command and config for the detected system, print them, run nothing.
+// It never guesses keploy's inputs — internal/capture.PlanKeploy refuses,
+// and the refusal is the user-facing answer.
+func runCaptureKeploy(composePath string, stdout, stderr io.Writer) int {
+	plan, err := capture.PlanKeploy(composePath)
+	if err != nil {
+		fmt.Fprintf(stderr, "%v\n", err)
+		return 2
+	}
+	fmt.Fprint(stdout, capture.KeployHandoff(plan))
 	return 0
 }

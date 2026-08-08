@@ -101,3 +101,75 @@ func TestRunCaptureWritesScrubbedCassetteToDisk(t *testing.T) {
 		t.Fatalf("R-DC2-5 VIOLATED via CLI: credential found on disk: %s", onDisk)
 	}
 }
+
+// spec: R-CLI-12 (proposed)
+//
+// An unrecognised engine must error listing the engines that exist. A
+// silent fallback to the proxy would leave the user believing keploy ran.
+func TestRunCaptureRejectsUnknownEngine(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := runCapture([]string{"-upstream", "http://127.0.0.1:1", "-engine", "wireshark"}, &out, &errb)
+	if code != 2 {
+		t.Fatalf("code = %d, want 2", code)
+	}
+	msg := errb.String()
+	for _, want := range []string{"wireshark", "proxy", "keploy"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("stderr = %q, want it to mention %q", msg, want)
+		}
+	}
+	if out.Len() != 0 {
+		t.Errorf("stdout = %q, want nothing captured for an unknown engine", out.String())
+	}
+}
+
+// spec: R-CLI-12 (proposed)
+//
+// -engine keploy is a delegate handoff: it prints keploy's own command and
+// config for the detected system and exits without capturing anything
+// itself. -upstream is the proxy engine's input and must not be required.
+func TestRunCaptureKeployEngineHandsOff(t *testing.T) {
+	dir := t.TempDir()
+	compose := filepath.Join(dir, "docker-compose.yml")
+	if err := os.WriteFile(compose, []byte(
+		"services:\n  api:\n    build: .\n    container_name: myapp-api\n"), 0o644); err != nil {
+		t.Fatalf("write compose: %v", err)
+	}
+
+	var out, errb bytes.Buffer
+	code := runCapture([]string{"-engine", "keploy", "-compose", compose}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %s", code, errb.String())
+	}
+	got := out.String()
+	for _, want := range []string{"keploy record", "--container-name myapp-api", "keploy.yml"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stdout missing %q:\n%s", want, got)
+		}
+	}
+	// It must be honest about not having run anything.
+	if !strings.Contains(got, "delegate") {
+		t.Errorf("stdout must state the delegate handoff:\n%s", got)
+	}
+}
+
+// spec: R-CLI-12 (proposed)
+//
+// A compose file with no container_name: for the SUT is refused, naming the
+// missing input — never a guessed container name.
+func TestRunCaptureKeployEngineRefusesGuess(t *testing.T) {
+	dir := t.TempDir()
+	compose := filepath.Join(dir, "docker-compose.yml")
+	if err := os.WriteFile(compose, []byte("services:\n  api:\n    build: .\n"), 0o644); err != nil {
+		t.Fatalf("write compose: %v", err)
+	}
+
+	var out, errb bytes.Buffer
+	code := runCapture([]string{"-engine", "keploy", "-compose", compose}, &out, &errb)
+	if code != 2 {
+		t.Fatalf("code = %d, want 2 (stdout=%s)", code, out.String())
+	}
+	if !strings.Contains(errb.String(), "container_name") {
+		t.Errorf("stderr = %q, want it to name container_name", errb.String())
+	}
+}
