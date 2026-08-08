@@ -2,16 +2,71 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/jdb316/tortureu/internal/mcp"
 )
 
+// spec: R-MCP-7
+//
+// The default `mcp` behaviour must be the real JSON-RPC stdio server, not
+// the static surface listing this verb previously printed unconditionally.
+// Feeding a real initialize request through stdin and checking the
+// response is a valid JSON-RPC 2.0 document (and specifically not the
+// static "MCP TOOL SURFACE" text) proves runMcp actually calls
+// mcp.NewServer().Serve rather than fabricating output.
+func TestMcpDefaultServesRealJSONRPCServer(t *testing.T) {
+	stdin := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` + "\n")
+	var stdout, stderr bytes.Buffer
+
+	code := runMcp(stdin, nil, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0: %s", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "MCP TOOL SURFACE") {
+		t.Fatalf("default mcp printed the static surface listing instead of running the real server:\n%s", stdout.String())
+	}
+
+	line := strings.TrimSpace(stdout.String())
+	var resp struct {
+		JSONRPC string         `json:"jsonrpc"`
+		ID      int            `json:"id"`
+		Result  map[string]any `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(line), &resp); err != nil {
+		t.Fatalf("stdout is not a JSON-RPC response: %v\nstdout: %q", err, stdout.String())
+	}
+	if resp.JSONRPC != "2.0" {
+		t.Errorf("response jsonrpc = %q, want \"2.0\"", resp.JSONRPC)
+	}
+	if resp.Result == nil {
+		t.Errorf("initialize did not return a result: %s", stdout.String())
+	}
+}
+
+// spec: R-MCP-7
+//
+// The surface-listing escape hatch this task's earlier stub-mode work
+// built must survive now that the real transport exists: `-list` prints
+// the tool surface and exits 0, without touching stdin at all (so it never
+// looks like a hang to someone debugging their assistant's config).
+func TestMcpListFlagStillPrintsSurfaceInstead(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runMcp(strings.NewReader(""), []string{"-list"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "MCP TOOL SURFACE") {
+		t.Errorf("stdout = %q, want the tool surface listing", stdout.String())
+	}
+}
+
 // spec: R-CLI-1
-func TestMcpVerbExitsZeroAndListsSurface(t *testing.T) {
+func TestMcpVerbViaMainDefaultsToListWhenAsked(t *testing.T) {
 	var out, errb bytes.Buffer
-	code := Main([]string{"mcp"}, &out, &errb)
+	code := Main([]string{"mcp", "-list"}, &out, &errb)
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0: %s", code, errb.String())
 	}
@@ -60,15 +115,23 @@ func TestMcpReportObeysTheNounRule(t *testing.T) {
 	}
 }
 
-// spec: R-MCP-1
+// spec: R-MCP-7
 //
-// runMcp must honestly report that no stdio transport exists — the
-// coordinator was explicit that a half-built protocol is worse than a
-// clean tool listing, and a caller must not be able to mistake this output
-// for "you can connect now".
-func TestMcpReportStatesNoTransportYet(t *testing.T) {
-	report := mcpSurfaceReport()
-	if !strings.Contains(report, "does not speak the MCP stdio JSON-RPC") {
-		t.Errorf("report does not disclose the missing transport:\n%s", report)
+// The server's blocking, no-progress-protocol behaviour for run_experiment
+// must be documented somewhere a user configuring an assistant will see it
+// before wiring `tortureu mcp` into that assistant's config — `mcp -h` is
+// exactly that place.
+func TestMcpHelpDocumentsBlockingRunExperimentBehaviour(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runMcp(strings.NewReader(""), []string{"-h"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2 (flag.ContinueOnError on -h)", code)
+	}
+	help := stderr.String()
+	if !strings.Contains(help, "blocks") && !strings.Contains(help, "block") {
+		t.Errorf("mcp -h does not document the blocking behaviour:\n%s", help)
+	}
+	if !strings.Contains(help, "stdin") {
+		t.Errorf("mcp -h does not convey that the default reads from stdin:\n%s", help)
 	}
 }

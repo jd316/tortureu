@@ -15,7 +15,7 @@ Verbs:
   run       execute a scenario, produce a verdict
   smoke     constant-rate sanity check
   doctor    resilience audit + registry coverage report
-  mcp       serve the MCP surface
+  mcp       serve JSON-RPC on stdio for an assistant (-list to print the tools instead)
   check     contract compatibility check
   emit      generate a delegate-tier tool's config
   capture   ingest traffic

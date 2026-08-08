@@ -41,7 +41,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	case verb == "doctor":
 		return runDoctor(rest, stdout, stderr)
 	case verb == "mcp":
-		return runMcp(rest, stdout, stderr)
+		return runMcp(os.Stdin, rest, stdout, stderr)
 	case stubVerbs[verb]:
 		fmt.Fprintf(stderr, "tortureu %s: not implemented in v0\n", verb)
 		return 2
