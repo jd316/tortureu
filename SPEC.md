@@ -30,7 +30,7 @@ The working loop is:
   needs behaviour this file doesn't state, amend this file first.
 - **R-PROC-3** — Each test **MUST** name the requirement it proves, in a comment of the form
   `// spec: R-DET-2`. `check.py` fails on a reference to a requirement that does not exist.
-- **R-PROC-4** — Unresolved questions **MUST** appear in §11 as `TBD-n`, never as an assumption
+- **R-PROC-4** — Unresolved questions **MUST** appear in §12 as `TBD-n`, never as an assumption
   buried in code.
 
 Traceability is reported by `check.py`, not assumed.
@@ -721,6 +721,38 @@ nothing to suggest, and only the second is honest.
   to attach to in v0, so there is no write path to scrub. It becomes binding the moment `capture`
   ships and **MUST** be implemented in the same change, never after: scrubbing retrofitted onto an
   existing corpus means the unscrubbed cassettes already exist. Raised by the Task 6 implementer.
+
+---
+
+## 13. How each requirement is verified
+
+A requirement can be verified by a test, by an automated gate, by review, or not yet at all.
+Conflating those is how a coverage percentage becomes a comfortable lie — so this section says
+which is which, and the traceability report in `check.py` counts the first two only.
+
+| Method | Meaning |
+|---|---|
+| **test** | a Go test cites the id (`// spec: R-XXX-n`) and fails if the behaviour regresses |
+| **gate** | `check.py` fails the build if the requirement is violated |
+| **review** | verified by the build record in `.superpowers/sdd/PLAN/progress.md`; not mechanically checkable |
+| **deferred** | not implemented; carries a `TBD-n` in §12 |
+
+The requirements not verified by test or gate, and why:
+
+| Requirement | Method | Why not a test |
+|---|---|---|
+| **R-PROC-1** (no code before a failing test) | review | A test cannot observe the order in which its own subject was written. Verified by the per-task reports, which record watching each test fail first. |
+| **R-PROC-2** (spec before test) | review | Same: the artefact cannot witness its own history. Every task's escalations and the spec amendments answering them are the record. |
+| **R-LIC-2** (generated scripts are inputs, not derivative works) | review | A legal position, not a program behaviour. What *is* gated: **R-LIC-1** (no AGPL import anywhere) and **R-LIC-6** (every driven tool's licence recorded). |
+| **R-LIC-3** (redistributed k6 unmodified, with its licence) | deferred | We redistribute no k6 binary. Becomes testable if we ever do. |
+| **R-LIC-4** (AGPL-3 §13 review before any hosted offering) | deferred | Conditioned on a hosted offering that does not exist. |
+| **R-EXE-7** (platform support; WSL cgroup caveat) | review | Asserting macOS or WSL behaviour from a Linux CI runner would be a test that passes without evidence — the failure mode this project has rejected everywhere else. Needs real runners. |
+| **R-SCOPE-1** (runs against compose, no Kubernetes) | test (indirect) | Proven by every Docker-backed test in `internal/run`: they bring up real compose stacks and no test anywhere requires a cluster. No single test names it because the whole suite is the evidence. |
+| **R-DC1-4** (`init` notes division of labour when a k6 MCP is detected) | deferred | A **SHOULD**, and no file or format for k6 MCP registration is defined anywhere we could detect. Escalated during Task 8 and left unimplemented rather than guessed. |
+| **R-DC2-5** (secret-scrub captured traffic on write) | deferred | **TBD-8**: capture does not exist in v0, so there is no write path to scrub. Must ship in the same change as capture, never after — scrubbing retrofitted onto an existing corpus means the unscrubbed cassettes already exist. |
+
+Two requirements — **R-COV-7** and **R-DET-12** — are verified by tests added in the final coverage
+pass; if they appear unverified in the report, the citation was lost and that is a defect.
 
 ---
 

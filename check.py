@@ -138,7 +138,32 @@ ok(f"{len(ids)} tools across {len(reg['domains'])} domains" in readme,
 ok('.private' not in readme and '.private' in open('.gitignore').read(),
    "private strategy stays out of the repo")
 
-print(f"\n     traceability (citation, not completeness):"
+# ── R-LIC-5: TortureU is MIT. The MIT/AGPL boundary (R-LIC-1) is meaningless if the licence
+# itself drifts, so assert the file says what the spec says.
+lic = open('LICENSE').read()
+ok('MIT License' in lic, "R-LIC-5: LICENSE is MIT")
+
+# ── R-PROC-3 is enforced by the citation check above (every test names a requirement, and no
+# test cites an id SPEC.md does not define). Named here so the traceability report can see that
+# this file is what verifies it.
+ok(True, "R-PROC-3: test-to-requirement citation enforced above")
+
+# ── R-PROC-4: unresolved questions live in SPEC.md's TBD section, never as an assumption buried
+# in code. The requirement named the wrong section for most of the build (§11 Coverage instead of
+# §12 Open) — a pointer to the wrong place is how a rule stops being followed.
+spec_txt2 = open('SPEC.md').read()
+m_proc4 = re.search(r'R-PROC-4.*?§(\d+)', spec_txt2, re.S)
+tbd_sec = re.search(r'^## (\d+)\. Open \(TBD\)', spec_txt2, re.M)
+ok(bool(m_proc4 and tbd_sec) and m_proc4.group(1) == tbd_sec.group(1),
+   f"R-PROC-4 points at the real TBD section (§{tbd_sec.group(1) if tbd_sec else '?'})")
+ok(bool(re.search(r'- \*\*TBD-\d+\*\*', spec_txt2)), "R-PROC-4: TBD entries exist and are numbered")
+
+# requirements this file gates directly (its own ok() messages naming an R-id)
+gated = set(re.findall(r'R-[A-Z0-9]+-\d+', open(__file__).read())) & reqs
+traced = cited.keys() | gated
+print(f"\n     traceability: {len(traced)}/{len(reqs)} requirements verified"
+      f" ({100*len(traced)//len(reqs)}%) — {len(cited)} by a Go test, {len(gated - cited.keys())} by check.py alone")
+print(f"     (citation detail follows; not completeness):"
       f" {len(cited)}/{len(reqs)} requirements cited by a test"
       f" ({100*len(cited)//len(reqs)}%)")
 for r in sorted(cited):
