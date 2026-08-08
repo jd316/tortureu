@@ -176,6 +176,60 @@ func newK6Handle() *k6Handle {
 	}
 }
 
+// finish reads summaryPath and resolves h onto Done() or Err() based on
+// waitErr and whether a summary was actually written — not on exit code
+// alone.
+//
+// k6 exits 99 when thresholds are crossed: its own documented convention
+// for "the test ran fine and your thresholds failed," not a crash — and it
+// still writes a complete summary file (confirmed empirically against
+// real grafana/k6:0.54.0). K6Runner previously treated any non-zero
+// cmd.Wait() as a load-generator failure and returned before ever reading
+// that summary: an E1 eval caught this exactly — the system under test
+// broke as designed (a real threshold breach, p95 3004.4ms against
+// p(95)<1000), k6 measured it correctly, and the tool reported *its own*
+// failure (`status: error, findings: 0`) instead of the SUT's. That is the
+// precise inversion of R-VER-2, whose entire distinction is fail = SUT
+// broke, error = tool broke.
+//
+// Rather than special-casing exit 99 alone, this reads the summary
+// whenever one exists, regardless of exit code: a summary on disk is
+// itself the evidence that k6 ran the test and produced a result. A
+// genuine tool failure — a missing binary (caught earlier by
+// wrapStartError at Start(), before this ever runs), a script compile
+// error, an OOM kill — never gets far enough to write one at all
+// (confirmed empirically: a script compile error exits 107 with no
+// summary file present). This is deliberately more general than
+// hardcoding "99 is fine, every other non-zero code is a failure": it does
+// not depend on this package enumerating every exit code k6's own
+// errext/exitcodes package might ever add, and it is the literal reading
+// of "read the summary whenever one exists."
+//
+// fallbackErr, if non-nil, is reported instead of a generic missing-file
+// error when there is truly no summary and no waitErr — container mode
+// uses this to surface a docker-cp failure by name instead of a bare
+// os.ReadFile "no such file" that would obscure the real cause.
+func (h *k6Handle) finish(waitErr error, summaryPath string, fallbackErr error) {
+	summary, readErr := os.ReadFile(summaryPath)
+	if readErr == nil && len(summary) > 0 {
+		h.done <- LoadResult{SummaryJSON: summary}
+		return
+	}
+	if waitErr != nil {
+		h.errCh <- waitErr
+		return
+	}
+	if fallbackErr != nil {
+		h.errCh <- fallbackErr
+		return
+	}
+	if readErr != nil {
+		h.errCh <- readErr
+		return
+	}
+	h.errCh <- fmt.Errorf("k6 exited successfully but wrote an empty summary file at %s", summaryPath)
+}
+
 // extractMarkerCandidate unwraps real k6's own log-line formatting so
 // k6.ParsePhaseMarker (fields[0] == PhaseMarkerPrefix, read-only for this
 // task) still recognizes it unmodified.
@@ -293,16 +347,7 @@ func (r *K6Runner) startHostProcess(scriptPath, summaryPath string) (LoadHandle,
 	go func() {
 		scanMarkers(h, stdout, stderr)
 		waitErr := cmd.Wait()
-		if waitErr != nil {
-			h.errCh <- waitErr
-			return
-		}
-		summary, readErr := os.ReadFile(summaryPath)
-		if readErr != nil {
-			h.errCh <- readErr
-			return
-		}
-		h.done <- LoadResult{SummaryJSON: summary}
+		h.finish(waitErr, summaryPath, nil)
 	}()
 	return h, nil
 }
@@ -353,22 +398,16 @@ func (r *K6Runner) startContainer(scriptPath, summaryPath string) (LoadHandle, e
 	go func() {
 		scanMarkers(h, stdout, stderr)
 		waitErr := cmd.Wait()
-		cpErr := exec.Command(r.dockerBin(), "cp", containerID+":"+k6ContainerSummaryPath, summaryPath).Run()
+		// Best-effort even when waitErr != nil: k6 writes --summary-export
+		// as it exits, including on a non-zero exit (exit 99 in
+		// particular — see h.finish's doc comment), so the summary can
+		// exist inside the container regardless of k6's exit status.
+		var cpErrWrapped error
+		if cpErr := exec.Command(r.dockerBin(), "cp", containerID+":"+k6ContainerSummaryPath, summaryPath).Run(); cpErr != nil {
+			cpErrWrapped = fmt.Errorf("copy summary out of k6 container: %w", cpErr)
+		}
 		cleanup()
-		if waitErr != nil {
-			h.errCh <- waitErr
-			return
-		}
-		if cpErr != nil {
-			h.errCh <- fmt.Errorf("copy summary out of k6 container: %w", cpErr)
-			return
-		}
-		summary, readErr := os.ReadFile(summaryPath)
-		if readErr != nil {
-			h.errCh <- readErr
-			return
-		}
-		h.done <- LoadResult{SummaryJSON: summary}
+		h.finish(waitErr, summaryPath, cpErrWrapped)
 	}()
 	return h, nil
 }

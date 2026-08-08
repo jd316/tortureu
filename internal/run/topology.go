@@ -99,6 +99,40 @@ type overlayService struct {
 	// is how the original internal dependency's own claim on its DNS name
 	// is removed without needing compose to support an actual "rename".
 	Profiles []string `yaml:"profiles,omitempty"`
+	// DependsOn replaces (not merges with) this service's depends_on when
+	// set; see overlayDependsOn's doc comment for why a plain []string here
+	// would not be enough.
+	DependsOn *overlayDependsOn `yaml:"depends_on,omitempty"`
+}
+
+// overlayDependsOn carries a service's rewritten depends_on list and
+// marshals it under compose's own `!override` YAML tag rather than a plain
+// sequence.
+//
+// R-EXE-20's rename trick disables an internal dependency's original
+// service via an unused profile and clones it under backendServiceName.
+// Any other service whose depends_on names the original (a directly
+// observed real-repo pattern, per an E1 finding) must be repointed at the
+// clone — but compose merges `-f` override files' depends_on additively by
+// key (verified empirically: overriding a service to depend on only the
+// clone still left the disabled original's key present in the merged
+// result, because compose treats depends_on as a map to merge, not a list
+// to replace), and a depends_on entry naming a profile-disabled service is
+// a hard "depends on undefined service" error — the service is excluded
+// from the project entirely, not just "not started". `!override` is
+// compose's own escape hatch for exactly this: it replaces the attribute
+// instead of merging it, so the disabled original's key is actually gone
+// from the merged result, not just shadowed.
+type overlayDependsOn struct {
+	entries []string
+}
+
+func (d overlayDependsOn) MarshalYAML() (any, error) {
+	seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!override"}
+	for _, e := range d.entries {
+		seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: e})
+	}
+	return seq, nil
 }
 
 // tortureuDisabledProfile is never passed to `docker compose up`, so any
@@ -128,6 +162,41 @@ func stringEnv(env types.MappingWithEquals) map[string]string {
 // own worked example is exactly this shape (`db` -> `db-tortureu-backend`).
 func backendServiceName(hostname string) string {
 	return hostname + "-tortureu-backend"
+}
+
+// rewriteDependsOn reports the depends_on entries a service's overlay
+// definition needs when at least one of its original dependencies names an
+// internalHostnames entry (a host R-EXE-20 is disabling via profile and
+// cloning under backendServiceName): each such name is repointed at its
+// clone, everything else passes through unchanged. Returns ok=false (and a
+// nil *overlayDependsOn, correctly omitted by overlayService's
+// `omitempty`) when nothing needs rewriting, so unaffected services' compose
+// files are left byte-for-byte as the base file already declares them —
+// this only touches services actually affected by R-EXE-20's rename.
+func rewriteDependsOn(deps types.DependsOnConfig, internalHostnames map[string]bool) (*overlayDependsOn, bool) {
+	if len(deps) == 0 {
+		return nil, false
+	}
+	names := make([]string, 0, len(deps))
+	for name := range deps {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	changed := false
+	entries := make([]string, 0, len(names))
+	for _, name := range names {
+		if internalHostnames[name] {
+			entries = append(entries, backendServiceName(name))
+			changed = true
+			continue
+		}
+		entries = append(entries, name)
+	}
+	if !changed {
+		return nil, false
+	}
+	return &overlayDependsOn{entries: entries}, true
 }
 
 // networkFaultVerbs mirrors R-EXE-15's Toxiproxy row: the verbs that need a
@@ -373,16 +442,24 @@ func (a ComposeTopologyApplier) Apply(composePath string, top egress.Topology, e
 			ov.Services[name] = overlayService{Networks: []string{sutNetwork}, Profiles: []string{tortureuDisabledProfile}}
 			continue
 		}
-		ov.Services[name] = overlayService{Networks: []string{sutNetwork}}
+		plain := overlayService{Networks: []string{sutNetwork}}
+		if dep, ok := rewriteDependsOn(project.Services[name].DependsOn, internalHostnames); ok {
+			plain.DependsOn = dep
+		}
+		ov.Services[name] = plain
 	}
 	for hostname := range internalHostnames {
 		svc := project.Services[hostname]
-		ov.Services[backendServiceName(hostname)] = overlayService{
+		backend := overlayService{
 			Image:       svc.Image,
 			Command:     []string(svc.Command),
 			Environment: stringEnv(svc.Environment),
 			Networks:    []string{sutNetwork},
 		}
+		if dep, ok := rewriteDependsOn(svc.DependsOn, internalHostnames); ok {
+			backend.DependsOn = dep
+		}
+		ov.Services[backendServiceName(hostname)] = backend
 	}
 
 	out, err := yaml.Marshal(ov)

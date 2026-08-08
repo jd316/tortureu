@@ -132,6 +132,72 @@ func TestComposeTopologyApplier_RenamesInternalDependencyAndAliasesProxyToItsNam
 }
 
 // spec: R-EXE-20
+//
+// E1 found this against a real repo: R-EXE-20's rename trick disables the
+// original internal-dependency service via a profile that is never
+// activated, but compose treats a profile-disabled service that another
+// service names in depends_on as undefined and refuses to start at all —
+// `docker compose config` (this test's own validation mechanism, via
+// ComposeTopologyApplier{Up: []string{"config"}}) errors with exactly
+// "service ... depends on undefined service ...: invalid compose project"
+// before this fix. E1 had to remove depends_on from its fixture to
+// proceed; depends_on is an extremely common compose pattern, so this
+// broke on real repos, not just edge cases.
+//
+// Confirmed empirically (outside this test, against real `docker compose
+// config`) that simply adding a depends_on entry for the renamed backend
+// is not enough: compose merges -f override files' depends_on maps
+// additively by key, so the disabled original's key stays present in the
+// merged result even when the override only adds a new one. The fix has
+// to actually replace the service's depends_on, which is why Apply itself
+// (not just this test) must succeed — a passing Apply() is the proof the
+// merge-vs-replace distinction was handled, not just that some YAML was
+// written.
+func TestComposeTopologyApplier_RewritesDependsOnToBackendNameForInternalHost(t *testing.T) {
+	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
+		t.Skip("docker compose not available")
+	}
+
+	dir := t.TempDir()
+	composePath := filepath.Join(dir, "docker-compose.yml")
+	compose := "services:\n  checkout-api:\n    image: alpine:3.20\n    depends_on:\n      - redis\n  redis:\n    image: redis:7-alpine\n"
+	if err := os.WriteFile(composePath, []byte(compose), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	top := egress.BuildTopology("tortureu_sut", "tortureu_egress", "tortureu-proxy")
+	applier := ComposeTopologyApplier{Up: []string{"config"}}
+	// Apply drives `docker compose ... config` as its own validation step
+	// (a.up()); if the merged compose project is invalid (the
+	// undefined-service error this fix addresses), Apply itself fails —
+	// this is not a separate check bolted on afterward.
+	if err := applier.Apply(composePath, top, nil, []string{"redis:6379"}); err != nil {
+		t.Fatalf("Apply: %v — depends_on referencing the disabled original service was not rewritten to the backend clone", err)
+	}
+
+	out, err := exec.Command("docker", "compose", "-f", composePath, "-f", filepath.Join(os.TempDir(), "tortureu-topology-overlay.yaml"), "config").Output()
+	if err != nil {
+		t.Fatalf("docker compose config: %v", err)
+	}
+	merged := string(out)
+
+	idx := strings.Index(merged, "checkout-api:")
+	if idx == -1 {
+		t.Fatal("merged config lost checkout-api")
+	}
+	section := merged[idx:]
+	if next := strings.Index(section[1:], "\n  redis-tortureu-backend:"); next != -1 {
+		section = section[:next+1]
+	}
+	if !strings.Contains(section, "depends_on:") || !strings.Contains(section, "redis-tortureu-backend") {
+		t.Errorf("checkout-api's merged depends_on = %q, want it to depend on redis-tortureu-backend", section)
+	}
+	if strings.Contains(section, "\n      redis:\n") {
+		t.Errorf("checkout-api's merged depends_on = %q, still references the disabled original \"redis\" — merging (rather than replacing) depends_on is exactly what leaves an undefined-service reference behind", section)
+	}
+}
+
+// spec: R-EXE-20
 func TestComposeTopologyApplier_FailsLoudlyWhenInternalHostIsNotAKnownService(t *testing.T) {
 	dir := t.TempDir()
 	composePath := filepath.Join(dir, "docker-compose.yml")
