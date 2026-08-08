@@ -12,12 +12,21 @@ import (
 
 // Tool is one registry.yaml entry (R-COV-2: every entry carries tier, when,
 // and how).
+//
+// Planned carries the verb named in `how:` when that verb is not yet
+// implemented (registry.yaml's `planned:` marker, guarded by check.py so no
+// entry can name a non-working verb unmarked). It is empty for an entry
+// whose `how:` already runs. A parser that silently dropped this would
+// leave the marker unreachable by any consumer — R-COV-2 requires the
+// Go model to carry an entry's fields faithfully, not just the three it
+// names explicitly, precisely so `how:`'s honesty survives past parsing.
 type Tool struct {
-	ID   string `yaml:"id"`
-	Tier string `yaml:"tier"`
-	When string `yaml:"when"`
-	How  string `yaml:"how"`
-	Note string `yaml:"note"`
+	ID      string `yaml:"id"`
+	Tier    string `yaml:"tier"`
+	When    string `yaml:"when"`
+	How     string `yaml:"how"`
+	Note    string `yaml:"note"`
+	Planned string `yaml:"planned"`
 }
 
 // Domain groups tools under one capability area.
@@ -90,7 +99,9 @@ type CoverageEntry struct {
 }
 
 // String renders one coverage line, always labelled with the tool's tier
-// (R-SCOPE-4).
+// (R-SCOPE-4). A tool whose How names a `planned:` (not yet implemented)
+// verb is labelled "· planned" next to its tier and its How is annotated,
+// so the line never instructs a user to run something that exits 2.
 func (c CoverageEntry) String() string {
 	status := "applies"
 	if !c.Evaluated {
@@ -98,7 +109,15 @@ func (c CoverageEntry) String() string {
 	} else if !c.Applies {
 		status = "does not apply"
 	}
-	return fmt.Sprintf("[%s] %s/%s: %s (%s)", c.Tool.Tier, c.Domain, c.Tool.ID, c.Tool.How, status)
+
+	tier := c.Tool.Tier
+	how := c.Tool.How
+	if c.Tool.Planned != "" {
+		tier += " · planned"
+		how = fmt.Sprintf("%s (verb %q not implemented in v0)", how, c.Tool.Planned)
+	}
+
+	return fmt.Sprintf("[%s] %s/%s: %s (%s)", tier, c.Domain, c.Tool.ID, how, status)
 }
 
 // Evaluate reports coverage of every registry tool against sys (R-COV-1).

@@ -62,6 +62,70 @@ func TestLoadRegistryEveryToolHasTierWhenHow(t *testing.T) {
 	}
 }
 
+// findTool returns the tool with id across all of reg's domains, failing
+// the test if it is not present.
+func findTool(t *testing.T, reg *doctor.Registry, id string) doctor.Tool {
+	t.Helper()
+	for _, d := range reg.Domains {
+		for _, tool := range d.Tools {
+			if tool.ID == id {
+				return tool
+			}
+		}
+	}
+	t.Fatalf("no tool %q in registry", id)
+	return doctor.Tool{}
+}
+
+// spec: R-COV-2
+func TestLoadRegistryRoundTripsThePlannedMarker(t *testing.T) {
+	reg, err := doctor.LoadRegistry(registryPath)
+	if err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+
+	// locust is marked `planned: emit` in registry.yaml (its how: names a
+	// verb not implemented in v0). The parser must not drop that marker —
+	// it is the only thing that can stop doctor's output from
+	// mis-instructing a user to run a verb that exits 2.
+	locust := findTool(t, reg, "locust")
+	if locust.Planned != "emit" {
+		t.Fatalf("locust.Planned = %q, want %q", locust.Planned, "emit")
+	}
+}
+
+// spec: R-COV-2
+func TestLoadRegistryDoesNotFabricatePlannedForAWorkingVerb(t *testing.T) {
+	reg, err := doctor.LoadRegistry(registryPath)
+	if err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+
+	// k6's how: ("tortureu run <scenario>") already runs, and carries no
+	// planned: marker in registry.yaml. The parser must not invent one.
+	k6 := findTool(t, reg, "k6")
+	if k6.Planned != "" {
+		t.Fatalf("k6.Planned = %q, want empty (no planned: marker in registry.yaml)", k6.Planned)
+	}
+}
+
+// spec: R-SCOPE-4
+func TestCoverageEntryStringLabelsPlannedToolsAndDoesNotMisinstruct(t *testing.T) {
+	entry := doctor.CoverageEntry{
+		Domain:    "load",
+		Tool:      doctor.Tool{ID: "locust", Tier: "delegate", When: "lang:python", How: "tortureu emit locust", Planned: "emit"},
+		Applies:   true,
+		Evaluated: true,
+	}
+	s := entry.String()
+	if !strings.Contains(s, "delegate") {
+		t.Fatalf("CoverageEntry.String() = %q, must still show tier %q", s, "delegate")
+	}
+	if !strings.Contains(s, "planned") {
+		t.Fatalf("CoverageEntry.String() = %q, must flag the planned marker so a user isn't told to run a verb that exits 2", s)
+	}
+}
+
 // spec: R-COV-3
 func TestEvalPredicateOrAlternativesRepeatPrefix(t *testing.T) {
 	sys := &detect.System{
