@@ -9,6 +9,7 @@ package run
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"os/exec"
 	"strings"
 
@@ -156,16 +157,33 @@ func (a DockerApplier) ApplyDocker(name string, d fault.DockerAction) (func() er
 		// cpu_percent (int, 0-100, stress-ng's own --cpu-load semantics):
 		// internal/fault sets this for the cpu verb specifically (a
 		// distinct key from mem/io/fd's "amount", so this applier has one
-		// unambiguous, unit-typed way to read it). Before this fix it was
-		// computed and never read: `cpu: 90%` produced stress-ng's default
-		// full-tilt load per worker regardless of the requested percentage
-		// — B1 measured ~403-416% of one core for a 90% request. A
-		// requested percentage the applier silently ignores is the worst
-		// kind of fault: the run completes, the verdict reads normally,
-		// and the load applied was ~4.5x what was asked for.
+		// unambiguous, unit-typed way to read it). `cpu: N%` is a request
+		// for N% of the container's total CPU load, not N% per worker;
+		// `workers` (SPEC's own documented syntax, e.g.
+		// `cpu: 90%, workers: 4`) is a separate parallelism modifier, not a
+		// multiplier on the requested percentage. First fix round left
+		// cpu_percent computed and never read: B1 measured ~403-416% of one
+		// core for a 90% request (stress-ng's own full-tilt default per
+		// worker). Second fix round wired --cpu-load in unconditionally but
+		// applied the undivided percentage to every worker: B1 then
+		// measured ~360.7% (4 workers x 90% each). Dividing cpu_percent by
+		// the worker count makes N workers each target N%/workers, so their
+		// sum lands back near the requested total (integer division means
+		// this is an honest approximation, same class as R-EXE-22's
+		// duration rounding — e.g. 90%/4 workers = 23% each, summing to
+		// ~92%, not exactly 90%).
 		if resource == "cpu" {
 			if pct, ok := d.Args["cpu_percent"]; ok {
-				args = append(args, "--cpu-load", fmt.Sprint(pct))
+				n := 1
+				if wv, ok := d.Args["workers"]; ok {
+					if wi, ok := asInt(wv); ok && wi > 0 {
+						n = wi
+					}
+				}
+				if pf, ok := asFloat(pct); ok {
+					perWorker := int(math.Round(pf / float64(n)))
+					args = append(args, "--cpu-load", fmt.Sprint(perWorker))
+				}
 			}
 		}
 		if _, err := a.run(args...); err != nil {
@@ -178,6 +196,44 @@ func (a DockerApplier) ApplyDocker(name string, d fault.DockerAction) (func() er
 
 	default:
 		return nil, fmt.Errorf("run: DockerApplier: unsupported action kind %q (fault %q)", d.Kind, name)
+	}
+}
+
+// asInt and asFloat accept the numeric shapes Go's YAML decoder produces for
+// config-sourced values (int for a bare integer, float64 for anything
+// parsed generically) plus a passthrough for values already typed
+// numerically by a caller building an Action directly (as this package's
+// own tests do). internal/fault has an equivalent unexported asInt for the
+// same reason (R-DC2-6 defense in depth: each package re-validates rather
+// than trusting the other's parse) — this is that same shape, owned here
+// because docker_applier.go cannot import internal/fault's unexported
+// helper.
+func asInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	case float64:
+		if n != math.Trunc(n) {
+			return 0, false
+		}
+		return int(n), true
+	default:
+		return 0, false
+	}
+}
+
+func asFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case float64:
+		return n, true
+	default:
+		return 0, false
 	}
 }
 

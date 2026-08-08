@@ -93,14 +93,21 @@ func TestDockerApplier_KillAndUndoRestartsContainer(t *testing.T) {
 
 // spec: R-EXE-6
 func TestDockerApplier_StressCPUPassesCPULoadPercentToStressNG(t *testing.T) {
-	// B1 measured `cpu: 90%` producing ~403-416% of one core: cpu_percent
-	// was computed by internal/fault and never read here, so stress-ng ran
-	// at its own default (full load per worker) regardless of what was
-	// requested — the run completed and the verdict read normally, with
-	// the applied load ~4.5x what the user asked for. No live Docker
-	// daemon needed to prove this: a fake "docker" that only records its
-	// own argv is enough, since the property under test is which flags
-	// this package builds, not stress-ng's actual behavior.
+	// B1 round 1 measured `cpu: 90%, workers: 4` (torture.example.yaml's own
+	// documented syntax) producing ~403-416% of one core: cpu_percent was
+	// computed by internal/fault and never read here, so stress-ng ran at
+	// its own default (full load per worker) regardless of what was
+	// requested. B1 round 2, after --cpu-load was wired in unconditionally,
+	// measured ~360.7% instead of the requested 90%: --cpu-load 90 was
+	// applied to all 4 workers verbatim (4 x 90% = 360%), so cpu_percent
+	// meant "load per worker" instead of "load for the container as a
+	// whole" — SPEC's `cpu: N%` is a total-load request, and workers is a
+	// separate parallelism modifier (how many stress-ng processes divide
+	// that load), not a multiplier on it. The fix divides cpu_percent by
+	// workers so N workers at N%/workers each sum back to the requested
+	// total. No live Docker daemon needed: a fake "docker" that only
+	// records its own argv is enough, since the property under test is
+	// which flags this package builds, not stress-ng's actual behavior.
 	dir := t.TempDir()
 	capturedPath := filepath.Join(dir, "captured-args.txt")
 	fakeDocker := "#!/bin/sh\necho \"$@\" >> " + capturedPath + "\n"
@@ -122,8 +129,47 @@ func TestDockerApplier_StressCPUPassesCPULoadPercentToStressNG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read captured args: %v", err)
 	}
+	// 90% total / 4 workers = 22.5, rounded to 23 (4 x 23 = 92, within
+	// stress-ng's own integer-worker approximation of the requested total —
+	// the same class of honest approximation already documented for
+	// duration-based faults, R-EXE-22).
+	if !strings.Contains(string(captured), "--cpu-load 23") {
+		t.Errorf("captured docker exec args = %q, want to contain \"--cpu-load 23\" (90%% requested / 4 workers) — cpu_percent must be divided across workers so the requested total load is what's actually applied, not requested%%-per-worker", captured)
+	}
+	if strings.Contains(string(captured), "--cpu-load 90") {
+		t.Errorf("captured docker exec args = %q still contains the undivided 90%% per worker — with workers=4 this applies 360%% total, not the requested 90%%", captured)
+	}
+}
+
+// spec: R-EXE-6
+func TestDockerApplier_StressCPUSingleWorkerAppliesRequestedPercentUnchanged(t *testing.T) {
+	// Regression guard for the workers-division fix above: with no workers
+	// modifier (the common case — 1 implicit worker), cpu_percent must
+	// still pass through unchanged, not accidentally divided by some
+	// default > 1.
+	dir := t.TempDir()
+	capturedPath := filepath.Join(dir, "captured-args.txt")
+	fakeDocker := "#!/bin/sh\necho \"$@\" >> " + capturedPath + "\n"
+	fakeDockerPath := filepath.Join(dir, "docker")
+	if err := os.WriteFile(fakeDockerPath, []byte(fakeDocker), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	a := DockerApplier{Bin: fakeDockerPath}
+	if _, err := a.ApplyDocker("cpu_squeeze", fault.DockerAction{
+		Kind:      "stress",
+		Container: "checkout-api",
+		Args:      map[string]any{"resource": "cpu", "cpu_percent": 90},
+	}); err != nil {
+		t.Fatalf("ApplyDocker: %v", err)
+	}
+
+	captured, err := os.ReadFile(capturedPath)
+	if err != nil {
+		t.Fatalf("read captured args: %v", err)
+	}
 	if !strings.Contains(string(captured), "--cpu-load 90") {
-		t.Errorf("captured docker exec args = %q, want to contain \"--cpu-load 90\" — a requested cpu_percent that never reaches stress-ng silently applies the wrong load", captured)
+		t.Errorf("captured docker exec args = %q, want to contain \"--cpu-load 90\" (no workers modifier = 1 implicit worker, requested percent unchanged)", captured)
 	}
 }
 
