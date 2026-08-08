@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/jdb316/tortureu/internal/ci"
 	"github.com/jdb316/tortureu/internal/detect"
 )
 
@@ -120,6 +122,81 @@ func buildInit(sys *detect.System, composePath string) initOutput {
 	return initOutput{YAML: []byte(b.String()), Gaps: gaps}
 }
 
+// runInitCI implements `tortureu init --ci [provider]` (R-CLI-11): write a CI
+// pipeline whose contract is R-VER-7's exit codes. It is a mode, not a
+// modifier — no detection runs and no torture.yaml is written, because the
+// two artefacts have different lifetimes (a config is regenerated as the
+// stack changes; a pipeline is written once and then hand-edited).
+//
+// The generated content lives in internal/ci, not here, so the pipeline can
+// be parsed and its shell executed by tests without going through the CLI.
+func runInitCI(args []string, ciOut string, stdout, stderr io.Writer) int {
+	provider := ci.ProviderGitHub
+	switch len(args) {
+	case 0:
+	case 1:
+		provider = args[0]
+	default:
+		fmt.Fprintf(stderr, "tortureu init --ci: expected at most one provider, got %v\n", args)
+		return 2
+	}
+
+	path, content, err := ci.Generate(provider)
+	if err != nil {
+		fmt.Fprintf(stderr, "tortureu init --ci: %v\n", err)
+		return 2
+	}
+	if ciOut != "" {
+		path = ciOut
+	}
+
+	// Refuse rather than overwrite (R-CLI-11). A pipeline carries hand-made
+	// edits — runner labels, secrets, the install step — that init cannot
+	// regenerate, so replacing it silently destroys work. Stat-then-write is
+	// racy in principle; O_EXCL below is the real guard, and this check
+	// exists to produce the specific message.
+	if _, err := os.Stat(path); err == nil {
+		fmt.Fprintf(stderr, "tortureu init --ci: %s already exists; refusing to overwrite it.\n"+
+			"Move it aside, or write elsewhere with -ci-out.\n", path)
+		return 2
+	} else if !os.IsNotExist(err) {
+		fmt.Fprintf(stderr, "tortureu init --ci: %s: %v\n", path, err)
+		return 2
+	}
+
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			fmt.Fprintf(stderr, "tortureu init --ci: create %s: %v\n", dir, err)
+			return 2
+		}
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		fmt.Fprintf(stderr, "tortureu init --ci: write %s: %v\n", path, err)
+		return 2
+	}
+	if _, err := f.Write(content); err != nil {
+		_ = f.Close()
+		fmt.Fprintf(stderr, "tortureu init --ci: write %s: %v\n", path, err)
+		return 2
+	}
+	if err := f.Close(); err != nil {
+		fmt.Fprintf(stderr, "tortureu init --ci: write %s: %v\n", path, err)
+		return 2
+	}
+
+	fmt.Fprintf(stdout, "wrote %s\n", path)
+	fmt.Fprintln(stdout, "\nthe pipeline treats VERDICT.md §2 exit codes 0-4 as the contract:")
+	fmt.Fprintln(stdout, "  0 pass · 1 assertion broke · 2 harness error · 3 aborted · 4 inconclusive")
+	fmt.Fprintln(stdout, "  1, 2, 3 and 4 all fail the build — 4 included (R-VER-8)")
+	fmt.Fprintln(stdout, "\ngaps (not hidden — R-DET-7):")
+	fmt.Fprintln(stdout, "  - the install step is a placeholder: TortureU has no published release,")
+	fmt.Fprintln(stdout, "    image or action yet, so it builds from source in the checkout (TBD-11).")
+	fmt.Fprintln(stdout, "    Edit it before this runs anywhere but this repo.")
+	fmt.Fprintln(stdout, "  - the pipeline needs a torture.yaml — run `tortureu init` to generate one.")
+	return 0
+}
+
 // runInit is the `tortureu init` verb: detect the stack, write torture.yaml
 // (R-CLI-1). It never touches any file other than -out (R-DC1-3: init must
 // not unregister or modify another tool's MCP registration — trivially
@@ -129,8 +206,18 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	compose := fs.String("compose", "docker-compose.yml", "path to the compose file to detect")
 	out := fs.String("out", "torture.yaml", "path to write the generated config")
+	// -ci is a bool, and the provider is the positional argument after it
+	// (`tortureu init --ci gitlab`), because the flag has to work both bare
+	// and with a value. A string flag cannot: `--ci` alone would be "flag
+	// needs an argument".
+	ciMode := fs.Bool("ci", false, "write a CI pipeline instead of torture.yaml; provider follows as an argument (github, gitlab; default github)")
+	ciOut := fs.String("ci-out", "", "path to write the CI pipeline (default: the provider's conventional location)")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+
+	if *ciMode {
+		return runInitCI(fs.Args(), *ciOut, stdout, stderr)
 	}
 
 	sys, err := detect.Detect(*compose)

@@ -149,6 +149,141 @@ func TestBuildInitStarterDoesNotFabricateEndpoints(t *testing.T) {
 	}
 }
 
+// chdirTemp moves the test into an empty directory for the duration of the
+// test, so `init --ci` writes into a scratch tree and not the repo.
+func chdirTemp(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// spec: R-CLI-11
+//
+// `--ci` with no provider writes the GitHub workflow. It is a mode, not a
+// modifier: no detection runs (there is no compose file in this directory,
+// and init must still succeed) and no torture.yaml is written.
+func TestInitCIWritesGitHubWorkflowAndNotTortureYAML(t *testing.T) {
+	dir := chdirTemp(t)
+
+	var out, errb bytes.Buffer
+	if code := runInit([]string{"-ci"}, &out, &errb); code != 0 {
+		t.Fatalf("runInit -ci exited %d: %s", code, errb.String())
+	}
+
+	path := filepath.Join(dir, ".github", "workflows", "tortureu.yml")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("workflow not written: %v", err)
+	}
+	if !strings.Contains(string(content), "tortureu run") {
+		t.Errorf("workflow does not run tortureu:\n%s", content)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "torture.yaml")); err == nil {
+		t.Error("--ci wrote torture.yaml; R-CLI-11 makes it a mode that writes the pipeline only")
+	}
+	if !strings.Contains(out.String(), ".github/workflows/tortureu.yml") {
+		t.Errorf("stdout does not name the file written:\n%s", out.String())
+	}
+}
+
+// spec: R-CLI-11
+func TestInitCIGitlabWritesGitlabPipeline(t *testing.T) {
+	dir := chdirTemp(t)
+
+	var out, errb bytes.Buffer
+	if code := runInit([]string{"-ci", "gitlab"}, &out, &errb); code != 0 {
+		t.Fatalf("runInit -ci gitlab exited %d: %s", code, errb.String())
+	}
+	content, err := os.ReadFile(filepath.Join(dir, ".gitlab-ci.yml"))
+	if err != nil {
+		t.Fatalf(".gitlab-ci.yml not written: %v", err)
+	}
+	if !strings.Contains(string(content), "tortureu run") {
+		t.Errorf("pipeline does not run tortureu:\n%s", content)
+	}
+}
+
+// spec: R-CLI-11
+//
+// A pipeline file is hand-edited after generation — runner labels, secrets,
+// the install step. Replacing it silently destroys work init cannot
+// regenerate, so an existing file is a refusal, not an overwrite.
+func TestInitCIRefusesToOverwriteAnExistingPipeline(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		path string
+	}{
+		{[]string{"-ci"}, filepath.Join(".github", "workflows", "tortureu.yml")},
+		{[]string{"-ci", "gitlab"}, ".gitlab-ci.yml"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			dir := chdirTemp(t)
+			full := filepath.Join(dir, tc.path)
+			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			mine := []byte("# hand-edited, do not clobber\n")
+			if err := os.WriteFile(full, mine, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			var out, errb bytes.Buffer
+			code := runInit(tc.args, &out, &errb)
+			if code != 2 {
+				t.Errorf("exit = %d, want 2 when the pipeline file already exists", code)
+			}
+			got, err := os.ReadFile(full)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(mine) {
+				t.Errorf("existing pipeline was overwritten:\n%s", got)
+			}
+			if !strings.Contains(errb.String(), tc.path) {
+				t.Errorf("stderr does not name the path it refused to write: %q", errb.String())
+			}
+		})
+	}
+}
+
+// spec: R-CLI-11
+func TestInitCIRejectsUnknownProviderListingSupportedOnes(t *testing.T) {
+	chdirTemp(t)
+
+	var out, errb bytes.Buffer
+	code := runInit([]string{"-ci", "jenkins"}, &out, &errb)
+	if code != 2 {
+		t.Errorf("exit = %d, want 2 for an unknown CI provider", code)
+	}
+	for _, want := range []string{"github", "gitlab"} {
+		if !strings.Contains(errb.String(), want) {
+			t.Errorf("stderr %q does not list supported provider %q", errb.String(), want)
+		}
+	}
+}
+
+// spec: R-CLI-11 (-ci-out is the documented way to write somewhere else,
+// which is what makes the refuse-to-overwrite rule livable)
+func TestInitCIHonoursCIOut(t *testing.T) {
+	dir := chdirTemp(t)
+
+	var out, errb bytes.Buffer
+	if code := runInit([]string{"-ci", "-ci-out", "ci/torture.yml"}, &out, &errb); code != 0 {
+		t.Fatalf("runInit exited %d: %s", code, errb.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ci", "torture.yml")); err != nil {
+		t.Errorf("-ci-out path not written: %v", err)
+	}
+}
+
 // spec: R-DC1-3
 func TestInitDoesNotTouchAnotherToolsMCPRegistration(t *testing.T) {
 	dir := t.TempDir()

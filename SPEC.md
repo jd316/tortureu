@@ -452,6 +452,40 @@ findings in three of four runs. *(E1 → Task 4, 2026-08-08)*
 
 **R-CLI-2** — Every verb **MUST** be listed in `registry.yaml` as the `how:` of at least one tool.
 
+**R-CLI-11** — `init --ci [provider]` **MUST** write a CI pipeline that runs `tortureu run` and
+treats **R-VER-7**'s exit codes `0`–`4` as the contract. `provider` is `github` (default) or
+`gitlab`; any other value **MUST** error listing what is supported, in the manner of **R-CLI-8**.
+
+The generated pipeline **MUST**:
+
+- branch on the exit code and report each of `0`–`4` **distinctly**, by the meaning **R-VER-7**
+  gives it, and **MUST NOT** collapse them into "non-zero". "The build went red" does not tell a
+  reviewer whether their service broke (`1`), the harness broke (`2`), the run never started
+  (`3`), or nothing could be attributed (`4`) — and those four demand four different responses;
+- **fail the build** on `1`, `2`, `3` **and** `4` — `4` in particular, per **R-VER-8**: a green
+  that means "we couldn't tell" is how a harness silently stops finding anything. No
+  `continue-on-error` / `allow_failure` may be emitted for the run step;
+- propagate the code itself rather than a substitute, so the distinction survives into the job's
+  own status;
+- treat a code outside `0`–`4` as an unexpected failure and fail, never as a pass. **R-COV-6**'s
+  rule applies: a result the pipeline cannot interpret is reported as uninterpretable, not
+  silently treated as success.
+
+`--ci` is a **mode**, not a modifier: it writes the pipeline file only, and **MUST NOT** run
+detection or write `torture.yaml`. The two artefacts have different lifetimes — `torture.yaml` is
+regenerated as the stack changes, the pipeline is written once — and a repo may want CI wiring
+without re-deriving a config it has already edited.
+
+It **MUST NOT** overwrite an existing file at the destination path (`.github/workflows/tortureu.yml`
+or `.gitlab-ci.yml`, overridable with `-ci-out`). It **MUST** refuse, naming the path, and exit `2`.
+A pipeline file is hand-edited after generation — runner labels, secrets, the install step — and
+silently replacing it destroys work `init` cannot regenerate. This is deliberately stricter than
+`init`'s existing treatment of `torture.yaml`, which does overwrite; that asymmetry is a known
+inconsistency, not an oversight, and changing `torture.yaml`'s behaviour is out of scope here.
+
+*(behaviour proposed by the implementer and specified before citation, per R-PROC-2; the
+`github-actions` and `gitlab-ci` registry entries named this flag with nothing behind it)*
+
 **R-CLI-9** — `capture` **MUST** scrub credential-shaped data — auth headers, cookies, bearer
 tokens, credential-shaped body and query fields — from an exchange **before** it is written to the
 cassette. No code path may persist an unscrubbed byte. *(satisfies R-DC2-5, closes TBD-8)*
@@ -855,6 +889,13 @@ nothing to suggest, and only the second is honest.
 - **TBD-1** — Verdict storage format for cross-commit trend tracking (SQLite / JSONL /
   Bencher-compatible). Blocked until there are runs worth comparing.
 - ~~**TBD-2**~~ — **RESOLVED**: `emit` prints to stdout by default (R-CLI-8), so its output composes with a shell redirect rather than requiring a path argument.
+- **TBD-11** — How `tortureu` itself reaches a CI runner (R-CLI-11). There is no published
+  release, tag, container image or marketplace action, so the generated pipeline builds the binary
+  from the checked-out source (`go build ./cmd/tortureu`). That is correct inside this repo and
+  wrong in a consumer repo, which has no TortureU source to build. The generated step is therefore
+  marked in-file as the one line the user must adapt, rather than emitting an install command for a
+  distribution channel that does not exist. Resolves when v0 ships an installable artefact.
+
 - **TBD-5** — Whether to adopt the `grafana/k6-summary` JSON Schema once it leaves
   work-in-progress, replacing our own `handleSummary()` shape.
 - ~~**TBD-6**~~ — **RESOLVED 2026-08-08: `"correlated"`.** The candidates were `"correlated"`, a
