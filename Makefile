@@ -6,11 +6,13 @@
 bench:
 	go run ./benchmarks/b1/...
 
-# B2 overhead and E1 attribution (BENCHMARKS.md). Not built yet — do not run
-# this expecting real numbers.
+# E1 attribution (BENCHMARKS.md §E1). Needs Docker; builds and tears down one
+# compose stack per corpus case. Case 8 is the control: it must produce zero
+# findings, and this target fails if it does not — a tool that invents a
+# finding on a healthy system is worse than one that misses a real defect.
+# B2 overhead is still not built.
 eval:
-	@echo "make eval: not implemented (E1/E2 are not built — see BENCHMARKS.md 'Running them')" >&2
-	@exit 1
+	./evals/run_case.sh
 
 # B2 overhead + an E1 subset, meant to gate PRs on regression. Not built yet.
 bench-ci:
