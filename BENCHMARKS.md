@@ -253,6 +253,56 @@ confidence     `caused` rate with OTel vs `correlated` without   (validates D-4)
 **Publish:** per-case results, including failures. A corpus we score 100% on is a corpus we
 overfit to — so cases are added when we *fail* in the wild, never trimmed when inconvenient.
 
+### Results
+
+Measured `2026-08-08T21:46:56Z` at commit `4680185`, whole corpus in one run
+(`bash evals/run_case.sh`), every case driven through the real `tortureu run` binary. Per-case
+verdict JSON is in [`evals/results/`](evals/results/).
+
+| # | Planted defect | status | findings | attributed cause | confidence | candidate knob |
+|---|---|---|---|---|---|---|
+| 1 | HTTP client with no timeout | fail | 1 | `dep_slow` | correlated | ✅ `Client.Timeout` |
+| 2 | Retry with no cap or backoff | fail | 1 | `dep_down` | correlated | ❌ none exists — see below |
+| 3 | Connection pool of 5 behind 500 rps | fail | 2 | *ambiguous* | ambiguous | ✅ `MaxConns` |
+| 4 | Non-idempotent consumer | fail | 1 | `order_duplicate` | correlated | n/a |
+| 5 | No circuit breaker on cascade path | fail | 1 | `dep_slow` | correlated | n/a |
+| 6 | Unbounded in-memory queue | fail | 1 | *ambiguous* | ambiguous | n/a |
+| 7 | Cache stampede on expiry | fail | 1 | *ambiguous* | ambiguous | n/a |
+| 8 | **Control: no defect** | **pass** | **0** | — | — | — |
+
+```
+detection      7/7   every planted defect produced a finding
+attribution    4/7   findings that named a causing fault
+candidates     2/3   cases whose ground truth names a config knob
+false positive 0     on the control (the metric that carries the most weight)
+confidence     not scored on this corpus — see below
+```
+
+**Where this is weaker than it looks, stated rather than buried:**
+
+- **Attribution is 4/7, not 7/7.** Cases 3, 6 and 7 return `ambiguous`: more than one fault was
+  active, so no single cause is named. That is the designed behaviour (R-VER-4 — a cause is only
+  claimed when one fault can carry it), but it means those three findings tell you *something
+  broke* without telling you *what did it*, which is the whole product claim. Narrowing a
+  multi-fault run to one cause needs the per-fault time windows TBD-9's resolution also wants.
+- **Case 2's candidate miss is structural, not a bug.** Its ground truth is "retry config", but
+  the planted defect is hand-rolled retry over Go's `net/http`, which has **no** retry knob to
+  name. No candidate list can supply one; the honest fix is code, not configuration. Counting it
+  as a miss keeps the score honest, but the ceiling here is 2/3, not 3/3.
+- **`caused` is never reached on this corpus, so trace ingestion is unvalidated by E1.** Every
+  case tops out at `correlated` because no corpus case runs OTel/Jaeger. The trace pipeline that
+  produces `caused` (R-VER-13) is verified separately against a live Jaeger, but E1's own
+  `confidence` metric — "`caused` rate with OTel vs `correlated` without, validates D-4" — cannot
+  be scored until the corpus gains an instrumented case. That case does not exist yet.
+- **7 cases plus 1 control is a small corpus.** It is enough to catch a tool that invents
+  findings; it is not enough to put a confidence interval on 4/7.
+
+**A note on the harness itself.** The launch gate used to check only that the control produced zero
+findings. An aborted run also produces zero findings, so a corpus that failed to start printed
+`OK: case 8 produced 0 findings` and exited 0 — the same false green E1 exists to catch, inside the
+thing that catches it. It now requires the control to be `status=pass` and every case to have
+produced a readable verdict, and refuses to score a corpus where any case aborted.
+
 ## E2 — Detection accuracy
 
 *Does `init` classify real repos correctly?*
@@ -339,6 +389,6 @@ the ~8k rps figures are not misread as "this is what TortureU's proxy path suppo
 this scenario's concurrency, the single-process Python load generator is the more likely
 ceiling, not the proxy.
 
-**E1 (attribution accuracy) is measured** via `make eval` (`evals/run_case.sh`); see this
-file's E1 section for its own results. **E2 (detection accuracy) is still not measured** —
+**E1 (attribution accuracy) is measured** via `make eval` (`evals/run_case.sh`); its per-case
+results, metrics and limitations are in this file's E1 Results table above. **E2 (detection accuracy) is still not measured** —
 no harness exists yet for it, and `make bench-ci` remains an unimplemented stub.

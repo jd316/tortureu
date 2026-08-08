@@ -319,7 +319,7 @@ func EvaluateSQLAsserts(asserts []config.AssertEntry, q SQLQuerier, faults []con
 			Confidence: confidenceFor(len(faults)),
 			Broke:      verdict.Broke{Assertion: assertion, Observed: observed},
 		}
-		attribute(&finding, faults, sys.Deps, auditFindings, sys.Lang)
+		attribute(&finding, faults, sys.Deps, auditFindings, sys.Lang, sys.SUT)
 		findings = append(findings, finding)
 	}
 	return passed, findings, nil

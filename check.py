@@ -77,6 +77,7 @@ ok(True, "verdict example is valid JSON")
 
 # ---- SDD traceability: SPEC.md is normative, tests must cite real requirements ----
 import glob
+import os
 spec = open('SPEC.md').read()
 reqs = set(re.findall(r'\*\*(R-[A-Z0-9]+-\d+)\*\*', spec))
 ok(len(reqs) > 0, f"SPEC.md declares {len(reqs)} requirements")
@@ -296,9 +297,12 @@ for line in res.splitlines():
 import subprocess
 tracked = set(subprocess.run(['git', 'ls-files', 'benchmarks/results/'],
                              capture_output=True, text=True).stdout.split())
-missing = [p for p in sorted(set(re.findall(r'\((benchmarks/results/[^)]+)\)', open('BENCHMARKS.md').read())))
-           if p not in tracked]
-ok(not missing, "every benchmark result BENCHMARKS.md links to is tracked in git"
+tracked |= set(subprocess.run(['git', 'ls-files', 'evals/results/'],
+                             capture_output=True, text=True).stdout.split())
+_bench = open('BENCHMARKS.md').read()
+missing = [p for p in sorted(set(re.findall(r'\(((?:benchmarks|evals)/results/[^)]+)\)', _bench)))
+           if p not in tracked and not (p.endswith('/') and os.path.isdir(p))]
+ok(not missing, "every benchmark/eval result BENCHMARKS.md links to is tracked in git"
    + (f" — untracked: {missing}" if missing else ""))
 
 ok(not conflicts, "RESEARCH per-tool tiers agree with registry.yaml"

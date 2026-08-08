@@ -159,7 +159,7 @@ func knobsFor(client string) []string {
 // no matching detect.Dep (an external host, or one detection simply never
 // saw) and no audit finding for it produces no candidates — not a
 // fabricated one.
-func buildCandidates(f config.Fault, deps []detect.Dep, auditFindings []doctor.Finding, lang string) []verdict.Candidate {
+func buildCandidates(f config.Fault, deps []detect.Dep, auditFindings []doctor.Finding, lang, sut string) []verdict.Candidate {
 	source := manifestFor(lang)
 	seen := map[string]bool{}
 	var candidates []verdict.Candidate
@@ -191,12 +191,25 @@ func buildCandidates(f config.Fault, deps []detect.Dep, auditFindings []doctor.F
 		// worth trying against the audit.
 		depName = hostnameOf(f.Target)
 	}
-	for _, c := range candidatesFromAudit(depName, auditFindings, source) {
-		if seen[c.Library] {
-			continue
+	keys := []string{depName}
+	// TBD-10 attributes a standard-library client finding to the SUT
+	// service whose source contains it — not to a dependency, because
+	// R-AUD-5 cannot tell from source which host that client calls. Keying
+	// the join on the fault target alone therefore never matched those
+	// findings, and the knob `doctor` names on the same repo never reached
+	// a verdict. The SUT is a second key, not a wildcard: a finding
+	// attributed to any other service still does not join.
+	if sut != "" && sut != depName {
+		keys = append(keys, sut)
+	}
+	for _, key := range keys {
+		for _, c := range candidatesFromAudit(key, auditFindings, source) {
+			if seen[c.Library] {
+				continue
+			}
+			seen[c.Library] = true
+			candidates = append(candidates, c)
 		}
-		seen[c.Library] = true
-		candidates = append(candidates, c)
 	}
 	return candidates
 }
@@ -458,7 +471,7 @@ func candidatesFromAudit(depName string, auditFindings []doctor.Finding, source 
 // buildCandidatesFromDetectedDeps's doc comment for why that was the E1
 // gap): every detected client is offered instead, labeled as the plausible
 // set rather than a single attributed cause.
-func attribute(f *verdict.Finding, faults []config.Fault, deps []detect.Dep, auditFindings []doctor.Finding, lang string) {
+func attribute(f *verdict.Finding, faults []config.Fault, deps []detect.Dep, auditFindings []doctor.Finding, lang, sut string) {
 	if len(faults) == 1 {
 		c := faults[0]
 		f.Cause = &verdict.Cause{
@@ -473,7 +486,7 @@ func attribute(f *verdict.Finding, faults []config.Fault, deps []detect.Dep, aud
 		return
 	}
 	for _, fault := range faults {
-		f.Candidates = append(f.Candidates, buildCandidates(fault, deps, auditFindings, lang)...)
+		f.Candidates = append(f.Candidates, buildCandidates(fault, deps, auditFindings, lang, sut)...)
 	}
 }
 
@@ -533,7 +546,7 @@ func evaluateThresholds(metrics map[string]any, faults []config.Fault, sys detec
 					Observed:  observed,
 				},
 			}
-			attribute(&finding, faults, sys.Deps, auditFindings, sys.Lang)
+			attribute(&finding, faults, sys.Deps, auditFindings, sys.Lang, sys.SUT)
 			// R-VER-13/R-VER-14: a real causal chain, and the `caused`
 			// confidence it earns, when (and only when) spans covering the
 			// fault target can actually be read.
@@ -582,7 +595,7 @@ func evaluatePromqlAsserts(asserts []config.AssertEntry, querier PromQuerier, fa
 			Confidence: confidenceFor(len(faults)),
 			Broke:      verdict.Broke{Assertion: assertion, Observed: observed},
 		}
-		attribute(&finding, faults, sys.Deps, auditFindings, sys.Lang)
+		attribute(&finding, faults, sys.Deps, auditFindings, sys.Lang, sys.SUT)
 		applyTraceChain(&finding, sys)
 		findings = append(findings, finding)
 	}

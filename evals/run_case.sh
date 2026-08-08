@@ -142,16 +142,51 @@ else
   done
 fi
 
-# The launch gate: case 8 (the control) MUST produce zero findings.
+# The launch gate: case 8 (the control) MUST actually run and produce zero
+# findings.
+#
+# "Zero findings" alone is not the gate, and used to be: an aborted run has
+# zero findings because it never measured anything, so a corpus that failed
+# to start at all printed "OK: case 8 produced 0 findings" and exited 0.
+# That is the same false green E1 exists to detect, in the harness that
+# detects it. A missing case8 line passed just as silently.
+#
+# So the control must be status=pass, and every other case must have
+# produced a readable verdict — an all-aborted corpus is a harness failure,
+# never evidence.
 gate_rc=0
+
 case8_line="$(grep '^case8' "$RESULTS_LINE_FILE" | tail -1)"
-if [ -n "$case8_line" ]; then
+if [ -z "$case8_line" ]; then
+  echo "FAIL: no case8 result at all -- the control never ran, so nothing was proven" >&2
+  gate_rc=1
+else
+  case8_status="$(echo "$case8_line" | cut -d: -f2)"
   case8_findings="$(echo "$case8_line" | cut -d: -f3)"
-  if [ "$case8_findings" != "0" ]; then
+  if [ "$case8_status" != "pass" ]; then
+    echo "FAIL: case 8 (control) status=$case8_status -- a control that did not run clean cannot certify anything" >&2
+    gate_rc=1
+  elif [ "$case8_findings" != "0" ]; then
     echo "FAIL: case 8 (control) produced $case8_findings finding(s) -- E1's launch gate requires zero" >&2
     gate_rc=1
   else
-    echo "OK: case 8 (control) produced 0 findings"
+    echo "OK: case 8 (control) ran clean and produced 0 findings"
+  fi
+fi
+
+# Only meaningful for a whole-corpus run; a single-case invocation names its
+# own case and is not expected to cover the rest.
+if [ $# -eq 0 ]; then
+  # Only "<case>:<status>:<findings>" lines are results. The file also
+  # carries tee'd progress lines ("==> case1", "    status=..."), so a bare
+  # line count reported 24 for an 8-case corpus.
+  results="$(grep -E '^case[0-9]+[^:]*:[a-z?]+:' "$RESULTS_LINE_FILE" || true)"
+  total="$(printf '%s\n' "$results" | grep -c . || true)"
+  unusable="$(printf '%s\n' "$results" | grep -cE ':(aborted|error|unreadable|\?)$|:(aborted|error|unreadable|\?):' || true)"
+  echo "corpus: $total case(s), $unusable did not produce a usable verdict"
+  if [ "$unusable" -gt 0 ]; then
+    echo "FAIL: $unusable case(s) aborted or were unreadable -- these are harness/environment failures, not results, and must not be scored or published" >&2
+    gate_rc=1
   fi
 fi
 
