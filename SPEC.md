@@ -652,8 +652,8 @@ with an install hint in the manner of **R-CLI-5**, alongside the generated comma
 correct on a machine that has not installed keploy yet.
 
 *(behaviour proposed by the implementer and specified before citation, per R-PROC-2; the keploy
-registry entry named `--engine` with nothing behind it — see TBD-13 for what this environment could
-not verify)*
+registry entry named `--engine` with nothing behind it — see TBD-13 for the end-to-end run that
+confirmed the generated command records and replays)*
 
 **R-CLI-13** *(proposed)* — A cassette entry **MUST** carry the absolute call and return instants of
 the exchange as `call_ns` and `return_ns`: integer nanoseconds on a single monotonic timeline whose
@@ -1140,18 +1140,39 @@ nothing to suggest, and only the second is honest.
   Setting that one constant to the first tag, and confirming the published URL resolves, is all that
   remains.
 
-- **TBD-13** — Whether the keploy handoff `capture -engine keploy` generates (R-CLI-12) actually
-  records a session end to end. keploy 3.6.11's flags, its `keploy config --generate` output and
-  its acceptance of a partial `keploy.yml` were verified against the real binary; the recording
-  itself was not. The generated command *was* run against a real two-service compose stack: as an
-  unprivileged user it stops in keploy's eBPF setup (`/proc/sys/kernel/perf_event_paranoid`
-  permission denied); as root it gets past that, starts keploy's agent container beside the stack
-  and creates a container named exactly the `container_name:` we derived `--container-name` from —
-  then dies on Docker Desktop file sharing refusing keploy's own `./keploy` output mount, for every
-  path tried. Both stops are this machine's configuration, not the generated command. Resolves when
-  the handoff is exercised on a host with root and an unrestricted Docker bind-mount policy. Until
-  then the generated command is stated as generated, never as run — which is exactly what
-  `delegate` tier (R-SCOPE-3) promises and all it promises.
+- ~~**TBD-13**~~ — **RESOLVED 2026-08-09: it records, and the earlier blocker was a working
+  directory, not a limit of keploy's or ours.** Whether the keploy handoff `capture -engine keploy`
+  generates (R-CLI-12) actually records a session end to end. It does. Both generated commands were
+  run verbatim, as root, against a real two-service compose stack — a built `api`
+  (`container_name: kpdemo-api`, `8080:8080`) whose `/work` makes an outbound HTTP call to an
+  `nginx` service `backend`, from which `PlanKeploy` derived SUT and `--container-name` itself.
+  `keploy record` (3.6.11) hooked ingress on port 8080 and turned three real curl requests into
+  four `kind: Http` testcases under `keploy/test-set-0/tests/` plus a `mocks.yaml` of four mocks —
+  two DNS and two HTTP, the latter being the `api`→`backend` dependency call. `keploy test` then
+  replayed all four against those mocks: exit 0, 4 passed / 0 failed, and a
+  `keploy/reports/test-run-0/test-set-0-report.yaml` with `status: PASSED`. So the testcases and
+  the auto-mocks are real recorded traffic, and the `./keploy/` layout `KeployHandoff` describes is
+  the layout keploy writes.
+
+  The previous stop — `mounts denied: the path <cwd>/keploy is not shared from the host` — was
+  neither keploy's limit nor ours nor even really a restriction: this host runs Docker Desktop,
+  whose `FilesharingDirectories` lists `/mnt/ssd`, and bind mounts are refused *only* for a working
+  directory outside a shared root (confirmed both ways: the same one-line `docker run -v` mount
+  succeeds under `/mnt/ssd` and fails under `/tmp` with that exact message). Run from a shared
+  root, keploy's own output mount works. Nothing in the generated command had to change. The one
+  genuine environmental requirement that remains is root: unprivileged, record still stops in
+  keploy's eBPF setup at `open /proc/sys/kernel/perf_event_paranoid: permission denied`.
+
+  One defect in what we generate was found *by* this run and fixed: `keploy test` waits its own
+  fixed `-d/--delay` (default 5s) before the first replayed request, a different flag from
+  `--build-delay`, and the handoff's notes named only the latter. At the default, 3 of the 4
+  correctly recorded cases failed on connection refused; the same recording passed 4/4 at
+  `--delay 25`. The notes now state that wait, and its `--health-url` alternative, so a user does
+  not read a replay-timing failure as their application's fault.
+
+  None of this changes what `capture -engine keploy` *does*: `delegate` tier (R-SCOPE-3) still
+  means TortureU generates and hands off, and the CLI still states the command as generated rather
+  than as run. What is now settled is that the generated command is one that works.
 
 - **TBD-12** — How `--db-load` (R-EXE-26) and `--fuzz` (R-EXE-27) reach a SUT or database that
   **R-DC2-3** has put on an `internal: true` network. Both drive a real third-party binary as a

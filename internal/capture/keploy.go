@@ -2,7 +2,8 @@ package capture
 
 // keploy.go is the `capture -engine keploy` delegate handoff (R-CLI-12).
 //
-// VERIFICATION STATUS (this file's keploy facts, checked 2026-08-08):
+// VERIFICATION STATUS (this file's keploy facts, checked 2026-08-08,
+// end-to-end run added 2026-08-09):
 //
 //	VERIFIED against the real keploy binary v3.6.11, downloaded from
 //	https://github.com/keploy/keploy/releases/latest/download/keploy_linux_amd64.tar.gz
@@ -21,24 +22,42 @@ package capture
 //	    (that error IS produced when the file is absent — control run).
 //	    So the fragment this file emits is a usable config, not a guess.
 //
-//	PARTLY VERIFIED — the generated command was RUN against a real
-//	two-service compose stack (a built `api` with `container_name:
-//	kpdemo-api`, plus a redis dependency) on this host:
-//	  - as an unprivileged user it stops at "failed setting up the
-//	    environment: open /proc/sys/kernel/perf_event_paranoid: permission
-//	    denied" — keploy's eBPF setup needs root;
-//	  - as root it got past eBPF setup, wrote its own temporary compose
-//	    file, started its `keploy-v3-*` agent container beside the stack,
-//	    and created a container named exactly `kpdemo-api` — i.e. the
-//	    --container-name this file derives from `container_name:` is the
-//	    coupling keploy actually uses.
+//	VERIFIED END TO END (closes TBD-13) — the RecordCommand and
+//	TestCommand this file generates were run verbatim, as root, against a
+//	real two-service compose stack: a built `api` (python, `build:`,
+//	`container_name: kpdemo-api`, `8080:8080`) whose GET /work makes an
+//	outbound HTTP call to an `nginx` service `backend`. `PlanKeploy`
+//	detected SUT `api` and container `kpdemo-api` from that file, and:
+//	  - `keploy record -c "docker compose -f <abs> up" --container-name
+//	    kpdemo-api` started keploy's `keploy-v3-*` agent, brought the stack
+//	    up, hooked ingress ("Started ingress forwarding {orig_port: 8080}")
+//	    and, from three real curl requests (/health, /work?id=1,
+//	    /work?id=2), wrote under <cwd>/keploy/ :
+//	      test-set-0/tests/{get-health-1,get-health-2,get-work-1,
+//	      get-work-2}.yaml — kind: Http, carrying the real method, URL,
+//	      headers, status and response bodies; and
+//	      test-set-0/mocks.yaml — 4 mocks, 2 kind: DNS and 2 kind: Http,
+//	      the latter being the api->backend GET /data.json dependency call.
+//	    So both the testcases and the auto-mocks are real recorded traffic.
+//	  - `keploy test -c "..." --container-name kpdemo-api --delay 25`
+//	    replayed all four against those mocks: exit 0, "Total test passed:
+//	    4 / failed: 0", and keploy/reports/test-run-0/test-set-0-report.yaml
+//	    with `status: PASSED`, `success: 4`. That is the `reports/` output
+//	    KeployHandoff promises.
+//	  - as an unprivileged user record still stops at "failed setting up
+//	    the environment: open /proc/sys/kernel/perf_event_paranoid:
+//	    permission denied" — keploy's eBPF setup needs root. Unchanged.
 //
-//	NOT VERIFIED: that a session is recorded end to end and testcases and
-//	mocks are written. On this host the run then dies at
-//	"mounts denied: the path <cwd>/keploy is not shared from the host" —
-//	Docker Desktop file sharing refuses the output mount keploy needs, for
-//	every path tried. That is this machine's Docker configuration, not the
-//	generated command. Tracked as SPEC TBD-13.
+//	The earlier "mounts denied: the path <cwd>/keploy is not shared from
+//	the host" was NOT a keploy or TortureU limit: this host runs Docker
+//	Desktop, whose FilesharingDirectories lists /mnt/ssd, and keploy's
+//	output bind mount is refused only for a working directory outside
+//	those. Run from a directory under a shared root it mounts fine. Nothing
+//	in the generated command needed to change.
+//
+//	The --delay note in KeployHandoff comes from this run: at keploy test's
+//	default 5s delay, 3 of the 4 correctly recorded cases failed on
+//	connection refused; the same recording passed 4/4 at --delay 25.
 //
 // Nothing here runs keploy. `delegate` tier (R-SCOPE-3) means we generate
 // the config and hand off; TortureU does not drive keploy on its clock and
@@ -225,6 +244,11 @@ func KeployHandoff(plan KeployPlan) string {
 	b.WriteString("\nnotes:\n")
 	b.WriteString("  - keploy's cassettes are its own; they are not TortureU cassettes and\n")
 	b.WriteString("    `tortureu replay` does not read them. -engine proxy is what writes those.\n")
-	b.WriteString("  - if the image build takes longer than 30s, raise --build-delay.\n")
+	b.WriteString("  - if the image build takes longer than 30s, raise --build-delay (both commands).\n")
+	b.WriteString("  - `keploy test` additionally waits a fixed -d/--delay (default 5s) after the\n")
+	b.WriteString("    stack is up before it fires the first replayed request; --build-delay does\n")
+	b.WriteString("    not cover that wait. If your application accepts connections later than\n")
+	b.WriteString("    that, raise -d, or give keploy a --health-url it can poll instead —\n")
+	b.WriteString("    otherwise correctly recorded cases fail on connection refused.\n")
 	return b.String()
 }

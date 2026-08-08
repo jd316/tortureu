@@ -113,3 +113,36 @@ func TestKeployInstallHint(t *testing.T) {
 		t.Errorf("KeployInstallHint = %q, want the official install source", KeployInstallHint)
 	}
 }
+
+// spec: R-CLI-12 (proposed)
+//
+// The handoff prints a record command and a test command, and its notes
+// must cover the timing flag each one actually needs. They are different
+// flags: `keploy record` has --build-delay (default 30s) and no --delay;
+// `keploy test` has BOTH --build-delay and its own -d/--delay (default
+// 5s), the fixed wait before the first replayed request. Verified against
+// keploy 3.6.11 `record --help` / `test --help`, and observed: the
+// generated test command failed 3 of 4 recorded cases at the default
+// delay and passed 4 of 4 at --delay 25 on the same recording. A note
+// naming only --build-delay therefore leaves the user reading real
+// replay failures as their application's fault.
+func TestKeployHandoffNotesTestDelay(t *testing.T) {
+	path := writeCompose(t, composeWithContainerName)
+	plan, err := PlanKeploy(path)
+	if err != nil {
+		t.Fatalf("PlanKeploy: %v", err)
+	}
+	out := KeployHandoff(plan)
+
+	if !strings.Contains(out, "--build-delay") {
+		t.Errorf("handoff does not mention --build-delay for the record command:\n%s", out)
+	}
+	if !strings.Contains(out, "--delay") || !strings.Contains(out, "keploy test") {
+		t.Errorf("handoff does not mention `keploy test`'s own --delay:\n%s", out)
+	}
+	// Naming the flag is not enough: --build-delay contains the substring
+	// "-delay", so the note must state the default the user is up against.
+	if !strings.Contains(out, "5s") {
+		t.Errorf("handoff does not state `keploy test`'s 5s default delay:\n%s", out)
+	}
+}
