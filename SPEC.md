@@ -421,6 +421,20 @@ it is a presentation format with no stability guarantee.
 
 **R-CLI-2** — Every verb **MUST** be listed in `registry.yaml` as the `how:` of at least one tool.
 
+**R-CLI-5** — `doctor` **MUST** report whether the tools a run needs (`k6`, `docker`,
+`docker compose`) are present on this machine, and `init` **MUST** warn about any that are missing
+without failing — writing a config is still useful on a machine that cannot yet run.
+
+Presence is what can be checked, so presence is what is claimed: a found binary is reported as
+found, never as working. Missing entries **MUST** carry an install hint.
+
+Without this the first failure arrives late: a user runs `init`, edits a config, runs `run`, and
+only then learns a prerequisite was absent the whole time. We do not bundle k6, so "k6 not on
+PATH" is the most likely first-run outcome for a new user, and for an audience whose stated
+barrier is fear of breaking things, a late failure after two steps of setup is where they give up.
+*(behaviour shipped in Task 8 and specified after the fact — the Task 8 implementer correctly
+escalated that no requirement covered it rather than inventing one)*
+
 **R-CLI-4** — `init` **MUST** write a `torture.yaml` that `run` accepts, including a minimal
 starter `load:` and `assert:` clearly marked as a starting point to edit.
 
