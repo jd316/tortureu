@@ -659,6 +659,20 @@ escalated)*
 
 **R-MCP-4** — `propose_experiments` **MUST** return `torture.yaml` fragments, not prose.
 
+**R-MCP-7** — The MCP surface **MUST** be reachable over a transport an assistant can actually
+connect to: newline-delimited JSON-RPC 2.0 on stdio, supporting `initialize`, `tools/list` and
+`tools/call`. Every failure — parse error, unknown method, unknown tool, bad arguments, tool error
+— **MUST** return a JSON-RPC error rather than panicking or closing the stream.
+
+`run_experiment` executes a real run and can take minutes. The server processes one request at a
+time and does **not** implement a progress protocol, so a long call blocks the loop until it
+completes. That **MUST** be documented on the server and in the tool's own description, so the
+behaviour reads as expected rather than hung — an assistant that cannot tell "working" from
+"wedged" will abandon the call and retry, which starts a second Docker stack.
+
+*(behaviour shipped in Task 9b, specified after the fact — the implementer correctly escalated
+that no requirement governed the transport rather than inventing one)*
+
 **R-MCP-6** — `describe_system()` **MUST** include registry coverage and tier-labelled suggestions
 for the detected system, so an agent reaches the `delegate` and `know` tiers through the MCP
 surface, not only a human through `doctor`.
