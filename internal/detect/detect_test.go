@@ -232,6 +232,35 @@ services:
 	}
 }
 
+// spec: R-DET-6
+// A repo with no observability infrastructure at all still reports
+// `correlated`, never "" and never "none" (TBD-6): TortureU schedules the
+// faults and k6 measures the breach, so single-fault time-window
+// attribution holds with no cooperation from the target. An empty value
+// would JSON-omit itself and render as a blank field, telling the repos
+// that most need to hear about their confidence ceiling nothing at all.
+func TestNoObservabilityInfraStillReportsCorrelatedConfidence(t *testing.T) {
+	dir := t.TempDir()
+	compose := writeFile(t, dir, "docker-compose.yml", `
+services:
+  api:
+    build: .
+  db:
+    image: postgres:16
+`)
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if sys.Obs.Traces || sys.Obs.Metrics || sys.Obs.Logs {
+		t.Fatalf("Obs = %+v, want no observability infrastructure detected", sys.Obs)
+	}
+	if sys.Obs.MaxConfidence != "correlated" {
+		t.Errorf("MaxConfidence = %q, want correlated (we schedule the faults — D-4)", sys.Obs.MaxConfidence)
+	}
+}
+
 // spec: R-DET-4
 func TestDependencyAddressUsesDeclaredPortNotDefaultTable(t *testing.T) {
 	dir := t.TempDir()

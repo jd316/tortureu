@@ -25,7 +25,7 @@ type Obs struct {
 	Traces        bool
 	Metrics       bool
 	Logs          bool
-	MaxConfidence string // "caused" if Traces, else "correlated"
+	MaxConfidence string // "caused" if Traces, else "correlated" (never "" — R-DET-6, TBD-6)
 }
 
 // Fact is a tri-state predicate value (R-COV-6). A plain bool can only say
@@ -61,10 +61,11 @@ func (f Fact) String() string {
 //
 // OpenAPI/Proto/K8s stay plain bool: they are pure file-presence checks that
 // always run regardless of which manifest (if any) is present, so they are
-// never in an undetermined state. AWS/Azure/LacksOtel depend on parsing a
-// manifest whose format might not be supported (R-DET-14) — when the only
-// manifest present is unsupported (e.g. Gemfile, pom.xml), those three MUST
-// report FactUnknown, never FactFalse (R-COV-6).
+// never in an undetermined state. AWS/Azure/LacksOtel depend on a manifest
+// whose declared dependencies might not all be readable (R-DET-14) — when
+// the manifest points at sources outside what R-DET-1 permits reading (a
+// Maven aggregator pom's modules), those three MUST report FactUnknown,
+// never FactFalse (R-COV-6).
 type Coverage struct {
 	OpenAPI   bool // spec:openapi — an OpenAPI/Swagger document exists
 	Proto     bool // spec:proto — .proto files exist

@@ -172,10 +172,17 @@ func Detect(composePath string) (*System, error) {
 		sys.Deps = append(sys.Deps, dep)
 	}
 
+	// R-DET-6 / TBD-6: the floor is "correlated", never "" and never a
+	// distinct "none". TortureU schedules the faults and k6 measures the
+	// breach, so D-4's single-fault time-window attribution holds with no
+	// cooperation from the target; traces are what raise the ceiling to
+	// "caused". An empty value would JSON-omit itself (max_confidence is
+	// omitempty in both internal/mcp and internal/verdict) and render as a
+	// blank field, telling the repos that most need to hear about their
+	// confidence ceiling nothing at all.
+	sys.Obs.MaxConfidence = "correlated"
 	if sys.Obs.Traces {
 		sys.Obs.MaxConfidence = "caused"
-	} else if sys.Obs.Metrics || sys.Obs.Logs {
-		sys.Obs.MaxConfidence = "correlated"
 	}
 
 	// R-DET-4: a host named in a service's environment: or env_file that

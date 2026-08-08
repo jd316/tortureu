@@ -205,53 +205,63 @@ func TestCoverageFactsAllFalseForPlainRepoWithNoIndicators(t *testing.T) {
 
 // spec: R-COV-6
 // A predicate the system genuinely cannot evaluate MUST be reported as
-// unevaluable, never silently treated as false. When the only manifest
-// present is one R-DET-14 doesn't parse (Gemfile, pom.xml), AWS/Azure/
-// lacks:otel are undetermined, not verified-false — a false default on
-// lacks:otel in particular would have TortureU suggest OTel setup to a
-// team whose (unparsed) Gemfile already has an OTel client.
-func TestUnsupportedManifestOnlyReportsFactsAsUndeterminedNotFalse(t *testing.T) {
+// unevaluable, never silently treated as false. Since TBD-7 closed, every
+// R-DET-1 manifest parses, so the surviving case is a manifest whose
+// declared dependencies live somewhere we are not allowed to read: a Maven
+// aggregator pom, whose modules are outside any compose-declared directory.
+// A false default on lacks:otel here would have TortureU suggest OTel setup
+// to a team whose (unread) module poms already depend on it.
+func TestUnreadableManifestDependenciesReportFactsAsUndeterminedNotFalse(t *testing.T) {
 	dir := t.TempDir()
 	compose := plainCompose(t, dir)
-	writeFile(t, dir, "Gemfile", `
-source "https://rubygems.org"
-gem "aws-sdk-s3"
-gem "opentelemetry-sdk"
-`)
+	writeFile(t, dir, "pom.xml", `<project>
+  <artifactId>platform</artifactId>
+  <packaging>pom</packaging>
+  <modules>
+    <module>checkout-api</module>
+  </modules>
+</project>`)
 
 	sys, err := detect.Detect(compose)
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
 	}
 	if sys.Coverage.AWS != detect.FactUnknown {
-		t.Errorf("Coverage.AWS = %v, want unknown (only manifest is an unsupported Gemfile)", sys.Coverage.AWS)
+		t.Errorf("Coverage.AWS = %v, want unknown (module poms were not read)", sys.Coverage.AWS)
 	}
 	if sys.Coverage.Azure != detect.FactUnknown {
-		t.Errorf("Coverage.Azure = %v, want unknown (only manifest is an unsupported Gemfile)", sys.Coverage.Azure)
+		t.Errorf("Coverage.Azure = %v, want unknown (module poms were not read)", sys.Coverage.Azure)
 	}
 	if sys.Coverage.LacksOtel != detect.FactUnknown {
 		t.Errorf("Coverage.LacksOtel = %v, want unknown — a false default would wrongly suggest OTel setup to a team that already has it", sys.Coverage.LacksOtel)
 	}
 }
 
-// spec: R-COV-6
-func TestUnsupportedPomXMLManifestOnlyReportsFactsAsUndeterminedNotFalse(t *testing.T) {
+// spec: R-COV-5
+// The mirror image: a Gemfile now parses, so its facts are verified, not
+// undetermined — including the OTel client that used to be invisible.
+func TestGemfileManifestDecidesAwsAndOtelFacts(t *testing.T) {
 	dir := t.TempDir()
 	compose := plainCompose(t, dir)
-	writeFile(t, dir, "pom.xml", `<project></project>`)
+	writeFile(t, dir, "Gemfile", `
+source "https://rubygems.org"
+gem "aws-sdk-s3"
+gem "opentelemetry-sdk"
+gem "opentelemetry-instrumentation-all"
+`)
 
 	sys, err := detect.Detect(compose)
 	if err != nil {
 		t.Fatalf("Detect: %v", err)
 	}
-	if sys.Coverage.AWS != detect.FactUnknown {
-		t.Errorf("Coverage.AWS = %v, want unknown (only manifest is an unsupported pom.xml)", sys.Coverage.AWS)
+	if sys.Coverage.AWS != detect.FactTrue {
+		t.Errorf("Coverage.AWS = %v, want true (aws-sdk-s3 declared)", sys.Coverage.AWS)
 	}
-	if sys.Coverage.Azure != detect.FactUnknown {
-		t.Errorf("Coverage.Azure = %v, want unknown (only manifest is an unsupported pom.xml)", sys.Coverage.Azure)
+	if sys.Coverage.Azure != detect.FactFalse {
+		t.Errorf("Coverage.Azure = %v, want false (Gemfile parsed, no Azure SDK in it)", sys.Coverage.Azure)
 	}
-	if sys.Coverage.LacksOtel != detect.FactUnknown {
-		t.Errorf("Coverage.LacksOtel = %v, want unknown (only manifest is an unsupported pom.xml)", sys.Coverage.LacksOtel)
+	if sys.Coverage.LacksOtel != detect.FactFalse {
+		t.Errorf("Coverage.LacksOtel = %v, want false (opentelemetry-sdk is declared)", sys.Coverage.LacksOtel)
 	}
 }
 

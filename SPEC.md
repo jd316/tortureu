@@ -107,14 +107,23 @@ non-compliant.
 (`go.mod`, `package.json`, `pyproject.toml`, `Gemfile`, `pom.xml`). It **MUST NOT** perform
 general source analysis. *(D-3)*
 
-This requirement is an **upper bound on what may be read**, not an obligation to support every
-listed manifest. The v0 obligation is R-DET-14.
+This requirement is an **upper bound on what may be read**. The v0 obligation is R-DET-14, which as
+of TBD-7's resolution covers the whole list.
 
-**R-DET-14** — v0 **MUST** support `go.mod`, `package.json`, and `pyproject.toml` — the three
-ecosystems the registry's `lang:` predicates most depend on. `Gemfile` and `pom.xml` are
-**TBD-7**. An unsupported manifest that is present **MUST** be reported as a gap (R-DET-7), never
-silently ignored: a repo whose clients we cannot see yields weaker verdict candidates (D-9), and
-the user has to know that.
+**R-DET-14** — v0 **MUST** support `go.mod`, `package.json`, `pyproject.toml`, `Gemfile`
+(or `Gemfile.lock`), and `pom.xml` — every manifest R-DET-1 permits reading. *(closes TBD-7)*
+
+A manifest that is present but whose declared dependencies cannot be read **MUST** be reported as a
+gap (R-DET-7), never silently ignored, and the facts that manifest would have decided
+(`platform:aws`, `platform:azure`, `lacks:otel`) **MUST** report as undetermined rather than false
+(R-COV-6): a repo whose clients we cannot see yields weaker verdict candidates (D-9), and the user
+has to know that. The live instance of this is a Maven **aggregator** `pom.xml`, whose dependencies
+live in module `pom.xml`s outside any compose-declared directory.
+
+Only **direct** dependencies count as clients. Ruby reads the `Gemfile`'s `gem` declarations
+(falling back to `Gemfile.lock`'s `DEPENDENCIES` section, which is also direct-only); the
+lockfile's resolved `GEM specs:` closure **MUST NOT** be read as clients, since a gem pulled in
+transitively by a framework is not evidence that this service talks to that dependency.
 
 **R-DET-2** — A compose service with an `image:` and no `build:` **MUST** be classified as a
 dependency.
@@ -136,6 +145,11 @@ candidates. *(D-9)*
 **R-DET-6** — Observability coverage (traces / metrics / logs present) **MUST** be detected and
 reported, along with the maximum verdict confidence it permits. *(D-4)*
 
+The reported maximum **MUST NOT** be empty: a repo with no observability infrastructure at all
+reports `correlated`, not `""` and not `none`. TortureU schedules the faults and k6 measures the
+breach, so single-fault time-window attribution holds with zero cooperation from the target (D-4);
+traces are what raise the ceiling to `caused`. *(closes TBD-6)*
+
 **R-DET-7** — `describe_system()` **MUST** return gaps explicitly. Silence about an unknown is
 non-compliant.
 
@@ -150,31 +164,31 @@ Source column says which **R-DET-1** input yields the type — `image` (compose 
 
 | Type | Source | Recognized by |
 |---|---|---|
-| `postgresql` | image, lockfile | `postgres*` · pgx, pq, psycopg, node-postgres |
-| `mysql` | image, lockfile | `mysql*`, `mariadb*` · go-sql-driver, mysql2, PyMySQL |
-| `redis` | image, lockfile | `redis*`, `valkey*` · go-redis, ioredis, redis-py |
-| `mongodb` | image, lockfile | `mongo*` · mongo-driver, mongoose, pymongo |
-| `kafka` | image, lockfile | `*kafka*`, `redpanda*` · sarama, kafkajs, confluent |
-| `rabbitmq` | image, lockfile | `rabbitmq*` · amqp091, amqplib, pika |
+| `postgresql` | image, lockfile | `postgres*` · pgx, pq, psycopg, node-postgres, pg (gem), org.postgresql:postgresql |
+| `mysql` | image, lockfile | `mysql*`, `mariadb*` · go-sql-driver, mysql2, PyMySQL, mysql-connector-j |
+| `redis` | image, lockfile | `redis*`, `valkey*` · go-redis, ioredis, redis-py, redis (gem), jedis, lettuce |
+| `mongodb` | image, lockfile | `mongo*` · mongo-driver, mongoose, pymongo, mongoid, mongodb-driver |
+| `kafka` | image, lockfile | `*kafka*`, `redpanda*` · sarama, kafkajs, confluent, ruby-kafka, kafka-clients, spring-kafka |
+| `rabbitmq` | image, lockfile | `rabbitmq*` · amqp091, amqplib, pika, bunny, amqp-client, spring-rabbit |
 | `nats` | image, lockfile | `nats*` · nats.go, nats.js |
-| `elasticsearch` | image, lockfile | `elasticsearch*`, `opensearch*` |
-| `cassandra` | image, lockfile | `cassandra*`, `scylla*` · gocql |
+| `elasticsearch` | image, lockfile | `elasticsearch*`, `opensearch*` · elasticsearch (gem), elasticsearch-java |
+| `cassandra` | image, lockfile | `cassandra*`, `scylla*` · gocql, cassandra-driver, java-driver-core |
 | `cockroach` | image | `cockroachdb*` |
-| `etcd` | image, lockfile | `*etcd*` · etcd/client |
+| `etcd` | image, lockfile | `*etcd*` · etcd/client, jetcd |
 | `consul` | image, lockfile | `consul*` |
 | `zookeeper` | image | `zookeeper*` |
 | `oracle` | image, lockfile | `*oracle*`, `*oracledb*` |
-| `minio` / `s3` | image, lockfile | `minio*` · aws-sdk s3, boto3 |
-| `mqtt` | image, lockfile | `mosquitto*`, `emqx*` · paho |
+| `minio` / `s3` | image, lockfile | `minio*` · aws-sdk s3, boto3, aws-sdk-s3 (gem), awssdk:s3 |
+| `mqtt` | image, lockfile | `mosquitto*`, `emqx*` · paho (incl. org.eclipse.paho), mqtt (gem) |
 | `aws` | image, lockfile | `localstack*` · aws-sdk, boto3 |
-| `sqs` | lockfile | aws-sdk sqs client |
-| `dynamodb` | lockfile | aws-sdk dynamodb client |
-| `snowflake` | lockfile | snowflake-connector |
+| `sqs` | lockfile | aws-sdk sqs client (incl. aws-sdk-sqs gem, awssdk:sqs) |
+| `dynamodb` | lockfile | aws-sdk dynamodb client (incl. aws-sdk-dynamodb gem, awssdk:dynamodb) |
+| `snowflake` | lockfile | snowflake-connector, snowflake-jdbc |
 | `websocket` | lockfile | gorilla/websocket, ws, websockets |
 | `smtp` | image, lockfile | `mailhog*`, `mailpit*` · net/smtp, nodemailer |
-| `jms` | lockfile | javax.jms, jakarta.jms |
-| `ldap` | lockfile | go-ldap, ldap3, spring-ldap |
-| `soap` | lockfile | spring-ws, zeep, soap |
+| `jms` | lockfile | javax.jms, jakarta.jms, spring-jms |
+| `ldap` | lockfile | go-ldap, ldap3, spring-ldap, net-ldap |
+| `soap` | lockfile | spring-ws, zeep, soap, savon |
 
 **R-DET-12** — Observability infrastructure **MUST** be recognized as its own classification: it is
 neither a dependency (the SUT does not need it to serve requests) nor a gap (we know exactly what it
@@ -843,10 +857,34 @@ nothing to suggest, and only the second is honest.
 - ~~**TBD-2**~~ — **RESOLVED**: `emit` prints to stdout by default (R-CLI-8), so its output composes with a shell redirect rather than requiring a path argument.
 - **TBD-5** — Whether to adopt the `grafana/k6-summary` JSON Schema once it leaves
   work-in-progress, replacing our own `handleSummary()` shape.
-- **TBD-6** — `Obs.MaxConfidence` when a repo has **no** observability infrastructure at all.
-  Currently `""`. Candidates: `"correlated"` (we still schedule the faults, so time-window
-  attribution holds — see D-4), or a distinct `"none"`. Raised by the Task 1 implementer.
-- **TBD-7** — `Gemfile` and `pom.xml` manifest support (deferred from R-DET-14).
+- ~~**TBD-6**~~ — **RESOLVED 2026-08-08: `"correlated"`.** The candidates were `"correlated"`, a
+  distinct `"none"`, and the `""` the code actually shipped. The deciding evidence is what the run
+  already does: `internal/run`'s `confidenceFor` derives a finding's confidence from the number of
+  faults *TortureU itself scheduled* and from k6's own end-of-run summary — it never consults
+  `Obs`. A repo with no Jaeger and no Prometheus still yields `correlated` findings today, because
+  both halves of D-4's `correlated` row (a breach observed, exactly one fault active) come from
+  *our* side of the wire: we own the independent variable, and k6 measures the response. The
+  target's telemetry is what buys `caused`, and nothing else.
+
+  So `"none"` would have been false — a ceiling the tool then routinely exceeds — and `""` was
+  worse than false: it is the blank field that renders as nothing and JSON-omits itself
+  (`max_confidence,omitempty` in both `internal/mcp` and `internal/verdict`), so `init` silently
+  said nothing at all about confidence to exactly the repos that most needed telling. The field is
+  a **ceiling, not a promise**: `correlated` says traces are what stand between this repo and
+  `caused`; an individual finding still degrades to `ambiguous` under overlapping faults (R-VER-3).
+  Consumer check: both consumers type the field as a plain string/`Confidence` and pass it through,
+  and `"correlated"` is a value they already carry from the metrics-only path, so no consumer
+  change is required.
+- ~~**TBD-7**~~ — **RESOLVED 2026-08-08: implemented.** `Gemfile`/`Gemfile.lock` (Ruby) and
+  `pom.xml` (Maven) now parse like the other manifests, so R-DET-14's v0 set is the whole of
+  R-DET-1's list. Two details worth keeping. First, Ruby reads the **Gemfile's `gem` declarations**,
+  falling back to the lockfile's `DEPENDENCIES` section — both are direct dependencies; the
+  lockfile's `GEM specs:` block is the transitive closure, and attributing a gem Rails happened to
+  pull in as a *client of this service* would be the guess D-3 forbids. Second, a Maven
+  **aggregator** `pom.xml` (one declaring `<modules>`) is the honest gap case that survives: its
+  real dependencies live in module `pom.xml`s outside any compose-declared directory, so reading
+  the aggregator alone must report `platform:aws`/`azure`/`lacks:otel` as **undetermined**
+  (R-COV-6) and name the unread modules as a gap — never "verified absent".
 - **TBD-10** — **RESOLVED 2026-08-08.** Standard-library clients were invisible to D-9's candidate
   mechanism: candidates came from lockfile-detected clients (R-DET-5), and Go's `net/http` never
   appears in a `go.mod` require line, so no knob table could reach it. E1 measured the cost — the

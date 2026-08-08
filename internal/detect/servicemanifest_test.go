@@ -204,12 +204,11 @@ func main() {}
 	}
 }
 
-// spec: R-DET-7
-// An unsupported manifest (Gemfile, pom.xml) sitting in a service's build
-// context, with no supported manifest alongside it, MUST still surface as
-// a gap rather than silently vanish — the same rule R-DET-14 applies at
-// the project root.
-func TestUnsupportedManifestInServiceBuildContextIsReportedAsGap(t *testing.T) {
+// spec: R-DET-14
+// A Gemfile in a service's own build context is read like any other
+// manifest since TBD-7 closed, and its clients are attributed to that
+// service (R-DET-5) — not left as a gap.
+func TestGemfileInServiceBuildContextIsAttributedToThatService(t *testing.T) {
 	dir := t.TempDir()
 	compose := writeFile(t, dir, "docker-compose.yml", `
 services:
@@ -220,8 +219,56 @@ services:
 `)
 	writeFile(t, dir, "worker/Gemfile", `
 source "https://rubygems.org"
-gem "pg"
+gem "pg", "~> 1.5"
+gem "sidekiq"
 `)
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	for _, g := range sys.Gaps {
+		if contains(g, "Gemfile") {
+			t.Errorf("Gemfile in a build context still reported as a gap: %q", g)
+		}
+	}
+	found := false
+	for _, d := range sys.Deps {
+		if d.Type != "postgresql" {
+			continue
+		}
+		for _, ref := range d.ClientRefs {
+			if ref.Import == "pg" && ref.Service == "worker" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("Deps = %+v, want pg attributed to worker", sys.Deps)
+	}
+}
+
+// spec: R-DET-7
+// A manifest in a service's build context whose dependencies we are not
+// allowed to read (a Maven aggregator pom: its modules are outside every
+// compose-declared directory) MUST still surface as a gap rather than
+// silently vanish — the same rule R-DET-14 applies at the project root.
+func TestUnreadableManifestInServiceBuildContextIsReportedAsGap(t *testing.T) {
+	dir := t.TempDir()
+	compose := writeFile(t, dir, "docker-compose.yml", `
+services:
+  worker:
+    build: ./worker
+  db:
+    image: postgres:16
+`)
+	writeFile(t, dir, "worker/pom.xml", `<project>
+  <artifactId>worker-parent</artifactId>
+  <packaging>pom</packaging>
+  <modules>
+    <module>ledger-worker</module>
+  </modules>
+</project>`)
 
 	sys, err := detect.Detect(compose)
 	if err != nil {
@@ -229,11 +276,11 @@ gem "pg"
 	}
 	found := false
 	for _, g := range sys.Gaps {
-		if contains(g, "worker") && contains(g, "Gemfile") {
+		if contains(g, "worker") && contains(g, "pom.xml") {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("Gaps = %v, want one naming worker's unsupported Gemfile", sys.Gaps)
+		t.Errorf("Gaps = %v, want one naming worker's unread aggregator pom", sys.Gaps)
 	}
 }
