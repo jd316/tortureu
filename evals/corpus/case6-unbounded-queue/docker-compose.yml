@@ -1,0 +1,8 @@
+services:
+  ingest-api:
+    build: ./api
+    ports:
+      - "8080:8080"
+    # Deliberately small so sustained load OOMs the process within an
+    # eval-length run instead of merely growing RSS a benign amount.
+    mem_limit: 24m

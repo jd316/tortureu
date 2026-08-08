@@ -1,0 +1,54 @@
+version: 0
+
+target:
+  compose: ./docker-compose.yml
+  service: checkout-api
+  base_url: http://localhost:8080
+
+egress:
+  default: deny
+  hosts:
+    dep:9090: { class: internal }
+
+reset:
+  command: docker compose down -v && docker compose up -d --wait
+
+load:
+  engine: k6
+  model: arrival_rate
+  stages:
+    - phase: ramp_up
+      to: 20rps
+      over: 5s
+    - phase: peak
+      hold: 20rps
+      for: 20s
+
+  scenarios:
+    - name: checkout
+      weight: 70
+      flow:
+        - { method: GET, path: /checkout }
+    - name: health
+      weight: 30
+      flow:
+        - { method: GET, path: /health }
+
+faults:
+  - name: dep_slow
+    at: peak
+    for: 15s
+    target: dep:9090
+    inject: { latency: 3s }
+
+# The /health traffic never calls dep at all; if the SUT had a circuit
+# breaker isolating the /checkout path, /health should stay fast throughout.
+# Asserting on the aggregate is deliberate: it is the only thing k6's
+# threshold syntax can see without per-route tagging in this fixture, and a
+# breach here does not on its own distinguish "checkout got slow" from
+# "checkout got slow AND took health down with it" -- see the eval's own
+# report for how that distinction was actually checked (docker exec timing
+# health calls directly during the fault window).
+assert:
+  - http_req_duration: ["p(95)<1000"]
+  - http_req_failed:   ["rate<0.5"]

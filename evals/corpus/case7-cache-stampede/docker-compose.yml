@@ -1,0 +1,15 @@
+services:
+  catalog-api:
+    build: ./api
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_ADDR: "redis:6379"
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    # No host port publish: catalog-api reaches this over the compose
+    # network by name, and publishing 6379 risks colliding with an
+    # unrelated redis already running on this host.

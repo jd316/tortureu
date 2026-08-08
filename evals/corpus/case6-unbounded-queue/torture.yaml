@@ -1,0 +1,36 @@
+version: 0
+
+target:
+  compose: ./docker-compose.yml
+  service: ingest-api
+  base_url: http://localhost:8080
+
+egress:
+  default: deny
+  hosts: {}
+
+reset:
+  command: docker compose down -v && docker compose up -d --wait
+
+load:
+  engine: k6
+  model: arrival_rate
+  stages:
+    - phase: ramp_up
+      to: 30rps
+      over: 5s
+    - phase: peak
+      hold: 30rps
+      for: 20s
+
+  scenarios:
+    - name: ingest
+      weight: 100
+      flow:
+        - { method: POST, path: /enqueue }
+
+# No faults: -- the defect (an unbounded in-memory queue) only needs
+# sustained load against a capacity-limited container to manifest; nothing
+# is injected.
+assert:
+  - http_req_failed: ["rate<0.05"]

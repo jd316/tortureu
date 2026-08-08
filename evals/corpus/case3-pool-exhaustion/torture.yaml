@@ -1,0 +1,37 @@
+version: 0
+
+target:
+  compose: ./docker-compose.yml
+  service: orders-api
+  base_url: http://localhost:8080
+
+egress:
+  default: deny
+  hosts:
+    postgres:5432: { class: internal }
+
+reset:
+  command: docker compose down -v && docker compose up -d --wait
+
+load:
+  engine: k6
+  model: arrival_rate
+  stages:
+    - phase: ramp_up
+      to: 40rps
+      over: 5s
+    - phase: peak
+      hold: 40rps
+      for: 20s
+
+  scenarios:
+    - name: orders
+      weight: 100
+      flow:
+        - { method: GET, path: /orders }
+
+# No faults: -- the defect (MaxConns: 5 behind a load that needs far more
+# concurrency) is a static config problem, not something TortureU injects.
+assert:
+  - http_req_duration: ["p(95)<500"]
+  - http_req_failed:   ["rate<0.05"]

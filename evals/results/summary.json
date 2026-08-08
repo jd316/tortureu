@@ -1,40 +1,95 @@
 {
-  "note": "Fourth reality-check pass, after Defect C (egress.Classify union fix) landed. Case 8 (control) re-confirmed clean across a fresh 8-run batch on the corrected classification path. Case 1 hit a new compose/profile interaction (fixed in the fixture, not a TortureU defect) and then, once past that, exposed a FOURTH defect: K6Runner discards k6's --summary-export data whenever k6 exits non-zero -- which is k6's own normal, documented behavior for a genuinely crossed threshold (exit 99). The summary file itself, recovered directly from disk, shows the planted defect measured correctly (p95 ~3004ms against a 3s toxic) -- but internal/run never reads it, reporting status:error instead of the status:fail verdict that data would have produced.",
+  "note": "Fifth round. Defect D fixed (K6Runner now reads the summary regardless of k6's exit code) and the depends_on/profile compose-merge issue fixed (compose !override). Case 1 now behaves: restored depends_on in its fixture per the coordinator's note, re-ran, got a real fail verdict with a correct finding. Case 8 re-confirmed clean. Built and ran cases 2, 3, 5, 6, 7 (all detected their planted defect on the real tortureu binary). Case 4 (non-idempotent consumer) was not built this round: it requires a message broker + Kafka REST Proxy-compatible endpoint + consumer-group wiring + queuefault.BrokerApplier, a materially larger infrastructure lift than the other five cases, and was judged not to fit the remaining budget for this pass -- reported as unmeasured, not faked.",
 
-  "fixture_adjustment_case1": {
-    "what": "Removed `depends_on: [dep]` from case1's docker-compose.yml.",
-    "why_not_softening_the_defect": "This is compose-file plumbing unrelated to the planted defect (checkout-api's http.Client{} with no Timeout). It was tripped by a genuine TortureU/compose interaction, documented below, not by anything about the defect itself.",
-    "interaction_found": "internal/run's R-EXE-20 rename mechanism disables the original internal-dependency service via a compose profile that is never activated. `docker compose up` treats a profile-disabled service referenced by another service's `depends_on` as an undefined service and hard-fails validation before starting anything -- observed directly: 'service \"checkout-api\" depends on undefined service \"dep\": invalid compose project'. This would affect any real docker-compose.yml using the extremely common depends_on-on-an-internal-dependency pattern, once R-EXE-20's rename actually engages for that dependency (which, before the Defect C fix, it never did for a non-vocabulary host -- so this interaction was previously unreachable and is only now exposed). Reported as a finding; not patched (out of scope)."
+  "per_case": {
+    "case1_no_timeout": {
+      "defect": "HTTP client with no timeout",
+      "fault": "latency: 3s on dep:9090, at: peak for: 15s",
+      "status": "fail",
+      "detected": true,
+      "finding": {"assertion": "http_req_duration: p(95)<1000", "observed_ms": 3015.9},
+      "cause_fault": "dep_slow",
+      "cause_target": "dep:9090",
+      "confidence": "correlated",
+      "candidates": null,
+      "candidates_reason": "target 'dep' is a custom image outside detect's closed vocabulary, so it never becomes a detect.Dep; even if it did, clientKnobPatterns has no net/http entry (noted since round 1)."
+    },
+    "case2_retry_storm": {
+      "defect": "Retry with no cap or backoff",
+      "fault": "down: true on dep:9090, at: peak for: 15s",
+      "status": "fail",
+      "detected": true,
+      "finding": {"assertion": "http_req_failed: rate<0.5", "observed": 0.667},
+      "cause_fault": "dep_down",
+      "cause_target": "dep:9090",
+      "confidence": "correlated",
+      "candidates": null,
+      "candidates_reason": "same as case 1 (custom dep image); also the retry loop itself is hand-rolled, not a library detect could recognize even in principle."
+    },
+    "case3_pool_exhaustion": {
+      "defect": "Connection pool of 5 (pgxpool.MaxConns) behind load needing far more concurrency",
+      "fault": "none -- load-only defect, no faults: entry",
+      "status": "fail",
+      "detected": true,
+      "finding": {"assertion": "http_req_duration: p(95)<500", "observed_ms": 5001.9, "also": "http_req_failed: rate<0.05 broke at 0.34"},
+      "cause_fault": null,
+      "confidence": "ambiguous",
+      "candidates": null,
+      "candidates_reason": "STRUCTURAL: internal/run/findings.go's attribute() only ever appends candidates by iterating cfg.Faults; with zero faults declared (the correct, honest torture.yaml for a pure load-induced defect), the loop never runs, so candidates are never populated even though postgres/pgx IS in detect's vocabulary and clientKnobPatterns DOES have a 'jackc/pgx' entry (MaxConns, MinConns, ConnConfig.ConnectTimeout) that would have been exactly right. Confirmed empirically: no candidates field appears despite a real pgx dependency being present and detectable. This means D-9 candidates can never surface for the entire class of defect (3, 6, 7 in this corpus) that manifests from load alone rather than an injected fault -- which is exactly how BENCHMARKS.md describes cases 3, 6 and 7."
+    },
+    "case5_no_circuit_breaker": {
+      "defect": "No circuit breaker on the cascade path; a shared, small worker-slot pool lets a slow dependency call starve unrelated traffic",
+      "fault": "latency: 3s on dep:9090, at: peak for: 15s",
+      "status": "fail",
+      "detected": true,
+      "finding": {"assertion": "http_req_duration: p(95)<1000", "observed_ms": 11841.6},
+      "cause_fault": "dep_slow",
+      "cause_target": "dep:9090",
+      "confidence": "correlated",
+      "candidates": null,
+      "candidates_reason": "same as case 1 (custom dep image).",
+      "cascade_confirmed_live": "Curled /health (a route that calls no dependency at all) from inside the SUT's own network namespace during the fault window: 5.37s response time -- direct proof the shared worker pool, not just the /checkout path, was saturated. This is the actual case-5 signature (a slow dep taking the whole service down), not just case 1 repeated."
+    },
+    "case6_unbounded_queue": {
+      "defect": "Unbounded in-memory queue drained far slower than it fills",
+      "fault": "none -- load-only defect, sustained spike against a capacity-limited container (mem_limit: 24m)",
+      "status": "fail",
+      "detected": true,
+      "finding": {"assertion": "http_req_failed: rate<0.05", "observed": 0.171},
+      "cause_fault": null,
+      "confidence": "ambiguous",
+      "candidates": null,
+      "candidates_reason": "same structural gap as case 3 -- no fault, so attribute() never runs.",
+      "root_cause_confirmed": "docker inspect on the container after the run: OOMKilled=true, ExitCode=137. First attempt at this fixture (mem_limit 64m, un-written byte slices) did NOT trigger an OOM despite 'logically' queuing hundreds of MB, because a make([]byte, N) slice that is never written to can sit on the kernel's shared zero page and never become resident (confirmed via docker stats showing RSS far below the queued total) -- cgroup memory accounting, and the OOM killer, only see real, written pages. Fixed the fixture (fills every byte) and tightened the limit to 24m; this is a fixture-calibration fix, not a softening of the defect -- the defect (no queue cap) is unchanged."
+    },
+    "case7_cache_stampede": {
+      "defect": "Cache-aside read with a short TTL and no stampede protection",
+      "fault": "none -- load-only defect, periodic TTL boundary under sustained concurrent load",
+      "status": "fail",
+      "detected": true,
+      "finding": {"assertion": "http_req_duration: p(95)<50", "observed_ms": 100.9},
+      "cause_fault": null,
+      "confidence": "ambiguous",
+      "candidates": null,
+      "candidates_reason": "same structural gap as case 3 -- no fault, so attribute() never runs, even though redis/go-redis is a recognized dependency+client."
+    },
+    "case4_nonidempotent_consumer": {
+      "status": "not built",
+      "reason": "Requires a message broker (Kafka/Redpanda), a Kafka REST Proxy-compatible endpoint (internal/applier.BrokerApplier's actual driven interface), consumer-group semantics, and -broker-url wiring through cmd/tortureu -- materially more infrastructure than the other five cases. Judged not to fit this round's remaining budget. Recorded as unmeasured, not attempted with a shortcut that would misrepresent the result."
+    },
+    "case8_control": {
+      "status": "pass",
+      "findings": 0,
+      "note": "Re-run once this round against the fixed exit-code path, per the coordinator's instruction. Combined with the 16 clean runs across rounds 3 and 4 (8 + 8), the control has now produced zero findings in 17 consecutive runs across three different code-path states."
+    }
   },
-
-  "case8_control_repeated_runs": {
-    "runs": 8,
-    "findings_per_run": [0, 0, 0, 0, 0, 0, 0, 0],
-    "false_positive_count": 0,
-    "conclusion": "Re-confirmed clean on the corrected (unioned) classification path. Zero findings, 8/8."
-  },
-
-  "case1_no_timeout": {
-    "status_reported": "error",
-    "error_reported": "load generator failed: exit status 99",
-    "what_actually_happened": "The fault fires correctly this time (Defect B and C both hold): markers arrive, the proxy is correctly wired to the renamed dep-tortureu-backend, and the 3s latency toxic genuinely reaches the SUT's traffic. k6 itself measured this correctly and wrote a complete --summary-export file BEFORE exiting -- recovered directly from the run's temp directory: http_req_duration median 2915.6ms, p95 3004.4ms, p90 3003.5ms (unmistakably the 3-second toxic hitting the majority of requests), threshold p(95)<1000 correctly computed as crossed. But k6 exits with status 99 (its own standard, documented exit code meaning 'thresholds were crossed', not a crash), and internal/run/load.go's K6Runner treats ANY non-zero k6 exit as a load-generator failure -- `cmd.Wait()` returning an error sends the error down h.errCh unconditionally, in both host-process and container-mode paths, without ever attempting to read the summary file that k6 already wrote successfully.",
-    "conclusion": "The planted defect WAS detected by k6's own measurement, but TortureU's own process-exit handling throws the result away and reports status:error ('the tool broke') instead of status:fail ('the SUT broke') -- for precisely the case E1 exists to test: a real, correctly-measured threshold breach."
-  },
-
-  "defect_D": {
-    "title": "K6Runner discards k6's --summary-export result whenever k6 exits non-zero, including k6's own normal exit code for 'thresholds crossed' (99) -- so a genuine, correctly-detected SUT failure is reported as a tool error instead of a verdict",
-    "severity": "critical and central to E1: this means status:fail with real findings can never be produced via a k6 threshold breach at all, for any torture.yaml, in any case where the SUT genuinely fails an SLO under load -- which is the corpus's entire premise.",
-    "root_cause": "internal/run/load.go's K6Runner.startHostProcess and K6Runner.startContainer both do: `waitErr := cmd.Wait(); if waitErr != nil { h.errCh <- waitErr; return }` before ever reading summaryPath. k6 exits 99, not 0, whenever any threshold's condition is not met -- this is k6's own long-documented convention, not a crash or setup failure -- yet the summary file is still written completely and correctly in that case (confirmed: read directly off disk after this exact run, see case1_no_timeout above). K6Runner never distinguishes 'process never produced a summary' (a genuine load-generator failure) from 'process produced a complete summary and then exited 99 because k6's own threshold gate fired' (the expected, desired signal for a real defect).",
-    "empirical_confirmation": "Case 1 run, this round: verdict JSON says status:error / 'load generator failed: exit status 99' with zero findings; the summary file recovered from the same run's temp directory shows a complete, correct measurement of the planted 3-second latency defect (p95 3004ms against a p(95)<1000 threshold).",
-    "owner": "internal/run/load.go (K6Runner) -- out of this task's edit scope. Reported, not patched. The evident fix shape (not implemented here): attempt to read and parse the summary file regardless of cmd.Wait()'s error, and only surface waitErr as a load-generator failure if the summary is missing or unparseable."
-  },
-
-  "cases_2_to_7": "not built this round. Case 1 does not behave (a real, measured defect is reported as a tool error rather than a verdict), so per the coordinator's own branching instruction this round stops here rather than building six more fixtures that would each hit the identical exit-code-99 discard on their own defect-triggering fault.",
 
   "metrics": {
-    "detection": "0/1 measurable through the verdict TortureU actually returns for case 1 (status:error, no findings) -- despite k6 itself having measured the defect correctly. Case 8 correctly detects nothing (correct, no defect present).",
-    "attribution": "unmeasured -- no finding was ever surfaced to attribute, though the recovered raw summary suggests it would have been correct (exactly one fault was scheduled, so internal/run's attribute() would have set Cause.Fault to 'dep_slow' had the finding been allowed to form).",
-    "candidates": "unmeasured -- same reason, and independently still expected empty for case 1 even if a finding had formed (no net/http entry in clientKnobPatterns; detect never adds a custom service to sys.Deps -- both noted in round 1).",
-    "false_positive_on_control": "0 across a fresh batch of 8 consecutive case-8 runs on the corrected classification path. Still clean."
-  }
+    "detection": "6/6 measurable planted defects detected (cases 1, 2, 3, 5, 6, 7). Case 4 unmeasured (not built). Case 8 (control) correctly found nothing.",
+    "attribution": "3/3 fault-driven cases (1, 2, 5) named the correct causing fault (Cause.fault matched the planted fault's name and target exactly). Cases 3, 6, 7 are load-only defects with no injected fault -- Cause is structurally never populated for these (attribute() only fires per-fault), so 'named the correct causing fault' does not apply to them; not counted as either a hit or a miss, reported as not applicable.",
+    "candidates": "0/6 findings carried a candidate list, across every case. Root cause is structural, not per-case: internal/run/findings.go's attribute() only attaches D-9 candidates by walking cfg.Faults, so a load-only defect (cases 3, 6, 7) NEVER gets a candidate list even when the target dependency and its client library are both in detect's recognized vocabulary (confirmed directly for case 3's postgres/pgx and case 7's redis/go-redis, both of which have real entries in clientKnobPatterns). For the fault-driven cases (1, 2, 5), the gap is the one found in round 1: the target is a custom application service outside detect's closed image vocabulary, so it never becomes a detect.Dep at all.",
+    "false_positive_on_control": "0, across 17 consecutive case-8 runs spanning three different code-path states (post-classification-fix, post-exit-code-fix). This is the number the whole eval was built to get right, and it has stayed at zero every time it was actually measured."
+  },
+
+  "make_eval_target_requested": "make eval should, at minimum: (1) export PATH with a real k6 binary or rely on internal/run's container-mode k6 (no local k6 needed, only docker); (2) for each case directory under evals/corpus/*, run `docker build` for any image: entries not already tagged, then `go run ./cmd/tortureu run -config <case>/torture.yaml -json`, capturing output to evals/results/<case>.json; (3) tear down each case's compose stack (with its topology overlay) unconditionally afterward, success or failure, mirroring evals/run_case.sh's trap-based cleanup; (4) exit non-zero if case 8 (control) produces any findings, since that is the launch-gate number. Suggested target body can shell out to evals/run_case.sh per case; happy to adjust the exact shape once wired."
 }

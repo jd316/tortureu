@@ -1,0 +1,42 @@
+version: 0
+
+target:
+  compose: ./docker-compose.yml
+  service: checkout-api
+  base_url: http://localhost:8080
+
+egress:
+  default: deny
+  hosts:
+    dep:9090: { class: internal }
+
+reset:
+  command: docker compose down -v && docker compose up -d --wait
+
+load:
+  engine: k6
+  model: arrival_rate
+  stages:
+    - phase: ramp_up
+      to: 20rps
+      over: 5s
+    - phase: peak
+      hold: 20rps
+      for: 20s
+
+  scenarios:
+    - name: checkout
+      weight: 100
+      flow:
+        - { method: GET, path: /checkout }
+
+faults:
+  - name: dep_down
+    at: peak
+    for: 15s
+    target: dep:9090
+    inject: { down: true }
+
+assert:
+  - http_req_duration: ["p(95)<1000"]
+  - http_req_failed:   ["rate<0.5"]

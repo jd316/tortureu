@@ -1,0 +1,39 @@
+version: 0
+
+target:
+  compose: ./docker-compose.yml
+  service: catalog-api
+  base_url: http://localhost:8080
+
+egress:
+  default: deny
+  hosts:
+    redis:6379: { class: internal }
+
+reset:
+  command: docker compose down -v && docker compose up -d --wait
+
+load:
+  engine: k6
+  model: arrival_rate
+  stages:
+    - phase: ramp_up
+      to: 100rps
+      over: 5s
+    - phase: peak
+      hold: 100rps
+      for: 20s
+
+  scenarios:
+    - name: catalog
+      weight: 100
+      flow:
+        - { method: GET, path: /product }
+
+# No faults: -- the defect (no stampede protection at TTL expiry) is a
+# timing property that only shows up under sustained concurrent load, not
+# something TortureU injects. A cache hit here is near-instant; a stampede
+# recompute costs 100ms, so a tight threshold is what makes the periodic
+# stampede visible in the aggregate instead of averaged away.
+assert:
+  - http_req_duration: ["p(95)<50"]
