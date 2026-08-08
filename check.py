@@ -190,5 +190,22 @@ for root, _dirs, files in os.walk('.'):
 orphans = sorted(set(pkgs) - imports)
 ok(not orphans, "every internal package has a caller" + (f" — UNWIRED: {orphans}" if orphans else ""))
 
+# ── A registry `how:` that names a tortureu verb must name one that works, or be marked
+# `planned:`. The final review found ~34 entries instructing users to run verbs that exit 2,
+# and a header naming `tortureu suggest`, which is not a verb at all. Telling someone to run a
+# command that cannot run is the documentation form of "built but unreachable".
+IMPLEMENTED = {'init', 'run', 'doctor'}
+mis = []
+for d in reg['domains']:
+    for t in d['tools']:
+        m = re.match(r'tortureu (\w+)', str(t['how']))
+        if m and m.group(1) not in IMPLEMENTED and 'planned' not in t:
+            mis.append(f"{d['id']}/{t['id']} -> {t['how']}")
+ok(not mis, "every registry `how:` names a working verb or is marked planned"
+   + (f" — unmarked: {mis[:3]}" if mis else ""))
+
+planned = sum(1 for d in reg['domains'] for t in d['tools'] if 'planned' in t)
+print(f"     registry: {planned} entries marked planned (verb not implemented in v0)")
+
 print(f"\n{len(fails)} failure(s)" if fails else "\nall checks passed")
 sys.exit(1 if fails else 0)
