@@ -20,27 +20,42 @@ const (
 // Classify merges detect's static compose-graph classification with the
 // user's torture.yaml egress policy into one final class per host
 // (R-DC2-1, R-DET-4). detected is detect.System.EgressClass: host ->
-// "internal" or "unclassified". Any host the user has not explicitly
-// classified in cfg.Hosts, and that detect did not find in the compose
-// graph, stays unclassified — default-deny.
+// "internal" or "unclassified" — populated only for compose services
+// matching detect's closed image vocabulary, so it is not a complete list
+// of hosts. The result is the UNION of detected and cfg.Hosts: a host the
+// user declared is the strongest possible signal of intent and must be
+// classified even when detect never found it (R-DC2-1, R-DET-3/R-DET-7 — an
+// unknown must surface, never vanish). Any host present in neither source
+// stays out of the result; any host present but not resolvable to a known
+// class stays unclassified — default-deny.
 func Classify(detected map[string]string, cfg config.Egress) map[string]Class {
-	classes := make(map[string]Class, len(detected))
+	classes := make(map[string]Class, len(detected)+len(cfg.Hosts))
 	for host, dclass := range detected {
-		if eh, ok := cfg.Hosts[host]; ok {
-			// R-DC2-6: fail closed rather than trust config.Parse already
-			// rejected an unrecognised class string.
-			class := Class(eh.Class)
-			if !isKnownClass(class) {
-				class = ClassUnclassified
-			}
-			classes[host] = class
+		classes[host] = classifyOne(host, dclass, cfg)
+	}
+	for host := range cfg.Hosts {
+		if _, already := classes[host]; already {
 			continue
 		}
-		if dclass == string(ClassInternal) {
-			classes[host] = ClassInternal
-			continue
-		}
-		classes[host] = ClassUnclassified
+		classes[host] = classifyOne(host, "", cfg)
 	}
 	return classes
+}
+
+// classifyOne resolves a single host: a user classification in cfg.Hosts
+// wins outright (R-DC2-6: fail closed on an unrecognised class value);
+// otherwise dclass == "internal" (detect's compose-graph finding) applies;
+// otherwise the host is unclassified.
+func classifyOne(host, dclass string, cfg config.Egress) Class {
+	if eh, ok := cfg.Hosts[host]; ok {
+		class := Class(eh.Class)
+		if !isKnownClass(class) {
+			class = ClassUnclassified
+		}
+		return class
+	}
+	if dclass == string(ClassInternal) {
+		return ClassInternal
+	}
+	return ClassUnclassified
 }
