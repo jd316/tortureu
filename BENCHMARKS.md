@@ -39,7 +39,7 @@ effect. `make bench` runs it; results land in `benchmarks/results/<date>-<commit
 | Fault | Requested | Measured | Tolerance |
 |---|---|---|---|
 | `latency: 300ms` | +300ms | p50 delta at the client | ±10ms |
-| `jitter: 50ms` | σ=50ms | stddev of delta | ±15% |
+| `jitter: 50ms` | uniform ±50ms → stddev ≈ 28.9ms (`j/√3`) | stddev of delta | ±15% |
 | `bandwidth: 1mbps` | 1 Mbps | bytes/sec through the proxy | ±5% |
 | `down` | connection refused | error class at client | exact |
 | `pause` (SIGSTOP) | no response, conn held open | client sees timeout not RST | exact |
