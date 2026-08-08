@@ -1,0 +1,127 @@
+{
+  "timestamp_utc": "2026-08-08T10:21:30Z",
+  "commit": "07acb03",
+  "platform": {
+    "os": "Linux 7.0.0-29-generic",
+    "docker_version": "29.5.3",
+    "cpu_model": "AMD Ryzen 7 5800H with Radeon Graphics",
+    "cpu_cores": 16,
+    "cgroup_version": "v2"
+  },
+  "results": [
+    {
+      "verb": "latency",
+      "requested": "+300ms",
+      "tolerance": "±10ms (p50 delta)",
+      "verdict": "miss",
+      "translated_action": "{Fault:{Name:lat_primary At: For: Target:echo:9000 Verb:latency Inject:map[jitter:50ms latency:300ms]} Kind:toxic Toxic:0xc30d220c240 Docker:\u003cnil\u003e Owner:}",
+      "notes": [
+        "primary (human-authored) form FAILED: Apply: run: toxiproxy: add toxic latency on echo:9000: status 400: {\"error\":\"bad request body: json: cannot unmarshal string into Go struct field LatencyToxic.attributes.jitter of type int64\",\"status\":400}\n — translate.go passed the raw YAML string \"300ms\" straight to Toxiproxy's numeric \"latency\" attribute with no unit conversion"
+      ],
+      "secondary_numeric_measurement": {
+        "verb": "latency",
+        "requested": "+300ms (numeric ms, bypassing the unit-string gap)",
+        "measured": "p50 delta = 300.72ms",
+        "tolerance": "±10ms (p50 delta)",
+        "verdict": "pass",
+        "stats": {
+          "n": 40,
+          "mean": 301.4286176500718,
+          "stddev": 0.7109316247861991,
+          "p50": 301.0472639998625
+        },
+        "translated_action": "{Fault:{Name:lat_secondary At: For: Target:echo:9000 Verb:latency Inject:map[jitter:0 latency:300]} Kind:toxic Toxic:0xc30d22aa400 Docker:\u003cnil\u003e Owner:}"
+      }
+    },
+    {
+      "verb": "jitter",
+      "requested": "σ=50ms",
+      "tolerance": "±15% (stddev of delta)",
+      "verdict": "miss",
+      "translated_action": "{Fault:{Name:lat_primary At: For: Target:echo:9000 Verb:latency Inject:map[jitter:50ms latency:300ms]} Kind:toxic Toxic:0xc30d220c240 Docker:\u003cnil\u003e Owner:}",
+      "notes": [
+        "primary (human-authored) form FAILED: Apply: run: toxiproxy: add toxic latency on echo:9000: status 400: {\"error\":\"bad request body: json: cannot unmarshal string into Go struct field LatencyToxic.attributes.jitter of type int64\",\"status\":400}\n — same root cause as the latency row: \"50ms\" was never converted to milliseconds"
+      ],
+      "secondary_numeric_measurement": {
+        "verb": "jitter",
+        "requested": "σ=50ms (numeric ms, bypassing the unit-string gap)",
+        "measured": "stddev of delta = 15.54ms",
+        "tolerance": "±15% (stddev of delta)",
+        "verdict": "miss",
+        "stats": {
+          "n": 40,
+          "mean": 11.542568875029247,
+          "stddev": 15.53891578011039,
+          "p50": 0.6633895009144908
+        },
+        "translated_action": "{Fault:{Name:jit_secondary At: For: Target:echo:9000 Verb:latency Inject:map[jitter:50 latency:0]} Kind:toxic Toxic:0xc30d220c460 Docker:\u003cnil\u003e Owner:}",
+        "notes": [
+          "Toxiproxy's own jitter implementation adds a UNIFORM random offset in [-jitter,+jitter] (a plain uniform(-50,50) alone would have stddev ~28.9ms, not 50ms), and with latency=0 any negative computed delay clamps to zero, skewing the distribution further and lowering the effective stddev even more — none of this is a translate.go defect, it is what Toxiproxy itself delivers for \"jitter\" even given perfect numeric input. Measured stddev=15.54ms vs requested 50ms (68.9% off, tolerance ±15%)."
+        ]
+      }
+    },
+    {
+      "verb": "bandwidth",
+      "requested": "1 Mbps",
+      "tolerance": "±5% (bytes/sec through the proxy)",
+      "verdict": "miss",
+      "translated_action": "{Fault:{Name:bw_primary At: For: Target:echo:9000 Verb:bandwidth Inject:map[bandwidth:1mbps]} Kind:toxic Toxic:0xc30d25b2160 Docker:\u003cnil\u003e Owner:}",
+      "notes": [
+        "primary (human-authored) form FAILED: Apply: run: toxiproxy: add toxic bandwidth on echo:9000: status 400: {\"error\":\"bad request body: json: cannot unmarshal string into Go struct field BandwidthToxic.attributes.rate of type int64\",\"status\":400}\n — translate.go passed the raw YAML string \"1mbps\" straight to Toxiproxy's numeric \"rate\" attribute (KB/s) with no unit parsing or Mbps-\u003eKB/s conversion"
+      ],
+      "secondary_numeric_measurement": {
+        "verb": "bandwidth",
+        "requested": "1 Mbps == 122 KB/s (numeric, unit-converted by this harness, NOT by translate.go)",
+        "measured": "120993 bytes/sec",
+        "tolerance": "±5% (bytes/sec through the proxy)",
+        "verdict": "pass",
+        "translated_action": "{Fault:{Name:bw_secondary At: For: Target:echo:9000 Verb:bandwidth Inject:map[bandwidth:122]} Kind:toxic Toxic:0xc30d220c800 Docker:\u003cnil\u003e Owner:}",
+        "notes": [
+          "measured 120993 B/s vs requested 125000 B/s (3.2% off, tolerance ±5%)"
+        ]
+      }
+    },
+    {
+      "verb": "down",
+      "requested": "connection refused",
+      "measured": "refused",
+      "tolerance": "exact (error class at client)",
+      "verdict": "pass",
+      "translated_action": "{Fault:{Name:down_test At: For: Target:echo:9000 Verb:down Inject:map[down:true]} Kind:toxic Toxic:0xc30d22aaae0 Docker:\u003cnil\u003e Owner:}"
+    },
+    {
+      "verb": "pause",
+      "requested": "no response, conn held open (SIGSTOP-equivalent freeze)",
+      "measured": "last 5 of 13 ping attempts (tail of the post-fault observation window)",
+      "tolerance": "exact (client sees timeout not RST)",
+      "verdict": "pass",
+      "translated_action": "{Fault:{Name:pause_test At: For: Target:d63be915f252591db5d39d6aec9e2c06749ba4cee5588833a39b9901befb130f Verb:pause Inject:map[pause:true]} Kind:docker Toxic:\u003cnil\u003e Docker:0xc30d22e82a0 Owner:}",
+      "notes": [
+        "outcome counts after fault: map[timeout:5]"
+      ]
+    },
+    {
+      "verb": "kill",
+      "requested": "conn reset (SIGKILL)",
+      "measured": "last 1 of 7 ping attempts (tail of the post-fault observation window)",
+      "tolerance": "exact (client sees RST)",
+      "verdict": "miss",
+      "translated_action": "{Fault:{Name:kill_test At: For: Target:90baf3c09c86a941d17410e1ef7c6d190d376f43a009fa389e1e5581ba980975 Verb:kill Inject:map[kill:true]} Kind:docker Toxic:\u003cnil\u003e Docker:0xc30d2438060 Owner:}",
+      "notes": [
+        "outcome counts after fault: map[closed:1]",
+        "expected every post-fault attempt to see outcome \"reset\" exactly, observed a mix: map[closed:1]"
+      ]
+    },
+    {
+      "verb": "cpu",
+      "requested": "90% of quota",
+      "measured": "416.1% of one core (cgroup cpu.stat usage_usec delta / wall time)",
+      "tolerance": "±5% (cgroup cpu.stat)",
+      "verdict": "miss",
+      "translated_action": "{Fault:{Name:cpu_test At: For: Target:80b8a812a5784bb1ea3f4a1b3013618f6eb89a479030674e5e18da98dfa6a8c6 Verb:cpu Inject:map[cpu:90% workers:4]} Kind:docker Toxic:\u003cnil\u003e Docker:0xc30d232e720 Owner:}",
+      "notes": [
+        "translateDocker's \"cpu\" case sets Args[\"amount\"]=f.Inject[\"cpu\"] (\"90%\"), but DockerApplier.ApplyDocker's \"stress\" case never reads Args[\"amount\"] at all — it only reads Args[\"workers\"] and runs `stress-ng --cpu \u003cworkers\u003e` with no load percentage. Requested 90%, measured 416.1% (4 unthrottled stress-ng workers, no cgroup CPU quota set for the cpu verb)."
+      ]
+    }
+  ]
+}
