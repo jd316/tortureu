@@ -1,0 +1,28 @@
+{
+  "note": "Reality check per task brief: build case 1 and case 8 first, run them against the real tortureu binary and internal/run path, see if the pipeline produces a verdict at all. It does not, for a structural reason unrelated to either fixture. See task-e1-report.md for the full writeup.",
+  "root_cause": "internal/run.ComposeTopologyApplier.Apply (internal/run/topology.go) attaches every non-proxy compose service -- including the SUT itself -- exclusively to a Docker network created with internal:true (internal/egress.BuildTopology). Docker does not publish host ports for a container whose only network is internal:true (verified independently of TortureU with a bare `docker network create --internal` + nginx container: 'ports' declared in compose, but `docker ps` shows no host binding and the port is unreachable). internal/run.K6Runner (internal/run/load.go) runs k6 as a host process against cfg.Target.BaseURL (e.g. http://localhost:8080), so after DC-2 topology enforcement the load generator can never reach the SUT, in any torture.yaml, on any case.",
+  "cases_run": {
+    "case1_no_timeout": {
+      "status": "error",
+      "error": "load generator failed: exit status 99",
+      "detail": "k6 got connection-refused on every request to http://localhost:8080/checkout for the whole run; k6's own http_req_failed threshold crossed, k6 exited nonzero, internal/run.Run classified this as status:error (tool broke), not a SUT-vs-planted-defect verdict.",
+      "findings": [],
+      "measurable": false
+    },
+    "case8_control": {
+      "status": "error",
+      "error": "load generator failed: exit status 99",
+      "detail": "Identical failure mode against http://localhost:8081/ping -- confirms the failure is structural (topology enforcement), not specific to case 1's fixture.",
+      "findings": [],
+      "measurable": false
+    }
+  },
+  "cases_2_to_7": "not built -- per the task brief, stopping after the reality check confirmed the harness cannot get a verdict at all; building six more fixtures that would hit the identical, already-diagnosed root cause would not add information.",
+  "metrics": {
+    "detection": "unmeasured (0/8 cases produced a pass/fail verdict; 2/8 attempted, both status:error)",
+    "attribution": "unmeasured (no defect was ever detected)",
+    "candidates": "unmeasured",
+    "false_positive_on_control": "0 findings emitted on case 8, but only because the run errored before any assertion was evaluated -- this is NOT evidence the control passes cleanly; it is evidence no verdict was reached at all"
+  },
+  "secondary_finding": "Even setting aside reachability: findings.go's clientKnobPatterns table (internal/run/findings.go) has no entry for Go's plain net/http client -- the exact library case 1 plants a defect in -- so even a correctly-attributed case-1 finding would ship an empty D-9 candidate list. Confirmed by static read, not by a live run (the live run never reached candidate-building)."
+}

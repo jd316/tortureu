@@ -1,0 +1,15 @@
+#!/bin/sh
+# k6 is not installed on this eval machine (see task-e1-report.md's reality
+# check). internal/run.K6Runner shells out to a binary literally named "k6"
+# on PATH; this script IS that binary, as far as K6Runner can tell, so the
+# real internal/run.Run path is exercised unmodified. It just runs the real
+# k6 via the official grafana/k6 Docker image instead of a native install.
+#
+# --network host: checkout-api/control-api publish to localhost, and this
+# container needs to reach them the same way a natively-installed k6 would.
+# K6Runner (internal/run/load.go) writes the script and summary-export path
+# under os.TempDir(); this eval run sets TMPDIR so that resolves to
+# evals/tmp under the repo, a path Docker Desktop's file-sharing allowlist
+# actually permits mounting (plain /tmp is not shared into containers here).
+TORTUREU_EVAL_TMP="${TORTUREU_EVAL_TMPDIR:-/mnt/ssd/Codespace/TortureU/evals/tmp}"
+exec docker run --rm --network host -v "$TORTUREU_EVAL_TMP:$TORTUREU_EVAL_TMP" -w "$TORTUREU_EVAL_TMP" grafana/k6:latest "$@"

@@ -1,0 +1,22 @@
+{
+  "run_id": "2026-08-08T10:08:22Z-checkout-api-000999",
+  "scenario": "checkout-api",
+  "status": "error",
+  "started_at": "2026-08-08T10:08:22Z",
+  "duration_s": 47,
+  "reset": "clean",
+  "error": "load generator failed: exit status 99",
+  "findings": [],
+  "passed": [],
+  "egress_audit": {
+    "mocked": [],
+    "blocked": [],
+    "real": [],
+    "unclassified": []
+  },
+  "observability": {
+    "traces": false,
+    "metrics": false,
+    "logs": false
+  }
+}

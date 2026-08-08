@@ -1,0 +1,22 @@
+{
+  "run_id": "2026-08-08T10:05:06Z-control-api-73d896",
+  "scenario": "control-api",
+  "status": "error",
+  "started_at": "2026-08-08T10:05:06Z",
+  "duration_s": 35,
+  "reset": "clean",
+  "error": "load generator failed: exit status 99",
+  "findings": [],
+  "passed": [],
+  "egress_audit": {
+    "mocked": [],
+    "blocked": [],
+    "real": [],
+    "unclassified": []
+  },
+  "observability": {
+    "traces": false,
+    "metrics": false,
+    "logs": false
+  }
+}

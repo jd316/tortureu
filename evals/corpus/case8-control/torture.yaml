@@ -1,0 +1,34 @@
+version: 0
+
+target:
+  compose: ./docker-compose.yml
+  service: control-api
+  base_url: http://localhost:8081
+
+egress:
+  default: deny
+  hosts: {}
+
+reset:
+  command: docker compose down -v && docker compose up -d --wait
+
+load:
+  engine: k6
+  model: arrival_rate
+  stages:
+    - phase: ramp_up
+      to: 20rps
+      over: 5s
+    - phase: peak
+      hold: 20rps
+      for: 15s
+
+  scenarios:
+    - name: ping
+      weight: 100
+      flow:
+        - { method: GET, path: /ping }
+
+assert:
+  - http_req_duration: ["p(95)<500"]
+  - http_req_failed:   ["rate<0.01"]
