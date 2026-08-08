@@ -1,0 +1,68 @@
+{
+  "timestamp_utc": "2026-08-08T19:16:50Z",
+  "commit": "74c4517",
+  "platform": {
+    "os": "Linux 7.0.0-29-generic",
+    "docker_version": "29.5.3",
+    "cpu_model": "AMD Ryzen 7 5800H with Radeon Graphics",
+    "cpu_cores": 16
+  },
+  "scenario": "8 concurrent persistent TCP connections, 64-byte echo round trips, 5s sustained window",
+  "load_workers": 8,
+  "load_duration_sec": 5,
+  "generator_ceiling": {
+    "fd_limit": "1048576",
+    "ephemeral_port_range": "32768\t60999",
+    "cpu_model": "AMD Ryzen 7 5800H with Radeon Graphics",
+    "cpu_cores": 16
+  },
+  "configs": [
+    {
+      "config": "direct",
+      "verdict": "measured",
+      "stats": {
+        "n": 68356,
+        "mean_ms": 0.581264997591263,
+        "p50_ms": 0.4743180033983663,
+        "p95_ms": 1.3592429968412034,
+        "p99_ms": 1.9923430008930154,
+        "requests_per_sec": 13662.439603741097,
+        "workers": 8
+      }
+    },
+    {
+      "config": "toxiproxy",
+      "verdict": "measured",
+      "stats": {
+        "n": 69190,
+        "mean_ms": 0.5743202872247394,
+        "p50_ms": 0.4735569964395836,
+        "p95_ms": 1.3004479988012463,
+        "p99_ms": 1.8781920007313602,
+        "requests_per_sec": 13829.80427515356,
+        "workers": 8
+      },
+      "delta_p50_ms": -0.0007610069587826729,
+      "delta_p95_ms": -0.058794998039957136,
+      "delta_p99_ms": -0.11415100016165525,
+      "delta_rps_pct": 1.2249984356134618
+    },
+    {
+      "config": "tortureu",
+      "verdict": "measured",
+      "stats": {
+        "n": 70660,
+        "mean_ms": 0.5622751868546743,
+        "p50_ms": 0.4658559992094524,
+        "p95_ms": 1.256342999113258,
+        "p99_ms": 1.8249080021632835,
+        "requests_per_sec": 14123.929671799795,
+        "workers": 8
+      },
+      "delta_p50_ms": -0.008462004188913852,
+      "delta_p95_ms": -0.10289999772794545,
+      "delta_p99_ms": -0.1674349987297319,
+      "delta_rps_pct": 3.3778013403428413
+    }
+  ]
+}
