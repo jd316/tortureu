@@ -2,10 +2,13 @@ package run
 
 import (
 	"fmt"
+	"hash/fnv"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -68,9 +71,39 @@ func TestDC2Enforcement_InternalNetworkBlocksExternalButProxyForwardsClassifiedH
 	})
 }
 
+// spec: R-DC2-7
+//
+// A fixed Toxiproxy control port turned exactly one stray container (a
+// manual probe, or a previous run's stack this suite failed to tear down)
+// into a total suite failure: every subsequent stack, clean state or not,
+// tried to bind that same host port and failed before any of its own
+// assertions could run. bringUpDC2Stack now derives a per-run port from its
+// own unique suffix; this proves two stacks can be genuinely up — bound,
+// listening, answering — at the same time, not merely that they don't
+// collide when carefully run one after another.
+func TestDC2Enforcement_TwoStacksCoexistConcurrently(t *testing.T) {
+	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
+		t.Skip("docker compose not available")
+	}
+
+	stackA := bringUpDC2Stack(t)
+	stackB := bringUpDC2Stack(t)
+
+	if stackA.controlPort == stackB.controlPort {
+		t.Fatalf("both stacks derived the same control port %q — test setup did not actually exercise two independent ports", stackA.controlPort)
+	}
+
+	for i, s := range []dc2Stack{stackA, stackB} {
+		out, err := exec.Command("docker", "exec", s.sut, "wget", "-T", "3", "-qO-", "http://fake-upstream:80/").CombinedOutput()
+		if err != nil {
+			t.Errorf("stack %d (control port %s): SUT could not reach the classified host through its own proxy while another stack was also up: %v: %s", i, s.controlPort, err, out)
+		}
+	}
+}
+
 // dc2Stack is a running stack brought up through ComposeTopologyApplier.Apply.
 type dc2Stack struct {
-	sut, proxy, sutNet, egressNet string
+	sut, proxy, sutNet, egressNet, controlPort string
 }
 
 // removeIsolation recreates s.sutNet without Docker's `internal: true` flag
@@ -96,15 +129,80 @@ func (s dc2Stack) removeIsolation(t *testing.T) {
 	run("network", "connect", "--alias", "fake-upstream", s.sutNet, s.proxy)
 }
 
+// suffixCounter guarantees uniqueSuffix never repeats within one test
+// binary run even when called faster than the clock's resolution (e.g. two
+// bringUpDC2Stack calls back to back in
+// TestDC2Enforcement_TwoStacksCoexistConcurrently) — a repeated suffix would
+// mean repeated network/container names and a repeated derived port,
+// silently defeating the very isolation these tests exist to prove.
+var suffixCounter atomic.Int64
+
+// uniqueSuffix returns a short, practically-unique identifier for one test
+// stack: prefix, a truncated nanosecond timestamp, and a monotonic counter.
+func uniqueSuffix(prefix string) string {
+	n := suffixCounter.Add(1)
+	return fmt.Sprintf("%s%d%d", prefix, time.Now().UnixNano()%1_000_000, n)
+}
+
+// derivedPort computes a host port for one test stack's Toxiproxy control
+// API from its own unique suffix, so two stacks — two subtests, two test
+// runs, or a stack a previous run leaked and never cleaned up — do not
+// contend for the fixed ProxyControlPort default (see its doc comment in
+// topology.go). Range is chosen clear of IANA well-known ports and common
+// dev-tool defaults; collisions with something else already bound there are
+// still possible in principle but no more likely than for any other
+// ephemeral-style port choice, and Apply's own error surfaces clearly if it
+// happens (a bind failure, not a silent misconfiguration).
+func derivedPort(suffix string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(suffix))
+	return strconv.Itoa(20000 + int(h.Sum32()%20000))
+}
+
+// forceRemoveContainers force-removes containers by name, ignoring errors
+// for names that never existed — a defensive backstop alongside `docker
+// compose down`, registered before any container is actually created:
+// `docker compose up` failing partway (e.g. this exact suite's fixed-port
+// collision) can leave a container behind in a state `compose down` does
+// not reliably clean up on its own, and a test that leaks a container is
+// not reproducible — the next run inherits its failure for an unrelated
+// reason (Defect 1 from the coordinator's review).
+func forceRemoveContainers(names ...string) {
+	args := append([]string{"rm", "-f"}, names...)
+	_ = exec.Command("docker", args...).Run()
+}
+
+// forceRemoveNetworks removes networks by name, retrying briefly: a
+// container disconnected moments earlier in the same cleanup can leave the
+// network's endpoint list settling asynchronously, so an immediate
+// `network rm` can transiently report "has active endpoints" even though
+// nothing is really still attached.
+func forceRemoveNetworks(names ...string) {
+	for i := 0; i < 5; i++ {
+		args := append([]string{"network", "rm"}, names...)
+		out, err := exec.Command("docker", args...).CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "active endpoints") {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 // bringUpDC2Stack brings up a real compose stack (sut + a proxy dual-homed
 // onto a real "upstream" container standing in for a classified external
 // host) via ComposeTopologyApplier.Apply — the same call
 // TestDC2Enforcement_... asserts against, and the same one
-// removeIsolation's negative control starts from.
+// removeIsolation's negative control starts from. Cleanup (both the
+// compose-aware teardown and the force-remove backstop) is registered
+// before any docker command runs, so it fires on success, on a failed
+// assertion, on Apply itself failing, or on a panic — not only the happy
+// path (R-EXE-5's own teardown-on-panic reasoning, applied to test
+// infrastructure rather than a run).
 func bringUpDC2Stack(t *testing.T) dc2Stack {
 	t.Helper()
 
-	suffix := fmt.Sprintf("dc2t%d", time.Now().UnixNano()%1_000_000)
+	suffix := uniqueSuffix("dc2t")
+	controlPort := derivedPort(suffix)
 	sutNet := suffix + "_sut"
 	egressNet := suffix + "_egress"
 	proxyName := suffix + "-proxy"
@@ -114,22 +212,27 @@ func bringUpDC2Stack(t *testing.T) dc2Stack {
 
 	dir := t.TempDir()
 	composePath := filepath.Join(dir, "docker-compose.yml")
+	overlayPath := filepath.Join(os.TempDir(), "tortureu-topology-overlay-"+suffix+".yaml")
+
+	// Registered first, before any resource exists: a force-remove backstop
+	// that runs regardless of how or where this function or its caller
+	// fails, plus the compose-aware teardown as the primary (cleaner) path.
+	t.Cleanup(func() {
+		exec.Command("docker", "compose", "-f", composePath, "-f", overlayPath, "down", "-v").Run()
+		forceRemoveContainers(upstreamContainer, proxyContainerName, sutContainerName)
+		forceRemoveNetworks(sutNet, egressNet)
+	})
+
 	compose := fmt.Sprintf("name: %s-sut\nservices:\n  sut:\n    image: alpine:3.20\n    command: [\"sleep\", \"300\"]\n", suffix)
 	if err := os.WriteFile(composePath, []byte(compose), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	t.Cleanup(func() {
-		exec.Command("docker", "rm", "-f", upstreamContainer).Run()
-		exec.Command("docker", "compose", "-f", composePath, "-f", filepath.Join(os.TempDir(), "tortureu-topology-overlay.yaml"), "down", "-v").Run()
-		exec.Command("docker", "network", "rm", sutNet, egressNet).Run()
-	})
-
 	// The real upstream this classified host actually resolves to once past
 	// the proxy — a stand-in for the real external service, reachable only
 	// on the (non-internal) egress network, same as the real world.
 	top := egress.BuildTopology(sutNet, egressNet, proxyName)
-	applier := ComposeTopologyApplier{}
+	applier := ComposeTopologyApplier{ProxyControlPort: controlPort, OverlayPath: overlayPath}
 	if err := applier.Apply(composePath, top, []string{"fake-upstream:80"}, nil); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -144,7 +247,7 @@ func bringUpDC2Stack(t *testing.T) dc2Stack {
 
 	// Eager creation (the review's Finding 1(a)): the proxy must exist
 	// before load starts, not lazily when a fault first targets it.
-	toxi := &ToxiproxyApplier{BaseURL: "http://localhost:" + ProxyControlPort}
+	toxi := &ToxiproxyApplier{BaseURL: "http://localhost:" + controlPort}
 	if err := waitFor(5*time.Second, func() error {
 		return toxi.EnsureProxies(map[string]string{"fake-upstream:80": upstreamIP + ":80"})
 	}); err != nil {
@@ -160,7 +263,7 @@ func bringUpDC2Stack(t *testing.T) dc2Stack {
 		t.Fatalf("find proxy container: %v", err)
 	}
 
-	return dc2Stack{sut: sut, proxy: proxy, sutNet: sutNet, egressNet: egressNet}
+	return dc2Stack{sut: sut, proxy: proxy, sutNet: sutNet, egressNet: egressNet, controlPort: controlPort}
 }
 
 func containerIP(name, network string) (string, error) {

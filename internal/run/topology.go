@@ -36,17 +36,30 @@ import (
 // pending that decision, not a value SPEC.md specifies.
 const proxyImage = "ghcr.io/shopify/toxiproxy:2.9.0"
 
-// ProxyControlPort is the host port the R-DC2-3 overlay publishes the
-// proxy's Toxiproxy control API on (container port 8474, Toxiproxy's own
-// default control port). Whatever runs internal/run — the orchestrator —
-// needs to reach that API to create proxies/toxics, and typically runs on
+// ProxyControlPort is the default host port the R-DC2-3 overlay publishes
+// the proxy's Toxiproxy control API on (container port 8474, Toxiproxy's
+// own default control port). Whatever runs internal/run — the orchestrator
+// — needs to reach that API to create proxies/toxics, and typically runs on
 // the developer's host, outside every Docker network this package creates;
-// a fixed, published host port is how it gets there. Fixed rather than
-// ephemeral so ToxiproxyApplier.BaseURL can be wired (e.g. by NewRealDeps)
-// before Apply ever runs, at the cost of colliding if two runs execute on
-// the same host concurrently — the same v0 limitation as this package's
+// a published host port is how it gets there.
+//
+// This remains a genuine v0 limitation for *production* `tortureu run`:
+// NewRealDeps constructs ToxiproxyApplier.BaseURL before Run ever calls
+// Apply, so the port has to be known ahead of time rather than discovered
+// from an ephemeral one Apply picks — the same reasoning as this package's
 // other fixed naming conventions (sutNetworkName etc. in run.go). SPEC.md
 // does not specify this either; escalated in the Task 7 report.
+//
+// It is NOT a limitation for anything that can derive its own per-run
+// identifier and pass it as ComposeTopologyApplier.ProxyControlPort instead
+// — this package's own Docker-backed tests do exactly that (see
+// derivedPort in dc2_enforcement_test.go), and
+// TestDC2Enforcement_TwoStacksCoexistConcurrently proves two independently
+// configured stacks can be up at the same time without contending for this
+// port. A stray container left over from a previous, uncleaned run (this
+// package's tests leaking, or a manual `docker run` probe) previously
+// turned into a total suite failure for exactly this reason: every run,
+// clean or not, always tried to bind the same fixed port.
 const ProxyControlPort = "18474"
 
 // overlayNetwork/overlayService mirror the subset of docker-compose's schema
@@ -164,6 +177,41 @@ type ComposeTopologyApplier struct {
 	// Tests substitute []string{"config"} to validate the merge without
 	// starting any container.
 	Up []string
+	// ProxyControlPort overrides the package-level ProxyControlPort default
+	// for this Apply call. Exists so two stacks — two test runs, two `go
+	// test` invocations, or a stack this package's own test suite leaked
+	// and never cleaned up — do not contend for the same fixed host port;
+	// callers that generate a per-run identifier (this package's Docker
+	// tests derive one from their own random suffix) can derive a per-run
+	// port from it the same way. Empty means "use ProxyControlPort".
+	ProxyControlPort string
+	// OverlayPath overrides the default fixed location Apply writes the
+	// merged compose overlay to (defaultOverlayPath). Two concurrent Apply
+	// calls sharing that fixed path would race: the second call's write
+	// clobbers the file the first call's own later `docker compose down`
+	// still needs to identify the right resources to remove — a real
+	// correctness bug for concurrent use, not just a test artifact,
+	// surfaced by TestDC2Enforcement_TwoStacksCoexistConcurrently. Empty
+	// means "use defaultOverlayPath", preserving every existing caller
+	// (including this package's own tests written before this field
+	// existed) that reads the overlay back from that fixed path after
+	// Apply returns.
+	OverlayPath string
+}
+
+// defaultOverlayPath is where Apply writes the merged compose overlay when
+// OverlayPath is empty — unchanged from this package's original behavior,
+// since several tests read the overlay back from this exact path after
+// Apply returns.
+func defaultOverlayPath() string {
+	return filepath.Join(os.TempDir(), "tortureu-topology-overlay.yaml")
+}
+
+func (a ComposeTopologyApplier) overlayPath() string {
+	if a.OverlayPath != "" {
+		return a.OverlayPath
+	}
+	return defaultOverlayPath()
 }
 
 func (a ComposeTopologyApplier) bin() string {
@@ -178,6 +226,13 @@ func (a ComposeTopologyApplier) up() []string {
 		return a.Up
 	}
 	return []string{"up", "-d", "--wait"}
+}
+
+func (a ComposeTopologyApplier) controlPort() string {
+	if a.ProxyControlPort != "" {
+		return a.ProxyControlPort
+	}
+	return ProxyControlPort
 }
 
 // Apply enumerates composePath's services, writes an override file attaching
@@ -293,7 +348,7 @@ func (a ComposeTopologyApplier) Apply(composePath string, top egress.Topology, e
 			proxyName: {
 				Image:    proxyImage,
 				Networks: proxyNetworkMap,
-				Ports:    []string{ProxyControlPort + ":8474"},
+				Ports:    []string{a.controlPort() + ":8474"},
 			},
 		},
 	}
@@ -334,12 +389,11 @@ func (a ComposeTopologyApplier) Apply(composePath string, top egress.Topology, e
 	if err != nil {
 		return err
 	}
-	overlayPath := filepath.Join(os.TempDir(), "tortureu-topology-overlay.yaml")
-	if err := os.WriteFile(overlayPath, out, 0o644); err != nil {
+	if err := os.WriteFile(a.overlayPath(), out, 0o644); err != nil {
 		return fmt.Errorf("run: topology: write overlay: %w", err)
 	}
 
-	args := append([]string{"compose", "-f", absPath, "-f", overlayPath}, a.up()...)
+	args := append([]string{"compose", "-f", absPath, "-f", a.overlayPath()}, a.up()...)
 	cmd := exec.Command(a.bin(), args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("run: topology: %s %v: %w: %s", a.bin(), args, err, out)

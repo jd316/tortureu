@@ -60,17 +60,33 @@ type latencyMeasurement struct{ before, after time.Duration }
 // parameter Run passes for a class: internal, network-verb fault target.
 // It measures the SUT's redis-cli round-trip time before and after adding a
 // 300ms Toxiproxy latency toxic.
+//
+// Cleanup (compose-aware teardown plus a force-remove backstop) is
+// registered before any docker command runs, so a failed assertion, a
+// failed Apply, or a panic all still tear the stack down — a leaked
+// container here is exactly what turned one transient failure into a
+// permanently red suite (the coordinator's Defect 1).
 func measureRedisLatencyWithFault(t *testing.T, intercept bool) latencyMeasurement {
 	t.Helper()
 
-	suffix := fmt.Sprintf("r20t%d", time.Now().UnixNano()%1_000_000)
+	suffix := uniqueSuffix("r20t")
+	controlPort := derivedPort(suffix)
 	sutNet := suffix + "_sut"
 	egressNet := suffix + "_egress"
 	proxyName := suffix + "-proxy"
 	sutContainer := suffix + "proj-sut-1"
+	proxyContainer := suffix + "proj-" + proxyName + "-1"
 
 	dir := t.TempDir()
 	composePath := filepath.Join(dir, "docker-compose.yml")
+	overlayPath := filepath.Join(os.TempDir(), "tortureu-topology-overlay-"+suffix+".yaml")
+
+	t.Cleanup(func() {
+		exec.Command("docker", "compose", "-f", composePath, "-f", overlayPath, "down", "-v").Run()
+		forceRemoveContainers(proxyContainer, sutContainer)
+		forceRemoveNetworks(sutNet, egressNet)
+	})
+
 	// The SUT image is redis:7-alpine purely to get redis-cli inside it —
 	// it runs `sleep`, never its own redis-server, so it is genuinely
 	// playing the SUT's role (a client dialing "redis"), not the dependency.
@@ -79,14 +95,8 @@ func measureRedisLatencyWithFault(t *testing.T, intercept bool) latencyMeasureme
 		t.Fatal(err)
 	}
 
-	overlayPath := filepath.Join(os.TempDir(), "tortureu-topology-overlay.yaml")
-	t.Cleanup(func() {
-		exec.Command("docker", "compose", "-f", composePath, "-f", overlayPath, "down", "-v").Run()
-		exec.Command("docker", "network", "rm", sutNet, egressNet).Run()
-	})
-
 	top := egress.BuildTopology(sutNet, egressNet, proxyName)
-	applier := ComposeTopologyApplier{}
+	applier := ComposeTopologyApplier{ProxyControlPort: controlPort, OverlayPath: overlayPath}
 	var internalHosts []string
 	if intercept {
 		internalHosts = []string{"redis:6379"}
@@ -100,7 +110,7 @@ func measureRedisLatencyWithFault(t *testing.T, intercept bool) latencyMeasureme
 		t.Fatalf("find SUT container: %v", err)
 	}
 
-	toxi := &ToxiproxyApplier{BaseURL: "http://localhost:" + ProxyControlPort}
+	toxi := &ToxiproxyApplier{BaseURL: "http://localhost:" + controlPort}
 	var undo func() error
 	if intercept {
 		upstream := backendServiceName("redis") + ":6379"
