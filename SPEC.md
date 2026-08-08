@@ -397,6 +397,23 @@ No second code path.
 output, or `--out json` jsonlines for time series). The human CLI summary **MUST NOT** be parsed —
 it is a presentation format with no stability guarantee.
 
+**We take k6's measurements and compute our own verdicts.** Metric *values* come from k6; threshold
+*pass/fail* is recomputed by parsing the threshold expression we generated and comparing it against
+the measured value. This is not distrust of k6 as a load generator — its measurements are the whole
+reason we drive it — but a verdict is the thing this tool exists to produce, so it is the thing we
+must be able to derive and defend ourselves.
+
+The reason is concrete. k6 0.54.0's `--summary-export` reports **every threshold as `false` on any
+arrival-rate executor regardless of the measured value**, and **R-CFG-6 permits only** arrival-rate,
+so the single executor family we may use is the one where its export is unusable. Worse,
+`--summary-export`'s writer recomputes independently and **silently discards** whatever
+`handleSummary()` returned — verified by overwriting `ok:true` before returning and observing no
+effect on disk. Depending on any of k6's booleans therefore makes our verdict hostage to a
+behaviour that varies by executor and by version, without a signal when it changes.
+
+E1 measured the cost of not doing this: a control backend with **no defect at all** produced two
+findings in three of four runs. *(E1 → Task 4, 2026-08-08)*
+
 > Grafana also publishes a JSON Schema for the end-of-test summary (`grafana/k6-summary`),
 > intended as the stable automation contract. It is marked work-in-progress, so v0 targets
 > `handleSummary()` and adopts the schema once it stabilises. *(TBD-5)*
