@@ -186,6 +186,67 @@ func containerNetDialer(containerID string) func(ctx context.Context, network, a
 	}
 }
 
+// hopTransports caches one *http.Transport per containerID, so a polling
+// caller (BrokerApplier's own 500ms poll loop is the case that surfaced
+// this) reuses the same tunnel via Go's own keep-alive connection pooling
+// instead of this package spawning a brand-new `docker run` per request.
+//
+// Before this cache existed, fallbackTransport.RoundTrip built a fresh
+// *http.Transport (with an empty connection pool) on every single call —
+// so even though Go's http.Transport supports connection reuse, nothing
+// ever gave it the chance: the pool was thrown away before a second
+// request could ever find an idle connection in it. E1 measured the
+// actual cost of that: ~400 short-lived containers and 270s of wall clock
+// for one polling corpus case, against 30-90s and a handful of containers
+// for every other case. Caching the *http.Transport by containerID (not
+// the request, not the outer http.Client — those are still reconstructed
+// per call by client()/run.go, which is fine, since the cache lives one
+// layer below that) lets its own internal idle-connection pool actually
+// persist across calls: the underlying tunnel connection is dialed once
+// and reused for every subsequent request to the same container, as long
+// as the server on the other end cooperates with HTTP/1.1 keep-alive
+// (ordinary, and the case this matters for — a REST-proxied broker admin
+// API being polled).
+//
+// IdleConnTimeout bounds how long an unused tunnel is kept alive as a
+// backstop; closeHopTransports (called from run.go's teardownAll, R-EXE-5)
+// closes every cached tunnel immediately and unconditionally on every exit
+// path, so nothing outlives the run relying on the timeout alone — the
+// same "a pooled resource is easier to leak than a per-request one"
+// discipline this session has already applied to containers, a network
+// pool, and a port.
+var hopTransports = struct {
+	mu sync.Mutex
+	m  map[string]*http.Transport
+}{m: map[string]*http.Transport{}}
+
+func hopTransportFor(containerID string) *http.Transport {
+	hopTransports.mu.Lock()
+	defer hopTransports.mu.Unlock()
+	if t, ok := hopTransports.m[containerID]; ok {
+		return t
+	}
+	t := &http.Transport{
+		DialContext:     containerNetDialer(containerID),
+		IdleConnTimeout: 30 * time.Second,
+	}
+	hopTransports.m[containerID] = t
+	return t
+}
+
+// closeHopTransports closes every cached tunnel's idle connections and
+// forgets it, so a run never leaves a long-lived tunnel container behind —
+// see hopTransports' doc comment. Safe to call whether or not any tunnel
+// was ever opened (a run that never needed to reach in-stack).
+func closeHopTransports() {
+	hopTransports.mu.Lock()
+	defer hopTransports.mu.Unlock()
+	for id, t := range hopTransports.m {
+		t.CloseIdleConnections()
+		delete(hopTransports.m, id)
+	}
+}
+
 // fallbackTransport is an http.RoundTripper that attempts a normal, direct
 // connection first and only tries reaching the request's host as a
 // running compose service's own container (via discoverSUTContainer,
@@ -220,15 +281,18 @@ func (fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		// package's own inability to find a container to blame it on.
 		return nil, err
 	}
-	// A connection-establishment failure happens before the transport
-	// ever reads the request body in the ordinary case, but restore it
-	// from GetBody when available so a retried POST (BrokerApplier's own
-	// calls) is not silently sent with an already-drained body.
+	// Retry on a clone, never the original Request: it already made one
+	// trip through http.DefaultTransport.RoundTrip above, and a Request
+	// value is not safe to hand to a second, concurrent-capable Transport
+	// once that has happened (its docs: RoundTrip must treat the Request
+	// as read-only except for the Body). Restore the body from GetBody
+	// when available so a retried POST (BrokerApplier's own calls) is not
+	// silently sent with an already-drained body.
+	retry := req.Clone(req.Context())
 	if req.GetBody != nil {
 		if body, gerr := req.GetBody(); gerr == nil {
-			req.Body = body
+			retry.Body = body
 		}
 	}
-	hop := &http.Transport{DialContext: containerNetDialer(containerID)}
-	return hop.RoundTrip(req)
+	return hopTransportFor(containerID).RoundTrip(retry)
 }

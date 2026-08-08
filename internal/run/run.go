@@ -258,6 +258,11 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 		tf := teardownTopology
 		topoMu.Unlock()
 		tf()
+		// A pooled resource is easier to leak than a per-request one
+		// (inreach.go's hopTransports doc comment): every cached
+		// container-network tunnel closes here, on every exit path, not
+		// just a clean finish.
+		closeHopTransports()
 	}
 
 	// R-EXE-16: a signal must tear everything down no matter when it

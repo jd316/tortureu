@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
@@ -112,7 +113,7 @@ func TestHTTPPromQuerier_ReachesInStackPrometheusViaContainerNamespace(t *testin
 	if err != nil {
 		t.Fatalf("docker run: %v: %s", err, out)
 	}
-	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+	t.Cleanup(func() { closeHopTransports(); exec.Command("docker", "rm", "-f", name).Run() })
 
 	// Confirm the premise before asserting the fix: no published port
 	// means a plain host dial cannot reach it, exactly the failure mode
@@ -193,7 +194,7 @@ while True:
 	if err != nil {
 		t.Fatalf("docker run: %v: %s", err, out)
 	}
-	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+	t.Cleanup(func() { closeHopTransports(); exec.Command("docker", "rm", "-f", name).Run() })
 
 	// Confirm the premise: reachable on 127.0.0.1, genuinely not on ::1 —
 	// an AF_INET-only socket never listens on ::1 at all, unlike
@@ -225,4 +226,111 @@ func waitForIPv4Server(t *testing.T, name string) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatal("IPv4-only server never became reachable via docker exec")
+}
+
+// spec: R-CFG-17
+//
+// An E1 finding on the way out (not a correctness bug — nothing leaked,
+// confirmed before and after): the tunnel opened a fresh container per
+// dialed request. BrokerApplier's own poll loop (500ms) multiplied that
+// into ~400 short-lived containers and 270s of wall clock for one corpus
+// case, against 30-90s and a handful of containers for every other case.
+// This proves the fix: an HTTP/1.1 keep-alive server that counts distinct
+// TCP connections it accepts, queried N times in a row through the same
+// (containerID-keyed, package-global — see hopTransports) cached tunnel.
+// Before hopTransportFor existed, fallbackTransport built a brand new
+// *http.Transport (an empty connection pool) on every RoundTrip, so
+// connection reuse never had a chance regardless of the server's own
+// keep-alive support; this asserts the server saw exactly one connection
+// for N requests, not N.
+func TestHTTPPromQuerier_ReusesTunnelAcrossRepeatedQueries(t *testing.T) {
+	dockerAvailable(t)
+
+	name := "promreuse-" + uniqueSuffix("prom")
+	// Readiness is signaled via a marker file, not a probe HTTP request:
+	// any real connection to port 9090 — including a readiness check —
+	// would itself increment the same counter this test asserts on below,
+	// so proving reuse precisely requires not touching the port at all
+	// until the queries under test begin.
+	script := `import http.server
+
+class H(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    count = 0
+    def do_GET(self):
+        body = b'{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"1"]}]}}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def handle(self):
+        H.count += 1
+        with open("/tmp/conn_count", "w") as f:
+            f.write(str(H.count))
+        super().handle()
+    def log_message(self, fmt, *args):
+        pass
+
+srv = http.server.HTTPServer(("0.0.0.0", 9090), H)
+with open("/tmp/ready", "w") as f:
+    f.write("1")
+srv.serve_forever()
+`
+	out, err := exec.Command("docker", "run", "-d", "--name", name,
+		"--label", "com.docker.compose.service="+name,
+		"python:3-alpine", "python3", "-c", script,
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker run: %v: %s", err, out)
+	}
+	t.Cleanup(func() { closeHopTransports(); exec.Command("docker", "rm", "-f", name).Run() })
+	for i := 0; ; i++ {
+		if err := exec.Command("docker", "exec", name, "test", "-f", "/tmp/ready").Run(); err == nil {
+			break
+		}
+		if i >= 50 {
+			t.Fatal("server never wrote its readiness marker")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if portOut, _ := exec.Command("docker", "port", name).Output(); len(portOut) != 0 {
+		t.Fatalf("container unexpectedly has a published port (%s)", portOut)
+	}
+
+	q := HTTPPromQuerier{BaseURL: "http://" + name + ":9090"}
+	const n = 5
+	for i := 0; i < n; i++ {
+		holds, observed, err := q.Query("up")
+		if err != nil {
+			t.Fatalf("Query #%d: %v", i, err)
+		}
+		if !holds || observed != "1" {
+			t.Fatalf("Query #%d: holds=%v observed=%q, want holds=true observed=\"1\"", i, holds, observed)
+		}
+		// BrokerApplier's own poll loop this fix targets spaces calls
+		// 500ms apart; a brief gap gives Go's own connection pool
+		// bookkeeping (returning the just-used connection to its idle
+		// pool) time to settle between requests, the same as real usage,
+		// rather than firing the next request as fast as Go can schedule
+		// it — a race no real caller of this package creates.
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	connOut, err := exec.Command("docker", "exec", name, "cat", "/tmp/conn_count").Output()
+	if err != nil {
+		t.Fatalf("read connection count: %v", err)
+	}
+	// 2, not 1: containerHopScript's own `nc -z` liveness probe (picking
+	// 127.0.0.1 vs ::1, see its doc comment) is itself one accepted TCP
+	// connection, separate from the real, data-carrying one it then execs
+	// into — both belong to the single tunnel this test's own dial-count
+	// logging (verified separately) confirms fires exactly once for all n
+	// queries. The number this test actually guards is that 2 does not
+	// scale with n: the pre-fix code created one fresh tunnel (a probe +
+	// a real connection each) per request, so n=5 would have shown 10.
+	got := strings.TrimSpace(string(connOut))
+	if got != "2" {
+		t.Errorf("server accepted %s distinct TCP connections for %d queries, want 2 (one probe + one reused data connection, not one pair per query) — the tunnel should be reused via keep-alive, not re-dialed (a fresh docker run) per request", got, n)
+	}
 }
