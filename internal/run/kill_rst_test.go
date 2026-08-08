@@ -46,7 +46,16 @@ import (
 // verb, implemented at the only layer this applier can reach (signaling
 // the container's process), produces the former.
 //
-// spec: R-CFG-15
+// This finding is what R-EXE-25 now codifies (pause/kill/graceful are
+// distinct at the signal/exit-code layer, not the client-visible TCP
+// layer); this test is R-EXE-25's verification. It is not R-CFG-15
+// evidence — R-CFG-15 is proven by
+// TestDockerApplier_KillAndGracefulSendGenuinelyDistinctSignals (the
+// signal/exit-code distinction itself); this test proves the separate,
+// narrower claim that the distinction does not extend to a client-visible
+// RST.
+//
+// spec: R-EXE-25
 func TestDockerApplier_KillDoesNotProduceClientVisibleRST(t *testing.T) {
 	dockerAvailable(t)
 
