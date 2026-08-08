@@ -438,6 +438,22 @@ findings in three of four runs. *(E1 → Task 4, 2026-08-08)*
 
 **R-CLI-2** — Every verb **MUST** be listed in `registry.yaml` as the `how:` of at least one tool.
 
+**R-CLI-8** — `emit <tool>` **MUST** generate a runnable command or config for a `delegate`-tier
+tool from `torture.yaml`, **to stdout by default** so it composes (`tortureu emit pumba > chaos.sh`).
+*(closes TBD-2)*
+
+It **MUST** reuse `internal/config` and `internal/fault` rather than re-deriving fault semantics — a
+second translation of the same verbs would drift from the one the run actually uses, and the two
+would disagree silently. It **MUST** report, per fault, any verb it does not translate rather than
+dropping it: a config missing a fault the user asked for is the silent-omission failure this project
+rejects everywhere. An unrecognised tool name **MUST** error listing what `emit` supports.
+
+`emit` performs **no scheduling** against the k6 phase clock. Timing is the caller's — that is what
+`delegate` tier means (R-SCOPE-3: real output, separate timing), and claiming otherwise would make
+it indistinguishable from `drive`.
+
+*(behaviour proposed by the implementer and specified before citation, per R-PROC-2)*
+
 **R-CLI-7** — `check contracts` **MUST** detect `spec:openapi` / `spec:proto` via detection's
 `Coverage` facts and invoke the corresponding tool — `oasdiff` or `buf breaking` — against a
 caller-supplied `-baseline` (a git ref or file path). The baseline **MUST NOT** be guessed: a
@@ -808,7 +824,7 @@ nothing to suggest, and only the second is honest.
 
 - **TBD-1** — Verdict storage format for cross-commit trend tracking (SQLite / JSONL /
   Bencher-compatible). Blocked until there are runs worth comparing.
-- **TBD-2** — Whether `emit` writes files or prints to stdout by default.
+- ~~**TBD-2**~~ — **RESOLVED**: `emit` prints to stdout by default (R-CLI-8), so its output composes with a shell redirect rather than requiring a path argument.
 - **TBD-5** — Whether to adopt the `grafana/k6-summary` JSON Schema once it leaves
   work-in-progress, replacing our own `handleSummary()` shape.
 - **TBD-6** — `Obs.MaxConfidence` when a repo has **no** observability infrastructure at all.

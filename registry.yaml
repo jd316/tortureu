@@ -73,9 +73,9 @@ domains:
     coverage: drive
     tools:
       - { id: toxiproxy, tier: drive,    when: always,        how: "faults: [{inject: {latency|down|bandwidth|slicer}}]", note: "CORE. local, scriptable, no k8s", licence: "MIT" }
-      - { id: pumba,     tier: delegate, when: "always",      how: "tortureu emit pumba",     note: "container kill/pause + netem", planned: emit }
-      - { id: tc-netem,  tier: delegate, when: always,        how: "tortureu emit netem",     note: "needs NET_ADMIN", planned: emit }
-      - { id: iptables,  tier: delegate, when: always,        how: "tortureu emit iptables",  note: "blackhole vs RST are different client behaviours", planned: emit }
+      - { id: pumba,     tier: delegate, when: "always",      how: "tortureu emit pumba",     note: "container kill/pause + netem" }
+      - { id: tc-netem,  tier: delegate, when: always,        how: "tortureu emit netem",     note: "needs NET_ADMIN" }
+      - { id: iptables,  tier: delegate, when: always,        how: "tortureu emit iptables",  note: "blackhole vs RST are different client behaviours" }
       - { id: istio-fault, tier: know,   when: "platform:k8s", how: "VirtualService fault filter", note: "HTTP abort/delay by percentage" }
       - { id: linkerd-fault, tier: know, when: "platform:k8s", how: "linkerd inject" }
       - { id: blockade,  tier: know,     when: never,         how: "blockade partition",      note: "overlaps pumba" }
