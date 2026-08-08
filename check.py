@@ -232,7 +232,7 @@ ok(not orphans, "every internal package has a caller" + (f" — UNWIRED: {orphan
 # `planned:`. The final review found ~34 entries instructing users to run verbs that exit 2,
 # and a header naming `tortureu suggest`, which is not a verb at all. Telling someone to run a
 # command that cannot run is the documentation form of "built but unreachable".
-IMPLEMENTED = {'init', 'run', 'doctor', 'mcp'}
+IMPLEMENTED = {'init', 'run', 'doctor', 'mcp', 'smoke', 'check'}
 # Flags a how: may name. Verb-level checking is not enough: `tortureu run --db-load` passes a
 # verb check and still tells a user to pass a flag that does not exist.
 REAL_FLAGS = set()

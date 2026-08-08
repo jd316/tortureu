@@ -21,8 +21,8 @@ func TestLoadRegistryCountsMatchSourceOfTruth(t *testing.T) {
 	if got := reg.DomainCount(); got != 19 {
 		t.Fatalf("DomainCount() = %d, want 19", got)
 	}
-	if got := reg.ToolCount(); got != 151 {
-		t.Fatalf("ToolCount() = %d, want 151", got)
+	if got := reg.ToolCount(); got != 152 {
+		t.Fatalf("ToolCount() = %d, want 152", got)
 	}
 }
 
@@ -42,8 +42,8 @@ func TestLoadEmbeddedRegistryWorksFromAnyWorkingDirectory(t *testing.T) {
 	if got := reg.DomainCount(); got != 19 {
 		t.Fatalf("DomainCount() = %d, want 19", got)
 	}
-	if got := reg.ToolCount(); got != 151 {
-		t.Fatalf("ToolCount() = %d, want 151", got)
+	if got := reg.ToolCount(); got != 152 {
+		t.Fatalf("ToolCount() = %d, want 152", got)
 	}
 }
 

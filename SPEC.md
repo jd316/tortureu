@@ -438,6 +438,38 @@ findings in three of four runs. *(E1 → Task 4, 2026-08-08)*
 
 **R-CLI-2** — Every verb **MUST** be listed in `registry.yaml` as the `how:` of at least one tool.
 
+**R-CLI-7** — `check contracts` **MUST** detect `spec:openapi` / `spec:proto` via detection's
+`Coverage` facts and invoke the corresponding tool — `oasdiff` or `buf breaking` — against a
+caller-supplied `-baseline` (a git ref or file path). The baseline **MUST NOT** be guessed: a
+missing one is an error, because silently comparing against the wrong baseline produces a
+confident, wrong answer.
+
+These are **delegate**-tier tools (R-SCOPE-3): we detect what applies and hand off. We do not
+reimplement them, and a tool absent from `PATH` **MUST** be reported with an install hint in the
+manner of **R-CLI-5**, never as an obscure failure.
+
+Exit codes follow **R-VER-7**, and the distinction **R-VER-2** draws applies: a breaking change is
+a *result* (`1`), not a tool error (`2`). Reporting a real finding as our own failure would send a
+user to debug TortureU instead of their API.
+
+*(behaviour proposed by the implementer and specified before citation, per R-PROC-2)*
+
+**R-CLI-6** — `smoke` **MUST** drive a constant request rate against `-url` for a fixed short
+duration with no `torture.yaml`, and **MUST** reach a SUT isolated by **R-DC2-3**'s internal-only
+network the same way `run`'s load path does — a direct dial first, falling back to a
+container-network-namespace join.
+
+It **MUST** report requests sent, success count and rate, and p50/p95/p99 latency, and **MUST NOT**
+produce a verdict document, findings, or attribution: those are `run`'s, and a second producer of
+them would be the duplicate-source-of-truth **R-VER-9** forbids.
+
+Exit codes follow **R-VER-7**: `2` when zero requests were attempted (the tool failed), `1` when
+requests were sent and the success rate fell below `-min-success-rate` (the system failed), `0`
+otherwise. Codes `3` and `4` do **not** apply — `smoke` performs no egress classification, no reset,
+and no per-finding confidence — and **MUST NOT** be repurposed for other meanings.
+
+*(behaviour proposed by the implementer and specified before citation, per R-PROC-2)*
+
 **R-CLI-5** — `doctor` **MUST** report whether the tools a run needs (`k6`, `docker`,
 `docker compose`) are present on this machine, and `init` **MUST** warn about any that are missing
 without failing — writing a config is still useful on a machine that cannot yet run.

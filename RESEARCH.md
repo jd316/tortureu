@@ -5,7 +5,9 @@ stack and drives every layer of backend torture — load, faults, replay, correc
 without them wiring five tools together. Usable directly by humans and by coding agents
 (Claude Code / Codex / Cursor) through a single MCP surface.
 
-**Status:** design closed. 19 domains · 151 tools · 2 constraints · 9 decisions. No code yet.
+**Status:** built and measured. 19 domains · 152 tools · 2 constraints · 9 decisions.
+This file is the **survey and rationale** — the *why*. `SPEC.md` is normative and `BENCHMARKS.md`
+carries the measured results; where any of them disagree with this file, they win.
 **Date:** 2026-08-08
 
 ---
@@ -18,10 +20,10 @@ without them wiring five tools together. Usable directly by humans and by coding
 |---|---|---|
 | **drive** | We execute it, on our clock, folded into one verdict. Needs co-execution. | 28 |
 | **delegate** | We generate its config/command and hand off. Real output, separate timing. | 35 |
-| **know** | We name it, say when it applies, point at it. Zero integration cost. | 88 |
+| **know** | We name it, say when it applies, point at it. Zero integration cost. | 89 |
 
 The P0/P1/P2/SKIP columns below are **build order within a tier**, not coverage. Coverage is
-`drive`+`delegate`+`know` = all 151 tools, which is what makes "all in one place" true (see
+`drive`+`delegate`+`know` = all 152 tools, which is what makes "all in one place" true (see
 [Compliance](#compliance--all-in-one-place)).
 
 **Effort** — adapter cost: **S** = config/exec wrapper (<1d) · **M** = needs state/lifecycle mgmt (2–5d) · **L** = real subsystem (1w+)
@@ -35,7 +37,7 @@ The P0/P1/P2/SKIP columns below are **build order within a tier**, not coverage.
 | Tool | Lang | License | Tier | Effort | Own? | Notes |
 |---|---|---|---|---|---|---|
 | **k6** | JS (Go core) | AGPL-3 | **P0** | S | drive | Default engine. Open-model `ramping-arrival-rate` = true spike sim. Native Prometheus RW output. Already ships `k6 x agent` / `k6 x mcp` — **do not rebuild that, compose with it.** |
-| **Vegeta** | Go | MIT | **P0** | S | drive | Constant-rate smoke check. 1-line invoke, no script file. Good `tortureu smoke`. |
+| **Vegeta** | Go | MIT | **P0** | S | know | Constant-rate smoke check. `tortureu smoke` implements its *model* in-process rather than driving the binary: reaching a DC-2-isolated SUT needs a custom dialer a subprocess cannot use (R-CLI-6). |
 | **Gatling** | Scala/Java/JS | Apache-2 | P1 | M | emit | Highest throughput/generator. JVM lifecycle + report parsing is the cost. |
 | **Locust** | Python | MIT | P1 | M | drive | Python-native teams; distributed master/worker adds lifecycle work. |
 | **JMeter** | XML/Groovy | Apache-2 | P1 | M | emit | Only reason: protocol breadth (JDBC/JMS/LDAP/SOAP/FTP). Thread-per-VU, heavy. |
@@ -335,7 +337,7 @@ off. `know` = we name it, say when it applies, point at it. **Every domain has n
 | 17 | Agent surfaces | 5 | 1 | 0 | 4 | `mcp` |
 | 18 | **Event-driven / async** | 8 | 4 | 2 | 2 | `run` `assert:` |
 | 19 | **Resilience config audit** | 8 | 4 | 0 | 4 | `doctor` |
-| | **Total** | **151** | **28** | **35** | **88** | |
+| | **Total** | **152** | **28** | **35** | **89** | |
 
 > Counts are generated from `registry.yaml`, not hand-maintained — an earlier hand-count in this
 > table was wrong by 14 tools. If they drift again, the registry is the truth.

@@ -30,7 +30,8 @@ domains:
     coverage: drive
     tools:
       - { id: k6,        tier: drive,    when: always,        how: "tortureu run <scenario>", note: "default engine; open-model arrival rate", licence: "AGPL-3.0" }
-      - { id: vegeta,    tier: drive,    when: always,        how: "tortureu smoke",          note: "constant-rate sanity check, no script", planned: smoke, licence: "MIT" }
+      - { id: tortureu-smoke, tier: drive, when: always,   how: "tortureu smoke",          note: "vegeta's constant-rate model, in-process (R-CLI-6)", licence: "MIT (this project)" }
+      - { id: vegeta,    tier: know,     when: always,        how: "vegeta attack -rate=<n>", note: "we do not drive vegeta: `tortureu smoke` implements its constant-rate model in-process, because reaching a DC-2-isolated SUT needs a custom dialer a subprocess cannot use (R-CLI-6)", licence: "MIT" }
       - { id: gatling,   tier: delegate, when: "lang:java|lang:scala", how: "tortureu emit gatling", note: "highest throughput per generator", planned: emit }
       - { id: locust,    tier: delegate, when: "lang:python", how: "tortureu emit locust", planned: emit }
       - { id: jmeter,    tier: delegate, when: "dep:jms|dep:ldap|dep:soap", how: "tortureu emit jmeter", note: "only for protocols k6 lacks", planned: emit }
