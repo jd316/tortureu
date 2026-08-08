@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +35,7 @@ import (
 	realapplier "github.com/jdb316/tortureu/internal/applier"
 	"github.com/jdb316/tortureu/internal/config"
 	"github.com/jdb316/tortureu/internal/detect"
+	"github.com/jdb316/tortureu/internal/doctor"
 	"github.com/jdb316/tortureu/internal/egress"
 	"github.com/jdb316/tortureu/internal/fault"
 	"github.com/jdb316/tortureu/internal/k6"
@@ -474,8 +476,20 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 	}
 	v.Metrics = metrics
 
-	thresholdPassed, thresholdFindings := evaluateThresholds(metrics, cfg.Faults, sys)
-	promPassed, promFindings := evaluatePromqlAsserts(cfg.Assert, deps.Prom, cfg.Faults, sys)
+	// R-DET-1 forbids detection itself from reading source; R-AUD-5
+	// explicitly permits internal/doctor's own bounded, table-driven
+	// construction-site inspection to do exactly that (see
+	// candidatesFromAudit's doc comment, findings.go). This is what closes
+	// TBD-10: a stdlib client like net/http never appears in a lockfile
+	// (R-DET-5), so detect.Dep.Clients alone can never carry it into
+	// Candidates no matter how complete this package's own knob table is —
+	// doctor.Audit is the one place already permitted to see it. Same dir
+	// argument cmd/tortureu's own doctor command uses (filepath.Dir of the
+	// compose file) — this package still never opens a source file itself.
+	auditFindings := doctor.Audit(filepath.Dir(cfg.Target.Compose), &sys)
+
+	thresholdPassed, thresholdFindings := evaluateThresholds(metrics, cfg.Faults, sys, auditFindings)
+	promPassed, promFindings := evaluatePromqlAsserts(cfg.Assert, deps.Prom, cfg.Faults, sys, auditFindings)
 	sqlFindings := evaluateSQLAsserts(cfg.Assert)
 
 	// 6. Tear down every fault (R-EXE-5), before the verdict is emitted.

@@ -7,6 +7,7 @@ import (
 
 	"github.com/jdb316/tortureu/internal/config"
 	"github.com/jdb316/tortureu/internal/detect"
+	"github.com/jdb316/tortureu/internal/doctor"
 	"github.com/jdb316/tortureu/internal/verdict"
 )
 
@@ -113,22 +114,53 @@ func knobsFor(client string) []string {
 
 // buildCandidates turns one fault's detected dependency into the D-9
 // candidate list (R-VER-4): library + known knobs, one entry per client
-// library the target dependency was detected using. A target with no
-// matching detect.Dep (an external host, or one detection simply never
-// saw) produces no candidates — not a fabricated one.
-func buildCandidates(f config.Fault, deps []detect.Dep, lang string) []verdict.Candidate {
-	dep := depForTarget(deps, f.Target)
-	if dep == nil {
-		return nil
-	}
+// library the target dependency was detected using — from
+// detect.Dep.Clients (R-DET-5's lockfile/manifest scan) and, additionally,
+// from internal/doctor's Audit findings for the same dependency (see
+// candidatesFromAudit's doc comment for why this second source exists: a
+// stdlib client like net/http never appears in a lockfile at all, so
+// lockfile-sourced Clients alone systematically misses it). A target with
+// no matching detect.Dep (an external host, or one detection simply never
+// saw) and no audit finding for it produces no candidates — not a
+// fabricated one.
+func buildCandidates(f config.Fault, deps []detect.Dep, auditFindings []doctor.Finding, lang string) []verdict.Candidate {
 	source := manifestFor(lang)
-	candidates := make([]verdict.Candidate, 0, len(dep.Clients))
-	for _, client := range dep.Clients {
-		candidates = append(candidates, verdict.Candidate{
-			Library: client,
-			Source:  source,
-			Knobs:   knobsFor(client),
-		})
+	seen := map[string]bool{}
+	var candidates []verdict.Candidate
+
+	dep := depForTarget(deps, f.Target)
+	if dep != nil {
+		for _, client := range dep.Clients {
+			if seen[client] {
+				continue
+			}
+			seen[client] = true
+			candidates = append(candidates, verdict.Candidate{
+				Library: client,
+				Source:  source,
+				Knobs:   knobsFor(client),
+			})
+		}
+	}
+
+	depName := ""
+	if dep != nil {
+		depName = dep.Name
+	} else {
+		// depForTarget matches on Address; a dependency detect never built
+		// a full Dep record for (e.g. a bare compose service name with no
+		// recognized image, case 1's "dep") still has a name — the
+		// hostname portion of the fault's own target — and internal/doctor
+		// keys its Findings by DepName, not Address, so this is still
+		// worth trying against the audit.
+		depName = hostnameOf(f.Target)
+	}
+	for _, c := range candidatesFromAudit(depName, auditFindings, source) {
+		if seen[c.Library] {
+			continue
+		}
+		seen[c.Library] = true
+		candidates = append(candidates, c)
 	}
 	return candidates
 }
@@ -301,7 +333,7 @@ const noFaultCandidateSource = " (no active fault — detected client, not a dia
 // a deterministic verdict; a dependency detect.System found with no
 // Clients at all (case 6's shape: an in-process, nobody's-library defect)
 // contributes nothing, which is the honest answer, not a gap to pad.
-func buildCandidatesFromDetectedDeps(deps []detect.Dep, lang string) []verdict.Candidate {
+func buildCandidatesFromDetectedDeps(deps []detect.Dep, auditFindings []doctor.Finding, lang string) []verdict.Candidate {
 	if len(deps) == 0 {
 		return nil
 	}
@@ -316,17 +348,79 @@ func buildCandidatesFromDetectedDeps(deps []detect.Dep, lang string) []verdict.C
 	sortStrings(addresses)
 
 	var candidates []verdict.Candidate
+	seen := map[string]bool{}
 	for _, addr := range addresses {
 		dep := byAddress[addr]
 		clients := append([]string(nil), dep.Clients...)
 		sortStrings(clients)
 		for _, client := range clients {
+			if seen[client] {
+				continue
+			}
+			seen[client] = true
 			candidates = append(candidates, verdict.Candidate{
 				Library: client,
 				Source:  source,
 				Knobs:   knobsFor(client),
 			})
 		}
+		for _, c := range candidatesFromAudit(dep.Name, auditFindings, source) {
+			if seen[c.Library] {
+				continue
+			}
+			seen[c.Library] = true
+			candidates = append(candidates, c)
+		}
+	}
+	return candidates
+}
+
+// candidatesFromAudit turns internal/doctor's Audit findings for depName
+// into D-9 candidates (R-VER-4), in addition to (never instead of)
+// whatever detect.Dep.Clients already offers.
+//
+// R-DET-1 forbids internal/detect (and this package) from reading source
+// directly to discover a dependency's client library; R-AUD-5 explicitly
+// permits internal/doctor's own bounded, table-driven construction-site
+// inspection to do exactly that, for the small set of libraries its own
+// table names. This consumes that result rather than re-implementing
+// source reading here — doing so in this package would breach R-DET-1's
+// bound a second time in a second place, which is the entire reason this
+// function exists instead of a duplicate scan.
+//
+// This closes a gap E1 found directly (TBD-10): a fault-driven finding
+// whose SUT client is Go's standard net/http (case 1, "HTTP client with no
+// timeout" — the corpus's canonical resilience defect) was detected and
+// correctly attributed, but could never carry Client.Timeout as the fix.
+// net/http is stdlib and never appears in a go.mod require line, so
+// detect.Dep.Clients (R-DET-5, lockfile-only) structurally cannot record
+// it no matter how complete findings.go's own clientKnobPatterns is.
+// internal/doctor's Audit is not bound by R-DET-1's lockfile-only rule for
+// its own bounded inspection, so its Finding.Library can name net/http
+// even when detect never could.
+//
+// Bound preserved, not widened: only a Library internal/doctor's own table
+// already names ever reaches this function (Audit itself never invents
+// one, per R-AUD-5/6) — this routes an already-bounded result into the
+// candidate surface, it does not add any new source-reading capability of
+// its own. auditFindings may be nil (most call sites, and every call site
+// predating this fix): the honesty rules are unchanged either way — an
+// unrecognized library still gets a name and no knobs (knobsFor), and a
+// dependency the audit never reached (nil/empty auditFindings, or no
+// finding matching depName) contributes nothing, not a gap to pad.
+func candidatesFromAudit(depName string, auditFindings []doctor.Finding, source string) []verdict.Candidate {
+	seen := map[string]bool{}
+	var candidates []verdict.Candidate
+	for _, af := range auditFindings {
+		if af.DepName != depName || af.Library == "" || seen[af.Library] {
+			continue
+		}
+		seen[af.Library] = true
+		candidates = append(candidates, verdict.Candidate{
+			Library: af.Library,
+			Source:  source,
+			Knobs:   knobsFor(af.Library),
+		})
 	}
 	return candidates
 }
@@ -345,7 +439,7 @@ func buildCandidatesFromDetectedDeps(deps []detect.Dep, lang string) []verdict.C
 // buildCandidatesFromDetectedDeps's doc comment for why that was the E1
 // gap): every detected client is offered instead, labeled as the plausible
 // set rather than a single attributed cause.
-func attribute(f *verdict.Finding, faults []config.Fault, deps []detect.Dep, lang string) {
+func attribute(f *verdict.Finding, faults []config.Fault, deps []detect.Dep, auditFindings []doctor.Finding, lang string) {
 	if len(faults) == 1 {
 		c := faults[0]
 		f.Cause = &verdict.Cause{
@@ -356,11 +450,11 @@ func attribute(f *verdict.Finding, faults []config.Fault, deps []detect.Dep, lan
 		}
 	}
 	if len(faults) == 0 {
-		f.Candidates = buildCandidatesFromDetectedDeps(deps, lang)
+		f.Candidates = buildCandidatesFromDetectedDeps(deps, auditFindings, lang)
 		return
 	}
 	for _, fault := range faults {
-		f.Candidates = append(f.Candidates, buildCandidates(fault, deps, lang)...)
+		f.Candidates = append(f.Candidates, buildCandidates(fault, deps, auditFindings, lang)...)
 	}
 }
 
@@ -375,7 +469,7 @@ func attribute(f *verdict.Finding, faults []config.Fault, deps []detect.Dep, lan
 // libraries, for Candidates). Both Passed and Finding entries carry the
 // actual measured statistic (see measuredValue), falling back to the
 // honest "not measured" only when it genuinely cannot be read.
-func evaluateThresholds(metrics map[string]any, faults []config.Fault, sys detect.System) ([]verdict.Passed, []verdict.Finding) {
+func evaluateThresholds(metrics map[string]any, faults []config.Fault, sys detect.System, auditFindings []doctor.Finding) ([]verdict.Passed, []verdict.Finding) {
 	var passed []verdict.Passed
 	var findings []verdict.Finding
 
@@ -420,7 +514,7 @@ func evaluateThresholds(metrics map[string]any, faults []config.Fault, sys detec
 					Observed:  observed,
 				},
 			}
-			attribute(&finding, faults, sys.Deps, sys.Lang)
+			attribute(&finding, faults, sys.Deps, auditFindings, sys.Lang)
 			findings = append(findings, finding)
 		}
 	}
@@ -436,7 +530,7 @@ func evaluateThresholds(metrics map[string]any, faults []config.Fault, sys detec
 // evaluateThresholds. IDs are assigned once by the caller after every
 // finding source is merged (Run, run.go) — not here, where two independent
 // slices numbering from f1 would collide once combined.
-func evaluatePromqlAsserts(asserts []config.AssertEntry, querier PromQuerier, faults []config.Fault, sys detect.System) ([]verdict.Passed, []verdict.Finding) {
+func evaluatePromqlAsserts(asserts []config.AssertEntry, querier PromQuerier, faults []config.Fault, sys detect.System, auditFindings []doctor.Finding) ([]verdict.Passed, []verdict.Finding) {
 	var passed []verdict.Passed
 	var findings []verdict.Finding
 	for _, entry := range asserts {
@@ -465,7 +559,7 @@ func evaluatePromqlAsserts(asserts []config.AssertEntry, querier PromQuerier, fa
 			Confidence: confidenceFor(len(faults)),
 			Broke:      verdict.Broke{Assertion: assertion, Observed: observed},
 		}
-		attribute(&finding, faults, sys.Deps, sys.Lang)
+		attribute(&finding, faults, sys.Deps, auditFindings, sys.Lang)
 		findings = append(findings, finding)
 	}
 	return passed, findings

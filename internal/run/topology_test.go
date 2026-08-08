@@ -237,9 +237,10 @@ func TestComposeTopologyApplier_TeardownDisabledRemovesLeakedContainer(t *testin
 	sutContainer := suffix + "proj-sut-1"
 	redisContainer := suffix + "proj-redis-1"
 	backendContainer := suffix + "proj-redis-tortureu-backend-1"
+	proxyContainer := suffix + "proj-" + suffix + "-proxy-1"
 	t.Cleanup(func() {
 		exec.Command("docker", "compose", "-f", composePath, "-f", overlayPath, "--profile", tortureuDisabledProfile, "down", "-v").Run()
-		forceRemoveContainers(sutContainer, redisContainer, backendContainer)
+		forceRemoveContainers(sutContainer, redisContainer, backendContainer, proxyContainer)
 	})
 
 	// Step 1: the "before Apply ever runs" state — a plain `up`, exactly
@@ -255,7 +256,14 @@ func TestComposeTopologyApplier_TeardownDisabledRemovesLeakedContainer(t *testin
 	// Step 2: Apply, exactly as Run calls it, with redis as an
 	// internal-class fault target.
 	top := egress.BuildTopology(suffix+"_sut", suffix+"_egress", suffix+"-proxy")
-	applier := ComposeTopologyApplier{OverlayPath: overlayPath}
+	// derivedPort, not the fixed default: this test runs `up` for real
+	// (unlike most of this file's tests, which pass Up: []string{"config"}
+	// to avoid needing real containers at all) — a fixed control port
+	// would collide with itself under -count=2 or with any other
+	// concurrently-running stack, exactly the class of bug
+	// ProxyControlPort's own doc comment and dc2_enforcement_test.go's
+	// derivedPort helper already exist to prevent.
+	applier := ComposeTopologyApplier{OverlayPath: overlayPath, ProxyControlPort: derivedPort(suffix)}
 	if err := applier.Apply(composePath, top, nil, []string{"redis:6379"}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

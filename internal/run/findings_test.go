@@ -7,6 +7,7 @@ import (
 
 	"github.com/jdb316/tortureu/internal/config"
 	"github.com/jdb316/tortureu/internal/detect"
+	"github.com/jdb316/tortureu/internal/doctor"
 	"github.com/jdb316/tortureu/internal/verdict"
 )
 
@@ -17,7 +18,7 @@ func TestEvaluateThresholds_HeldThresholdIsListedAsPassed(t *testing.T) {
 			"thresholds": map[string]any{"p(95)<500": map[string]any{"ok": true}},
 		},
 	}
-	passed, findings := evaluateThresholds(metrics, oneFault(), detect.System{})
+	passed, findings := evaluateThresholds(metrics, oneFault(), detect.System{}, nil)
 	if len(findings) != 0 {
 		t.Fatalf("findings = %v, want none", findings)
 	}
@@ -43,7 +44,7 @@ func TestEvaluateThresholds_BrokenThresholdReportsMeasuredValue(t *testing.T) {
 			},
 		},
 	}
-	_, findings := evaluateThresholds(metrics, oneFault(), detect.System{})
+	_, findings := evaluateThresholds(metrics, oneFault(), detect.System{}, nil)
 	if len(findings) != 1 {
 		t.Fatalf("findings = %v, want exactly one", findings)
 	}
@@ -62,7 +63,7 @@ func TestEvaluateThresholds_HeldThresholdReportsMeasuredValue(t *testing.T) {
 			},
 		},
 	}
-	passed, _ := evaluateThresholds(metrics, oneFault(), detect.System{})
+	passed, _ := evaluateThresholds(metrics, oneFault(), detect.System{}, nil)
 	if len(passed) != 1 {
 		t.Fatalf("passed = %v, want exactly one", passed)
 	}
@@ -81,7 +82,7 @@ func TestEvaluateThresholds_FallsBackToNotMeasuredWhenValueUnavailable(t *testin
 			"thresholds": map[string]any{"p(95)<500": map[string]any{"ok": false}},
 		},
 	}
-	_, findings := evaluateThresholds(metrics, oneFault(), detect.System{})
+	_, findings := evaluateThresholds(metrics, oneFault(), detect.System{}, nil)
 	if got := findings[0].Broke.Observed; got != "not measured" {
 		t.Errorf("Broke.Observed = %q, want \"not measured\" — no values object was available to read a real number from", got)
 	}
@@ -109,7 +110,7 @@ func TestEvaluateThresholds_ReadsRealK6SummaryShapeNotNestedUnderValues(t *testi
 			"thresholds": map[string]any{"rate<0.5": map[string]any{"ok": true}},
 		},
 	}
-	passed, findings := evaluateThresholds(metrics, oneFault(), detect.System{})
+	passed, findings := evaluateThresholds(metrics, oneFault(), detect.System{}, nil)
 	if len(findings) != 0 {
 		t.Fatalf("findings = %v, want none (both thresholds held)", findings)
 	}
@@ -138,7 +139,7 @@ func TestEvaluatePromqlAsserts_UnevaluatedAssertStillReadsUnevaluatedNotMeasured
 	// number next to a fail marker, worse than either a clear pass or fail.
 	// internal/verdict now carries this structurally.
 	asserts := []config.AssertEntry{{"promql": "up == 1"}}
-	passed, findings := evaluatePromqlAsserts(asserts, nil, oneFault(), detect.System{})
+	passed, findings := evaluatePromqlAsserts(asserts, nil, oneFault(), detect.System{}, nil)
 	if len(passed) != 0 {
 		t.Fatalf("passed = %v, want empty — an unevaluated assertion must never be listed as held", passed)
 	}
@@ -182,7 +183,7 @@ func TestEvaluateThresholds_BrokenThresholdWithOneFaultIsCorrelated(t *testing.T
 			"thresholds": map[string]any{"p(99)<1500": map[string]any{"ok": false}},
 		},
 	}
-	_, findings := evaluateThresholds(metrics, oneFault(), detect.System{})
+	_, findings := evaluateThresholds(metrics, oneFault(), detect.System{}, nil)
 	if len(findings) != 1 {
 		t.Fatalf("findings = %v, want exactly one", findings)
 	}
@@ -198,7 +199,7 @@ func TestEvaluateThresholds_BrokenThresholdWithMultipleFaultsIsAmbiguous(t *test
 			"thresholds": map[string]any{"p(99)<1500": map[string]any{"ok": false}},
 		},
 	}
-	_, findings := evaluateThresholds(metrics, twoFaults(), detect.System{})
+	_, findings := evaluateThresholds(metrics, twoFaults(), detect.System{}, nil)
 	if findings[0].Confidence != verdict.Ambiguous {
 		t.Errorf("Confidence = %q, want ambiguous with >=2 candidate faults and no traces", findings[0].Confidence)
 	}
@@ -214,7 +215,7 @@ func TestEvaluateThresholds_NeverReportsCausedWithoutATracePipeline(t *testing.T
 			"thresholds": map[string]any{"p(99)<1500": map[string]any{"ok": false}},
 		},
 	}
-	_, findings := evaluateThresholds(metrics, oneFault(), detect.System{})
+	_, findings := evaluateThresholds(metrics, oneFault(), detect.System{}, nil)
 	if findings[0].Confidence == verdict.Caused {
 		t.Error("Confidence = caused, but no trace pipeline exists to justify that claim")
 	}
@@ -234,7 +235,7 @@ func TestEvaluateThresholds_SingleActiveFaultRecordsItAsCause(t *testing.T) {
 		Name: "pg_slow", At: "peak", For: "60s", Target: "postgres:5432",
 		Verb: "latency", Inject: map[string]any{"latency": "300ms", "jitter": "50ms"},
 	}}
-	_, findings := evaluateThresholds(metrics, faults, detect.System{})
+	_, findings := evaluateThresholds(metrics, faults, detect.System{}, nil)
 	if len(findings) != 1 {
 		t.Fatalf("findings = %v, want exactly one", findings)
 	}
@@ -265,7 +266,7 @@ func TestEvaluateThresholds_MultipleActiveFaultsRecordNoSingleCause(t *testing.T
 			"thresholds": map[string]any{"p(99)<1500": map[string]any{"ok": false}},
 		},
 	}
-	_, findings := evaluateThresholds(metrics, twoFaults(), detect.System{})
+	_, findings := evaluateThresholds(metrics, twoFaults(), detect.System{}, nil)
 	if findings[0].Cause != nil {
 		t.Errorf("Cause = %+v, want nil — ambiguous confidence must not fabricate a single attribution", findings[0].Cause)
 	}
@@ -289,7 +290,7 @@ func TestEvaluateThresholds_CandidatesComeFromTargetDetectedClients(t *testing.T
 		Name: "postgres", Type: "postgresql", Address: "postgres:5432",
 		Clients: []string{"github.com/jackc/pgx/v5"},
 	}}
-	_, findings := evaluateThresholds(metrics, faults, detect.System{Deps: deps})
+	_, findings := evaluateThresholds(metrics, faults, detect.System{Deps: deps}, nil)
 	if len(findings) != 1 {
 		t.Fatalf("findings = %v, want exactly one", findings)
 	}
@@ -329,7 +330,7 @@ func TestEvaluateThresholds_UnknownClientLibraryGetsNoFabricatedKnobs(t *testing
 		Name: "widget", Type: "widget", Address: "widget:1234",
 		Clients: []string{"some-org/unheard-of-client"},
 	}}
-	_, findings := evaluateThresholds(metrics, faults, detect.System{Deps: deps})
+	_, findings := evaluateThresholds(metrics, faults, detect.System{Deps: deps}, nil)
 	candidates := findings[0].Candidates
 	if len(candidates) != 1 {
 		t.Fatalf("Candidates = %v, want one entry naming the client even without known knobs", candidates)
@@ -367,7 +368,7 @@ func TestEvaluateThresholds_NetHTTPClientCarriesTimeoutAndPoolKnobs(t *testing.T
 		Name: "dep", Type: "http", Address: "dep:8080",
 		Clients: []string{"net/http"},
 	}}
-	_, findings := evaluateThresholds(metrics, faults, detect.System{Deps: deps})
+	_, findings := evaluateThresholds(metrics, faults, detect.System{Deps: deps}, nil)
 	if len(findings) != 1 {
 		t.Fatalf("findings = %v, want exactly one", findings)
 	}
@@ -406,6 +407,108 @@ func TestEvaluateThresholds_NetHTTPClientCarriesTimeoutAndPoolKnobs(t *testing.T
 
 // spec: R-VER-4
 //
+// TBD-10, E1's final measurement: candidates 2/6. Case 1 — "HTTP client
+// with no timeout," the corpus's canonical resilience defect — is detected
+// and correctly attributed, and still could not name Client.Timeout as the
+// fix, because net/http is stdlib and never appears in a go.mod require
+// line: detect.Dep.Clients (R-DET-5, lockfile-only) structurally can never
+// record it, no matter how complete clientKnobPatterns already is (the
+// previous round's fix to that table was unreachable for exactly this
+// reason).
+//
+// R-DET-1 forbids detection (and this package) from reading source to find
+// this; R-AUD-5 explicitly permits internal/doctor's own bounded,
+// table-driven construction-site inspection to do exactly that. This test
+// proves the routing: with detect.Dep.Clients genuinely empty for the
+// target (case 1's real shape — nothing a lockfile scan could ever find),
+// an internal/doctor Finding naming net/http for the same dependency still
+// reaches Candidates with Client.Timeout, sourced through
+// candidatesFromAudit rather than any new source-reading this package does
+// itself.
+func TestEvaluateThresholds_AuditDiscoveredNetHTTPClientCarriesClientTimeout(t *testing.T) {
+	metrics := map[string]any{
+		"http_req_duration": map[string]any{
+			"thresholds": map[string]any{"p(95)<1000": map[string]any{"ok": false}},
+		},
+	}
+	faults := []config.Fault{{
+		Name: "dep_slow", At: "peak", Target: "dep:9090",
+		Verb: "latency", Inject: map[string]any{"latency": "3s"},
+	}}
+	// The real shape of case 1's "dep": detect never recorded a client at
+	// all (net/http is stdlib, no go.mod entry can ever name it) — this is
+	// deliberately NOT the same fixture as
+	// TestEvaluateThresholds_NetHTTPClientCarriesTimeoutAndPoolKnobs above,
+	// which simulated Clients already containing "net/http" (impossible in
+	// reality) to prove the knob table alone. This test proves the other,
+	// previously-missing half: getting "net/http" into Candidates at all
+	// when Clients is empty.
+	deps := []detect.Dep{{Name: "dep", Type: "http", Address: "dep:9090"}}
+	auditFindings := []doctor.Finding{
+		{DepName: "dep", DepType: "http", Library: "net/http", Check: doctor.CheckTimeout, Determined: true, Present: false},
+	}
+
+	_, findings := evaluateThresholds(metrics, faults, detect.System{Deps: deps}, auditFindings)
+	if len(findings) != 1 {
+		t.Fatalf("findings = %v, want exactly one", findings)
+	}
+	candidates := findings[0].Candidates
+	if len(candidates) != 1 {
+		t.Fatalf("Candidates = %v, want exactly one (net/http, sourced from the audit since detect.Dep.Clients is empty)", candidates)
+	}
+	if !strings.Contains(candidates[0].Library, "net/http") {
+		t.Errorf("Candidate.Library = %q, want net/http", candidates[0].Library)
+	}
+	found := false
+	for _, k := range candidates[0].Knobs {
+		if strings.Contains(k, "Client.Timeout") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Knobs = %v, want Client.Timeout — case 1's own specific defect, and the single most valuable candidate result this tool can produce", candidates[0].Knobs)
+	}
+}
+
+// spec: R-VER-4
+//
+// A dependency name the audit has no finding for must not fabricate a
+// candidate, and an audit finding for a library outside clientKnobPatterns
+// must still get a name and no knobs — the same honesty rules already
+// enforced for lockfile-sourced candidates apply identically here.
+func TestEvaluateThresholds_AuditFindingForUnknownLibraryGetsNoFabricatedKnobs(t *testing.T) {
+	metrics := map[string]any{
+		"http_req_duration": map[string]any{
+			"thresholds": map[string]any{"p(95)<1000": map[string]any{"ok": false}},
+		},
+	}
+	faults := []config.Fault{{
+		Name: "widget_slow", At: "peak", Target: "widget:1234",
+		Verb: "latency", Inject: map[string]any{"latency": "300ms"},
+	}}
+	deps := []detect.Dep{{Name: "widget", Type: "widget", Address: "widget:1234"}}
+	auditFindings := []doctor.Finding{
+		{DepName: "widget", DepType: "widget", Library: "some-org/unheard-of-client", Check: doctor.CheckTimeout, Determined: true, Present: false},
+		// A finding for a different dependency must not leak in as a
+		// candidate for this one.
+		{DepName: "some-other-dep", DepType: "http", Library: "net/http", Check: doctor.CheckTimeout, Determined: true, Present: false},
+	}
+
+	_, findings := evaluateThresholds(metrics, faults, detect.System{Deps: deps}, auditFindings)
+	candidates := findings[0].Candidates
+	if len(candidates) != 1 {
+		t.Fatalf("Candidates = %v, want exactly one (only widget's own finding, not the other dependency's)", candidates)
+	}
+	if candidates[0].Library != "some-org/unheard-of-client" {
+		t.Errorf("Candidate.Library = %q, want the widget finding's own library", candidates[0].Library)
+	}
+	if len(candidates[0].Knobs) != 0 {
+		t.Errorf("Knobs = %v, want empty for a library outside clientKnobPatterns", candidates[0].Knobs)
+	}
+}
+
+// spec: R-VER-4
+//
 // E1 found candidates 0/6: attribute() only ever pulled a candidate's
 // dependency from an active fault's target, so a finding with no causing
 // fault never got candidates at all — even when the relevant client was
@@ -427,7 +530,7 @@ func TestEvaluateThresholds_NoActiveFaultStillAttachesCandidatesFromDetectedClie
 		Name: "postgres", Type: "postgresql", Address: "postgres:5432",
 		Clients: []string{"github.com/jackc/pgx/v5"},
 	}}
-	_, findings := evaluateThresholds(metrics, nil, detect.System{Deps: deps})
+	_, findings := evaluateThresholds(metrics, nil, detect.System{Deps: deps}, nil)
 	if len(findings) != 1 {
 		t.Fatalf("findings = %v, want exactly one", findings)
 	}
@@ -471,7 +574,7 @@ func TestEvaluateThresholds_NoActiveFaultUnknownClientStillGetsNoFabricatedKnobs
 		Name: "widget", Type: "widget", Address: "widget:1234",
 		Clients: []string{"some-org/unheard-of-client"},
 	}}
-	_, findings := evaluateThresholds(metrics, nil, detect.System{Deps: deps})
+	_, findings := evaluateThresholds(metrics, nil, detect.System{Deps: deps}, nil)
 	candidates := findings[0].Candidates
 	if len(candidates) != 1 {
 		t.Fatalf("Candidates = %v, want one entry naming the client even without known knobs", candidates)
@@ -491,7 +594,7 @@ func TestEvaluateThresholds_NoActiveFaultAndNoDetectedClientAttachesNothing(t *t
 			"thresholds": map[string]any{"p(95)<500": map[string]any{"ok": false}},
 		},
 	}
-	_, findings := evaluateThresholds(metrics, nil, detect.System{})
+	_, findings := evaluateThresholds(metrics, nil, detect.System{}, nil)
 	if len(findings[0].Candidates) != 0 {
 		t.Errorf("Candidates = %v, want empty — no dependency was detected at all, so there is nothing to point at", findings[0].Candidates)
 	}
@@ -509,7 +612,7 @@ func TestEvaluatePromqlAsserts_NoQuerierProducesUnevaluatedFindingNotSilentPass(
 	// reasoning, as true/pass). An unevaluated assertion must be visible as
 	// its own thing: neither Passed nor a genuine broken Finding.
 	asserts := []config.AssertEntry{{"promql": "up == 1"}}
-	passed, findings := evaluatePromqlAsserts(asserts, nil, oneFault(), detect.System{})
+	passed, findings := evaluatePromqlAsserts(asserts, nil, oneFault(), detect.System{}, nil)
 	if len(passed) != 0 {
 		t.Errorf("passed = %v, want empty — an unrun assertion must not look like a held one (R-VER-5)", passed)
 	}
@@ -572,7 +675,7 @@ func TestEvaluateSQLAsserts_AlwaysUnevaluated(t *testing.T) {
 // spec: R-CFG-17
 func TestEvaluatePromqlAsserts_FailedQueryIsAFinding(t *testing.T) {
 	asserts := []config.AssertEntry{{"promql": "orders_total == payments_total"}}
-	_, findings := evaluatePromqlAsserts(asserts, fakeQuerier{holds: false, observed: "no results"}, oneFault(), detect.System{})
+	_, findings := evaluatePromqlAsserts(asserts, fakeQuerier{holds: false, observed: "no results"}, oneFault(), detect.System{}, nil)
 	if len(findings) != 1 {
 		t.Fatalf("findings = %v, want one", findings)
 	}
@@ -584,7 +687,7 @@ func TestEvaluatePromqlAsserts_FailedQueryIsAFinding(t *testing.T) {
 // spec: R-CFG-17
 func TestEvaluatePromqlAsserts_QueryErrorIsAmbiguousFinding(t *testing.T) {
 	asserts := []config.AssertEntry{{"promql": "invalid{"}}
-	_, findings := evaluatePromqlAsserts(asserts, fakeQuerier{err: errors.New("bad query")}, oneFault(), detect.System{})
+	_, findings := evaluatePromqlAsserts(asserts, fakeQuerier{err: errors.New("bad query")}, oneFault(), detect.System{}, nil)
 	if len(findings) != 1 || findings[0].Confidence != verdict.Ambiguous {
 		t.Fatalf("findings = %v, want one ambiguous finding for a query error", findings)
 	}
