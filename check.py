@@ -305,6 +305,26 @@ missing = [p for p in sorted(set(re.findall(r'\(((?:benchmarks|evals)/results/[^
 ok(not missing, "every benchmark/eval result BENCHMARKS.md links to is tracked in git"
    + (f" — untracked: {missing}" if missing else ""))
 
+# Any doc stating "<N> delegate-tier targets" must match the emitters actually registered.
+# CHANGELOG.md shipped "24" while 28 were registered — the count was correct when written and
+# four more landed after it.
+_emit_docs = {p: open(p).read() for p in ('README.md', 'CHANGELOG.md', 'RESEARCH.md', 'BENCHMARKS.md')
+              if os.path.exists(p)}
+_wrong = [f"{p}: says {n}, {len(REGISTERED_EMITTERS)} registered"
+          for p, txt in _emit_docs.items()
+          for n in re.findall(r'(\d+) delegate-tier targets', txt)
+          if int(n) != len(REGISTERED_EMITTERS)]
+ok(not _wrong, "stated delegate-tier target counts match registered emitters"
+   + (f" — {_wrong}" if _wrong else f" ({len(REGISTERED_EMITTERS)})"))
+
+# README must name every implemented verb. It said "All nine verbs are real" and listed nine
+# while ten existed — `trend` was invisible to anyone reading the front page. A count in prose
+# cannot be checked, but the presence of each verb name can.
+_readme = open('README.md').read()
+unnamed = sorted(v for v in IMPLEMENTED if f'`{v}`' not in _readme)
+ok(not unnamed, "README names every implemented verb"
+   + (f" — unnamed: {unnamed}" if unnamed else f" ({len(IMPLEMENTED)})"))
+
 ok(not conflicts, "RESEARCH per-tool tiers agree with registry.yaml"
    + (f" — {conflicts}" if conflicts else ""))
 

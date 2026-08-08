@@ -1,6 +1,12 @@
 name: ci
 on: [push, pull_request]
 
+# Least privilege: this workflow only reads the checkout. Without an explicit
+# block a repo whose default is read-write hands a fork's pull_request build a
+# writable token.
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest

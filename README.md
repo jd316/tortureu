@@ -7,19 +7,22 @@ One CLI that drives load and fault injection on the same clock **against a local
 
 > **Status: alpha.** The core works and is proven against real Docker: load and faults on one
 > clock, topological egress isolation, fault interception on internal dependencies, and a verdict
-> that names the causing fault. All nine verbs are real — `init`, `run`, `doctor`, `smoke`,
-> `check`, `emit`, `capture`, `replay` — and `mcp` speaks JSON-RPC 2.0 over stdio.
+> that names the causing fault. All ten verbs are real — `init`, `run`, `doctor`, `smoke`,
+> `check`, `emit`, `capture`, `replay`, `trend` — and `mcp` speaks JSON-RPC 2.0 over stdio.
+> Every one of the 155 tools in [`registry.yaml`](registry.yaml) is reachable from the CLI, so no
+> entry tells you to run something that does not work.
 >
-> **Not yet:** trace ingestion is absent, so verdicts report `correlated` attribution rather than
-> `caused` — the ceiling is stated in every verdict rather than left implicit. `tortureu run
-> --db-load` and `--fuzz` drive host subprocesses, which cannot reach a SUT that DC-2 isolated on
-> an `internal: true` network; they fail loudly rather than reporting zero. No tag has been pushed
-> yet, so no release archive or image exists to install; until one does, the pipeline `init --ci`
-> writes fails its install step with exit `2` and names the routes, rather than downloading a URL
-> that 404s. See [`SPEC.md` §12](SPEC.md) for these and the rest of what is deliberately open.
+> **Not yet:** no tag has been pushed, so no release archive or image exists to install from —
+> until one does, the pipeline `init --ci` writes fails its install step with exit `2` and names
+> the routes rather than downloading a URL that 404s.
 >
-> Every one of the 154 tools in [`registry.yaml`](registry.yaml) is now reachable from the CLI, so
-> no entry tells you to run something that does not work.
+> **What the evidence actually shows.** On the labelled corpus (`make eval`, results in
+> [`BENCHMARKS.md`](BENCHMARKS.md)) TortureU detects 7/7 planted defects and reports **0 findings
+> on the control** — but names a single causing fault in only **4 of 7**: with several faults
+> active it returns `ambiguous` rather than guessing. `caused` attribution requires traces, so a
+> repo without OpenTelemetry tops out at `correlated`, and the corpus has no instrumented case —
+> the trace path is verified against a live Jaeger, not by the eval. See
+> [`SPEC.md` §12](SPEC.md) for the rest of what is deliberately open.
 
 ## Install
 
@@ -114,8 +117,11 @@ What it does give you is the *candidate config surface* — library plus knob na
 | [`VERDICT.md`](VERDICT.md) | verdict schema, exit codes, MCP surface |
 | [`BENCHMARKS.md`](BENCHMARKS.md) | how this gets evaluated, and what we refuse to claim |
 | [`registry.yaml`](registry.yaml) | the tool catalog |
+| [`PLAN.md`](PLAN.md) | the original build plan; historical, and says where its scope was exceeded |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | **read before your first PR** — spec-first, failing-test-first, and the rule against claiming verification you did not perform |
 
-Two constraints are load-bearing and worth reading before contributing:
+Two constraints are load-bearing and worth reading before contributing (see
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the rest, including the gate your PR must pass):
 
 - **Egress denies by default.** An unclassified external host aborts the run. A 100× replay against
   someone's real API is an outage you cause them.
