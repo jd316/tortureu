@@ -38,25 +38,29 @@ assert:
 ```
 FAIL  checkout-spike  280s
 
-  ✗ http_req_duration: p(95)<500 -> threshold breached
+  ✗ http_req_duration: p(95)<500 -> 4218ms
     caused by  pg_slow (postgres:5432)  [confidence: correlated]
 
     look at:  jackc/pgx MaxConns, ConnConfig.ConnectTimeout
 
-  ✓ http_req_failed: rate<0.01     threshold held
+  ✓ http_req_failed: rate<0.01     0.003
 
   egress: 1 mocked, 1 blocked, 0 real          exit 1
 ```
 
-That is verbatim output, not an illustration. Which means its limits are visible too:
+That is the real output format, and its limits are visible in it:
 
-- **`threshold breached`, not `4218ms`.** The verdict currently reports that a threshold was
-  crossed, not the value that crossed it. Getting the number in there is the next thing worth
-  doing.
 - **`correlated`, not `caused`.** Attribution is by fault window — one fault was active when the
   assertion broke. `caused` needs trace data spanning that window, and trace ingestion is not
   built ([`TBD-9`](SPEC.md)). No per-hop causal chain is shown for the same reason: it would have
   to be invented.
+- **`sql:` asserts read `not evaluated`.** There is no SQL execution path in v0, and an assert
+  that was not evaluated is never reported as passing — a run whose asserts were all unevaluated
+  exits `4` (inconclusive), never `0`. The same holds for `promql:` asserts when no Prometheus is
+  configured.
+
+Measured values (`4218ms`, `0.003`) come from k6's own summary; where a value genuinely cannot be
+read it says `not measured`, which is deliberately distinct from `not evaluated`.
 
 What it does give you is the *candidate config surface* — library plus knob names, never a
 `file:line`. Finding the exact constant is the job of whoever, or whatever, reads this.
