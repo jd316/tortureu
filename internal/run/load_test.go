@@ -2,6 +2,7 @@ package run
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -86,6 +87,129 @@ func TestK6Runner_DoneCarriesSummaryJSONForIngestSummary(t *testing.T) {
 		t.Fatalf("Err() = %v, want a result on Done()", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for Done()")
+	}
+}
+
+// fakeK6ScriptStderrMarkers writes a shell script standing in for the k6
+// binary that emits its phase markers to stderr, wrapped exactly as real
+// k6 0.54.0's logrus-based logger wraps console.log output (confirmed by
+// actually running grafana/k6:0.54.0 against a trivial script during this
+// investigation:
+//
+//	time="2026-08-08T11:43:02Z" level=info msg="TORTUREU_PHASE_START ramp_up 0" source=console
+//
+// not the bare `TORTUREU_PHASE_START ramp_up 0` k6.ParsePhaseMarker expects
+// as fields[0]. An E1 eval against real k6 found this: real k6 writes
+// console.log to stderr, not stdout, so scanMarkers (which read only
+// stdout) never saw a marker, the scheduler's <-markers never yielded, and
+// every phase-anchored fault silently never fired — this is the eighth
+// instance in this build of something proven against a fake and never
+// proven against the real thing.
+func fakeK6ScriptStderrMarkers(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "k6")
+	script := `#!/bin/sh
+summary="$3"
+echo 'time="2026-08-08T11:43:02Z" level=info msg="` + k6.PhaseMarkerPrefix + ` ramp_up 0" source=console' 1>&2
+echo 'time="2026-08-08T11:43:03Z" level=info msg="` + k6.PhaseMarkerPrefix + ` peak 1000" source=console' 1>&2
+echo '{"metrics":{"http_reqs":{"values":{"rate":10}}}}' > "$summary"
+exit 0
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// spec: R-EXE-8
+//
+// This is the regression test for the E1 finding above: real k6 writes
+// phase markers to stderr, wrapped in its own logrus text-format line, not
+// as a bare line on stdout. A fake that (like fakeK6Script above) writes
+// bare lines to stdout will keep passing even if scanMarkers regresses
+// back to stdout-only; this one only passes if stderr is actually scanned
+// and k6's own log-line wrapping is actually unwrapped.
+func TestK6Runner_EmitsPhaseMarkersFromRealK6sStderrLogFormat(t *testing.T) {
+	dir := t.TempDir()
+	r := K6Runner{Bin: fakeK6ScriptStderrMarkers(t), Dir: dir}
+
+	handle, err := r.Start("// script")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	var got []string
+	timeout := time.After(5 * time.Second)
+	for len(got) < 2 {
+		select {
+		case m, ok := <-handle.Markers():
+			if !ok {
+				t.Fatalf("markers channel closed early, got %v", got)
+			}
+			got = append(got, m.Phase)
+		case <-timeout:
+			t.Fatalf("timed out waiting for markers, got %v — stderr markers in k6's own log-wrapped format were not recognized", got)
+		}
+	}
+	if got[0] != "ramp_up" || got[1] != "peak" {
+		t.Errorf("markers = %v, want [ramp_up peak]", got)
+	}
+}
+
+// spec: R-EXE-8
+//
+// The E1 finding was against real k6, and a fake proves only that the
+// mechanism *can* work, not that it does against the actual binary this
+// product ships against. This test runs the genuine grafana/k6 image (via
+// K6Runner's container mode — the same docker-create/cp/start plumbing
+// production uses once a SUT container is discovered) against a real
+// one-line script, and proves handle.Markers() actually yields a marker
+// k6 itself produced, not one this test's fixture manufactured.
+func TestK6Runner_RealK6BinaryEmitsPhaseMarkers(t *testing.T) {
+	dockerAvailable(t)
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker not on PATH")
+	}
+	if err := exec.Command("docker", "image", "inspect", k6Image).Run(); err != nil {
+		t.Skipf("real k6 image %s not available locally: %v", k6Image, err)
+	}
+
+	sut := startTestContainer(t)
+
+	dir := t.TempDir()
+	r := &K6Runner{Dir: dir}
+	r.SetSUTContainer(sut)
+
+	script := `export default function () {
+  console.log("` + k6.PhaseMarkerPrefix + ` ramp_up " + Date.now());
+}
+`
+	handle, err := r.Start(script)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	select {
+	case m, ok := <-handle.Markers():
+		if !ok {
+			t.Fatal("markers channel closed with no marker — real k6's stderr output was not recognized")
+		}
+		if m.Phase != "ramp_up" {
+			t.Errorf("marker phase = %q, want %q", m.Phase, "ramp_up")
+		}
+	case loadErr := <-handle.Err():
+		t.Fatalf("Err() = %v, want a marker on Markers()", loadErr)
+	case <-time.After(30 * time.Second):
+		t.Fatal("timed out waiting for a real-k6-produced marker")
+	}
+
+	// Drain to let the container finish and clean up via Done()/Err(),
+	// rather than leaving it running past the test.
+	select {
+	case <-handle.Done():
+	case <-handle.Err():
+	case <-time.After(30 * time.Second):
 	}
 }
 

@@ -45,6 +45,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jdb316/tortureu/internal/k6"
@@ -175,17 +176,82 @@ func newK6Handle() *k6Handle {
 	}
 }
 
-// scanMarkers reads stdout line by line, forwarding internal/k6's
-// phase-marker lines (R-EXE-8) as they're written — not after the process
-// exits, so the fault scheduler can react while the run is still in
-// progress — and closes h.markers once stdout ends.
-func scanMarkers(h *k6Handle, stdout io.Reader) {
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		if phase, ok := k6.ParsePhaseMarker(scanner.Text()); ok {
-			h.markers <- PhaseMarker{Phase: phase, At: time.Now()}
+// extractMarkerCandidate unwraps real k6's own log-line formatting so
+// k6.ParsePhaseMarker (fields[0] == PhaseMarkerPrefix, read-only for this
+// task) still recognizes it unmodified.
+//
+// An E1 eval against the real grafana/k6 binary found that k6 writes
+// console.log output to stderr, not stdout — confirmed by running real k6
+// directly: `console.log("TORTUREU_PHASE_START ramp_up 0")` arrives on
+// stderr as
+//
+//	time="2026-08-08T11:43:02Z" level=info msg="TORTUREU_PHASE_START ramp_up 0" source=console
+//
+// wrapped by k6's logrus-based logger, not as the bare line every existing
+// test's fake wrote to stdout. scanMarkers previously read only stdout, so
+// in a real run no marker was ever seen: the scheduler's <-markers channel
+// never yielded, and every phase-anchored fault (`at: peak`, `at:
+// peak+30s`) silently never fired — this is the eighth instance in this
+// build of a mechanism proven against a fake and never proven against the
+// real thing.
+//
+// This unwraps the msg="..." payload when present (real k6's format) and
+// passes the line through unchanged otherwise (a bare line — what every
+// existing fake and a future k6 version writing directly to a stream might
+// still produce), so this package is deliberately indifferent to which of
+// the two shapes it is looking at.
+func extractMarkerCandidate(line string) string {
+	const msgKey = `msg="`
+	idx := strings.Index(line, msgKey)
+	if idx == -1 {
+		return line
+	}
+	rest := line[idx+len(msgKey):]
+	if end := strings.LastIndex(rest, `"`); end != -1 {
+		rest = rest[:end]
+	}
+	return rest
+}
+
+// scanMarkers reads both stdout and stderr line by line, forwarding
+// internal/k6's phase-marker lines (R-EXE-8) as they're written — not
+// after the process exits, so the fault scheduler can react while the run
+// is still in progress. Both streams are scanned, and this package is
+// indifferent to which one actually carries markers: real k6 0.54.0 writes
+// them to stderr (see extractMarkerCandidate's doc comment), a future k6
+// version could change that, and "we read the one it happened to use" is
+// exactly the assumption that caused this bug in the first place.
+//
+// stderr is also teed to os.Stderr as it's read, so k6's own diagnostic
+// output (used by this package's error-reason wrapping,
+// e.g. wrapStartError) is not lost by being consumed here instead of
+// inherited directly — the previous behavior (cmd.Stderr = os.Stderr) is
+// preserved, just via an explicit copy instead of direct inheritance,
+// because the pipe has to be read to scan it for markers.
+//
+// h.markers is closed once both streams have ended (both goroutines this
+// spawns internally have returned), not just stdout, so a marker arriving
+// on either stream just before process exit is never dropped by a
+// premature close.
+func scanMarkers(h *k6Handle, stdout, stderr io.Reader) {
+	var wg sync.WaitGroup
+	scan := func(r io.Reader, tee io.Writer) {
+		defer wg.Done()
+		scanner := bufio.NewScanner(r)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if tee != nil {
+				fmt.Fprintln(tee, line)
+			}
+			if phase, ok := k6.ParsePhaseMarker(extractMarkerCandidate(line)); ok {
+				h.markers <- PhaseMarker{Phase: phase, At: time.Now()}
+			}
 		}
 	}
+	wg.Add(2)
+	go scan(stdout, nil)
+	go scan(stderr, os.Stderr)
+	wg.Wait()
 	close(h.markers)
 }
 
@@ -214,7 +280,10 @@ func (r *K6Runner) startHostProcess(scriptPath, summaryPath string) (LoadHandle,
 	if err != nil {
 		return nil, err
 	}
-	cmd.Stderr = os.Stderr
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, wrapStartError(r.bin(), err)
@@ -222,7 +291,7 @@ func (r *K6Runner) startHostProcess(scriptPath, summaryPath string) (LoadHandle,
 
 	h := newK6Handle()
 	go func() {
-		scanMarkers(h, stdout)
+		scanMarkers(h, stdout, stderr)
 		waitErr := cmd.Wait()
 		if waitErr != nil {
 			h.errCh <- waitErr
@@ -269,7 +338,11 @@ func (r *K6Runner) startContainer(scriptPath, summaryPath string) (LoadHandle, e
 		cleanup()
 		return nil, err
 	}
-	cmd.Stderr = os.Stderr
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
 
 	if err := cmd.Start(); err != nil {
 		cleanup()
@@ -278,7 +351,7 @@ func (r *K6Runner) startContainer(scriptPath, summaryPath string) (LoadHandle, e
 
 	h := newK6Handle()
 	go func() {
-		scanMarkers(h, stdout)
+		scanMarkers(h, stdout, stderr)
 		waitErr := cmd.Wait()
 		cpErr := exec.Command(r.dockerBin(), "cp", containerID+":"+k6ContainerSummaryPath, summaryPath).Run()
 		cleanup()
