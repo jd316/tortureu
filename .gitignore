@@ -10,3 +10,6 @@ benchmarks/results/
 *.test
 *.out
 .superpowers/
+
+# eval scratch (built binary, overlays, results line file)
+evals/tmp/
