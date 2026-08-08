@@ -77,6 +77,43 @@ var goSourceSites = []sourceSite{
 		backoffSigs:        []string{"Backoff", "backoff"},
 		jitterSigs:         []string{"Jitter", "jitter"},
 	},
+	{
+		// http is Go's stdlib net/http (TBD-10): it never appears in a
+		// go.mod require line, so R-DET-5 can never attach it to a
+		// dependency's Clients — this is the one site Audit checks even
+		// when Clients is empty (see Audit's doc comment). timeoutSigs are
+		// the realistic source forms of the knobs internal/run's own
+		// candidate table already names for net/http (Client.Timeout,
+		// Transport.ResponseHeaderTimeout, Transport.TLSHandshakeTimeout):
+		// a struct literal or assignment sets the bare field name
+		// ("Timeout:", "ResponseHeaderTimeout"), never the qualified
+		// "Client.Timeout" form, which only appears in documentation.
+		depType:      "http",
+		constructors: []string{"http.Client{", "&http.Client{", "http.Transport{"},
+		timeoutSigs:  []string{"Timeout:", "ResponseHeaderTimeout", "TLSHandshakeTimeout", "context.WithTimeout", "context.WithDeadline"},
+		retrySigs:    []string{"Retry", "retry", "Backoff", "backoff"},
+		capSigs:      []string{"MaxRetries", "MaxTries", "MaxElapsedTime"},
+		backoffSigs:  []string{"Backoff", "backoff"},
+		jitterSigs:   []string{"Jitter", "jitter"},
+	},
+}
+
+// siteHasEvidence reports whether depType's known construction site was
+// actually found under dir. Audit uses this to decide whether the net/http
+// fallback check (which, unlike a lockfile-sourced client, has no manifest
+// signal correlating it to any particular dependency) is worth reporting
+// at all — silence when there is no evidence net/http is used anywhere is
+// the honest answer, not a "not determined" finding on every dependency
+// that happens to have no lockfile client (R-AUD-6 reserves "not
+// determined" for a library known to be in use whose setting couldn't be
+// resolved, not for a library with no evidence of use at all).
+func siteHasEvidence(dir, depType string) bool {
+	site, ok := siteFor(depType)
+	if !ok {
+		return false
+	}
+	_, found := findConstructionSite(dir, site)
+	return found
 }
 
 func siteFor(depType string) (sourceSite, bool) {

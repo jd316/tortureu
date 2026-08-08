@@ -74,37 +74,54 @@ var faultForCheck = map[Check]string{
 // Audit runs the static resilience checks (R-AUD-1, R-AUD-2) over sys,
 // rooted at dir.
 //
-// It only looks at dependencies where detect already identified a client
-// library from a manifest (R-DET-5), and only at the bounded construction
-// site doctor's own table knows for that library's type (R-AUD-5) — never
-// at dependencies known only from a compose image, never at arbitrary
-// control flow, and never at a library outside the table. Findings are
-// always hints (R-AUD-3): this is a static check; only a run proves
-// anything. Where inspection cannot determine a setting, the finding says
-// so explicitly rather than asserting absence (R-AUD-6).
+// For a dependency with a lockfile-sourced client (R-DET-5), it inspects
+// the bounded construction site doctor's own table knows for that client's
+// type (R-AUD-5) — never at dependencies known only from a compose image,
+// never at arbitrary control flow, and never at a library outside the
+// table. For a dependency with no lockfile-sourced client, it still checks
+// for Go's net/http (TBD-10): net/http is stdlib, so it never appears in a
+// go.mod require line and R-DET-5 can never see it, but R-AUD-5 permits the
+// audit itself to read source at a known construction site — finding
+// http.Client{ there is the evidence, independent of any manifest. A
+// dependency with neither yields no finding; that is honest, not a gap
+// (R-AUD-6 only requires "not determined" be said when a known library was
+// checked and couldn't be resolved, not that every dependency get a
+// finding).
+//
+// Findings are always hints (R-AUD-3): this is a static check; only a run
+// proves anything. Where inspection cannot determine a setting, the
+// finding says so explicitly rather than asserting absence (R-AUD-6).
 func Audit(dir string, sys *detect.System) []Finding {
 	var findings []Finding
 	if sys == nil {
 		return findings
 	}
 	for _, dep := range sys.Deps {
-		if len(dep.Clients) == 0 {
-			continue // no known client library at this dependency: out of R-AUD-5's scope
+		if len(dep.Clients) > 0 {
+			library := dep.Clients[0]
+			findings = append(findings, buildFinding(dep, dep.Type, library, CheckTimeout, inspectTimeout(dir, dep.Type)))
+			findings = append(findings, buildFinding(dep, dep.Type, library, CheckRetry, inspectRetry(dir, dep.Type)))
+			continue
 		}
-		library := dep.Clients[0]
-
-		findings = append(findings, buildFinding(dep, library, CheckTimeout, inspectTimeout(dir, dep.Type)))
-		findings = append(findings, buildFinding(dep, library, CheckRetry, inspectRetry(dir, dep.Type)))
+		if !siteHasEvidence(dir, "http") {
+			continue // no evidence net/http is used anywhere: silence, not a guess either way
+		}
+		findings = append(findings, buildFinding(dep, "http", "net/http", CheckTimeout, inspectTimeout(dir, "http")))
+		findings = append(findings, buildFinding(dep, "http", "net/http", CheckRetry, inspectRetry(dir, "http")))
 	}
 	return findings
 }
 
 // buildFinding renders an inspectResult into a Finding, wording the hint
-// according to R-AUD-6's three-way outcome.
-func buildFinding(dep detect.Dep, library string, check Check, res inspectResult) Finding {
+// according to R-AUD-6's three-way outcome. siteType names the
+// goSourceSites entry inspection actually used — dep.Type for a
+// lockfile-sourced client, or the fixed "http" for net/http — since the two
+// can differ (a dependency's own detected type says nothing about which
+// stdlib library the SUT happens to use to reach it).
+func buildFinding(dep detect.Dep, siteType, library string, check Check, res inspectResult) Finding {
 	f := Finding{
 		DepName:    dep.Name,
-		DepType:    dep.Type,
+		DepType:    siteType,
 		Library:    library,
 		Check:      check,
 		Level:      LevelHint,
@@ -122,11 +139,11 @@ func buildFinding(dep detect.Dep, library string, check Check, res inspectResult
 	case !res.determined:
 		f.Hint = fmt.Sprintf(
 			"not determined whether %s is configured for %s client %s: %s",
-			noun, dep.Type, library, res.reason)
+			noun, siteType, library, res.reason)
 	case res.present:
-		f.Hint = fmt.Sprintf("%s confirmed configured for %s client %s", noun, dep.Type, library)
+		f.Hint = fmt.Sprintf("%s confirmed configured for %s client %s", noun, siteType, library)
 	default:
-		f.Hint = fmt.Sprintf("%s not configured for %s client %s", noun, dep.Type, library)
+		f.Hint = fmt.Sprintf("%s not configured for %s client %s", noun, siteType, library)
 	}
 	return f
 }

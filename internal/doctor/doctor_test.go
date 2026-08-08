@@ -266,3 +266,84 @@ func connect() {
 		t.Fatalf("mysql has driver corroboration in this file — should be determined, got %+v", my)
 	}
 }
+
+// spec: R-AUD-5
+func TestAuditFindsNetHTTPClientMissingTimeout(t *testing.T) {
+	// net/http is Go's stdlib HTTP client: it never appears in a go.mod
+	// require line, so a dependency reached only through it never gets a
+	// detect.Dep.Clients entry (R-DET-5 can't see stdlib) — that is
+	// TBD-10's gap. R-AUD-5 permits the audit itself to read source at a
+	// known construction site regardless of any manifest signal: finding
+	// http.Client{ there is the evidence, independent of Clients.
+	dir := writeGoFile(t, `
+package main
+
+import "net/http"
+
+func newClient() *http.Client {
+	return &http.Client{}
+}
+`)
+	sys := &detect.System{
+		Deps: []detect.Dep{
+			// No Clients: exactly the case a lockfile-only view of net/http
+			// can never populate.
+			{Name: "dep", Type: "unclassified"},
+		},
+	}
+
+	f := findFinding(t, doctor.Audit(dir, sys), doctor.CheckTimeout, "http")
+	if f.Library != "net/http" {
+		t.Fatalf("Library = %q, want %q", f.Library, "net/http")
+	}
+	if f.DepName != "dep" {
+		t.Fatalf("DepName = %q, want %q — this is what internal/run matches a fault's target against", f.DepName, "dep")
+	}
+	if !f.Determined {
+		t.Fatalf("expected timeout to be determined from the http.Client{} construction site, got %+v", f)
+	}
+	if f.Present {
+		t.Fatalf("expected timeout to be reported absent — no Client.Timeout/ResponseHeaderTimeout/TLSHandshakeTimeout set in source, got %+v", f)
+	}
+}
+
+// spec: R-AUD-5
+func TestAuditConfirmsNetHTTPTimeoutWhenSet(t *testing.T) {
+	dir := writeGoFile(t, `
+package main
+
+import (
+	"net/http"
+	"time"
+)
+
+func newClient() *http.Client {
+	return &http.Client{Timeout: 5 * time.Second}
+}
+`)
+	sys := &detect.System{
+		Deps: []detect.Dep{{Name: "dep", Type: "unclassified"}},
+	}
+
+	f := findFinding(t, doctor.Audit(dir, sys), doctor.CheckTimeout, "http")
+	if !f.Determined || !f.Present {
+		t.Fatalf("expected the Timeout field to be confirmed present, got %+v", f)
+	}
+}
+
+// spec: R-AUD-6
+func TestAuditStaysSilentOnNetHTTPWithNoEvidenceOfUse(t *testing.T) {
+	// A dependency with no lockfile client and no http.Client{ anywhere in
+	// source gets no http finding at all — R-AUD-6's "not determined" is
+	// for a library known to be in use whose setting couldn't be resolved,
+	// not for speculatively checking every dependency for a library with
+	// no evidence it is used anywhere.
+	sys := &detect.System{
+		Deps: []detect.Dep{{Name: "dep", Type: "unclassified"}},
+	}
+
+	findings := doctor.Audit(t.TempDir(), sys)
+	if len(findings) != 0 {
+		t.Fatalf("expected no findings when net/http is never constructed anywhere in source, got %+v", findings)
+	}
+}
