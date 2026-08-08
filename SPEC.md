@@ -1038,7 +1038,41 @@ nothing to suggest, and only the second is honest.
 ## 12. Open (TBD)
 
 - **TBD-1** — Verdict storage format for cross-commit trend tracking (SQLite / JSONL /
-  Bencher-compatible). Blocked until there are runs worth comparing.
+  Bencher-compatible). **NARROWED 2026-08-09, still open.** The Bencher-compatible option is now
+  built (`tortureu emit bencher`, R-CLI-8) and it turns out **not to be a third storage format at
+  all**: Bencher Metric Format is a *projection* of the verdict computed at emit time, and the
+  history lives in Bencher's own server, so nothing new is stored on our side. Verified against
+  the real CLI (bencher 0.6.11) — a verdict document goes in, a report Bencher accepts comes out.
+  Two consequences worth keeping.
+
+  First, the choice that remains is only about **local** comparison (SQLite / JSONL), i.e. what a
+  repo with no Bencher project gets. That is still blocked on runs worth comparing, so it stays
+  open.
+
+  Second, and more useful: implementing this exposed that the format is **not the binding
+  constraint**. Every trend needs a per-run anchor, and `verdict.Commit` — VERDICT.md §1's
+  `commit` field, the one it labels "for §12 trend tracking" — is **written by no producer in this
+  codebase**; `internal/run` never sets it. Bencher's own `--hash` additionally rejects anything
+  but a full 40-character git hash, so VERDICT.md's own example value (`a3f19c2`) is refused. Any
+  storage format chosen today would therefore be a store of unanchored rows. Populating the commit
+  anchor is the prerequisite, and it is upstream of this decision rather than part of it.
+
+- **TBD-14** — What SHAPE a `sql:` assertion (R-CFG-18) is. R-CFG-18 says a `sql:` entry is
+  accepted for run-scoped data-integrity invariants; it does not say whether the expression is a
+  query whose returned **rows** are the violations, or one whose single computed **value** is
+  compared against a bound. The two readings invert each other's verdict on the same SQL: read as
+  failing-rows, `select count(*) from orders where total is null` fails on every run including the
+  ones where the count is zero.
+
+  This was invisible while nothing evaluated `sql:` at all — `internal/run` reports every one as
+  unevaluated (R-VER-8), and an unevaluated assertion has no shape. It becomes a real fork the
+  moment a tool can run them: soda-core has both shapes (`failed rows` + `fail query` versus a
+  user-defined metric query with a bound), and `tortureu emit soda` (R-CLI-8) must pick one to
+  emit an active check. It therefore emits **neither**, carrying every `sql:` assert into the
+  generated checks file verbatim but commented out with both shapes written next to it, and the
+  generated script refuses to scan while no check is active — because soda exits 0 on a checks
+  file with no valid check, and a green result that checked nothing is worse than a red one.
+  Resolves by amending R-CFG-18 to state the shape (or to require a per-entry discriminator).
 - ~~**TBD-2**~~ — **RESOLVED**: `emit` prints to stdout by default (R-CLI-8), so its output composes with a shell redirect rather than requiring a path argument.
 - **TBD-11** — How `tortureu` itself reaches a CI runner (R-CLI-11). There is no published
   release, tag, container image or marketplace action, so the generated pipeline builds the binary
