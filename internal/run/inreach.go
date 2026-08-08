@@ -21,29 +21,110 @@
 package run
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os/exec"
+	"strings"
+	"sync"
 	"time"
 )
 
-// containerHopImage's only requirement is a `nc` binary; alpine already
-// satisfies every other real-Docker test in this package and needs no
-// separate image pull.
+// containerHopImage's only requirements are a `nc` and `sh` binary; alpine
+// already satisfies every other real-Docker test in this package and needs
+// no separate image pull.
 const containerHopImage = "alpine:3.20"
+
+// containerHopScript picks whichever loopback address the target process
+// actually listens on before opening the real tunnel.
+//
+// An E1 finding, reproduced deterministically outside TortureU: BusyBox
+// `nc localhost <port>` resolves "localhost" to ::1 first and does not
+// fall back to the A record. Any IPv4-only listener — Redpanda's
+// Pandaproxy binds 0.0.0.0, as do many services — is then unreachable
+// through the tunnel, and the caller saw a bare EOF with no indication
+// why. Hardcoding 127.0.0.1 instead would just swap one wrong assumption
+// for another (a v6-only listener would then fail the same way) — this
+// tries v4 then v6, the same "try, don't guess" principle
+// fallbackTransport already applies one level up: `nc -z` (zero-I/O probe
+// mode) checks which address actually has something listening before
+// `exec`-ing into the real, data-carrying `nc` against the one that does.
+// If neither responds, it reports exactly that to stderr instead of
+// silently exiting — this is what lets execConn turn "closed with nothing
+// read" into an actual reason instead of a bare EOF.
+const containerHopScript = `port="$1"
+for ip in 127.0.0.1 ::1; do
+  if nc -z -w1 "$ip" "$port" 2>/dev/null; then
+    exec nc "$ip" "$port"
+  fi
+done
+echo "no loopback address (127.0.0.1, ::1) is accepting connections on port $port inside this container" >&2
+exit 1
+`
 
 // execConn adapts a subprocess's stdin/stdout pipes into a net.Conn, so an
 // http.Transport's DialContext can tunnel a connection through it exactly
 // as it would a real TCP dial — the same trick an SSH ProxyCommand uses.
+//
+// It also turns a bare EOF into an actual reason when the tunnel process
+// itself failed rather than the remote end closing normally (see Read):
+// this project has already fixed the "unexplained failure" shape three
+// times (an unexplained abort, an unexplained status:error, a silently
+// discarded k6 summary) — a tunnel that dials nothing and returns a bare
+// EOF is the same shape again, and the coordinator asked for it by name.
 type execConn struct {
 	stdout io.ReadCloser
 	stdin  io.WriteCloser
 	cmd    *exec.Cmd
+	stderr *bytes.Buffer
+
+	containerID, port string
+
+	waitOnce sync.Once
+	waitErr  error
 }
 
-func (c *execConn) Read(b []byte) (int, error)  { return c.stdout.Read(b) }
+func (c *execConn) wait() error {
+	c.waitOnce.Do(func() { c.waitErr = c.cmd.Wait() })
+	return c.waitErr
+}
+
+// Read reports a descriptive error instead of a bare EOF when the tunnel
+// process itself exited abnormally (never connected to anything) rather
+// than a live connection simply ending — the latter is completely normal
+// (an HTTP/1.0-shaped "Connection: close" response, which this project's
+// own real-Docker tests exercise, always ends this way) and must not grow
+// a scary-looking wrapper. The two are told apart by whether the
+// subprocess has actually exited with an error by the time Read sees
+// nothing: a bounded wait (the process closing its stdout and exiting are
+// effectively simultaneous for `nc`, so this is never a real stall) avoids
+// blocking on a connection that is still legitimately open.
+func (c *execConn) Read(b []byte) (int, error) {
+	n, err := c.stdout.Read(b)
+	if err == nil || n > 0 {
+		return n, err
+	}
+	done := make(chan struct{})
+	go func() { c.wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		return n, err // still running: an ordinary, live-connection EOF
+	}
+	if c.waitErr == nil {
+		return n, err // exited cleanly: an ordinary closed connection
+	}
+	stderrText := strings.TrimSpace(c.stderr.String())
+	msg := fmt.Sprintf("run: container network tunnel into %s port %s failed (%v)", c.containerID, c.port, c.waitErr)
+	if stderrText != "" {
+		msg += ": " + stderrText
+	}
+	return n, fmt.Errorf("%s", msg)
+}
+
 func (c *execConn) Write(b []byte) (int, error) { return c.stdin.Write(b) }
 
 func (c *execConn) Close() error {
@@ -52,7 +133,7 @@ func (c *execConn) Close() error {
 	if c.cmd.Process != nil {
 		_ = c.cmd.Process.Kill()
 	}
-	return c.cmd.Wait()
+	return c.wait()
 }
 
 func (c *execConn) LocalAddr() net.Addr              { return execConnAddr{} }
@@ -71,11 +152,11 @@ func (execConnAddr) Network() string { return "docker-network-namespace" }
 func (execConnAddr) String() string  { return "container-netns" }
 
 // containerNetDialer returns an http.Transport-compatible DialContext that
-// tunnels each connection into containerID's own network namespace:
-// "localhost:<port>" inside that namespace is the container's own
-// loopback, the identical address the container's own process listens on
-// — the same address load.go's package doc comment documents K6Runner
-// using to reach an internal-only SUT.
+// tunnels each connection into containerID's own network namespace, trying
+// 127.0.0.1 then ::1 (containerHopScript's own doc comment explains why
+// both, and in that order) — one of those is the address the container's
+// own process actually listens on, the same address load.go's package doc
+// comment documents K6Runner using to reach an internal-only SUT.
 func containerNetDialer(containerID string) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		_, port, err := net.SplitHostPort(addr)
@@ -84,7 +165,7 @@ func containerNetDialer(containerID string) func(ctx context.Context, network, a
 		}
 		cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-i",
 			"--network", "container:"+containerID, containerHopImage,
-			"nc", "localhost", port)
+			"sh", "-c", containerHopScript, "sh", port)
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			return nil, err
@@ -93,10 +174,15 @@ func containerNetDialer(containerID string) func(ctx context.Context, network, a
 		if err != nil {
 			return nil, err
 		}
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
 		if err := cmd.Start(); err != nil {
 			return nil, err
 		}
-		return &execConn{stdout: stdout, stdin: stdin, cmd: cmd}, nil
+		return &execConn{
+			stdout: stdout, stdin: stdin, cmd: cmd, stderr: &stderr,
+			containerID: containerID, port: port,
+		}, nil
 	}
 }
 

@@ -238,9 +238,23 @@ func TestComposeTopologyApplier_TeardownDisabledRemovesLeakedContainer(t *testin
 	redisContainer := suffix + "proj-redis-1"
 	backendContainer := suffix + "proj-redis-tortureu-backend-1"
 	proxyContainer := suffix + "proj-" + suffix + "-proxy-1"
+	// The step-1 vanilla `up` (below) creates compose's own implicit
+	// "default" network, since the base compose file declares no networks
+	// of its own. Once Apply's overlay reassigns every service onto its
+	// own named networks (sutNetwork/egressNetwork), nothing in the merged
+	// config references "default" any more — `docker compose down` only
+	// removes networks its *current* invocation's config still mentions,
+	// so this one is silently orphaned rather than removed. Found the hard
+	// way: leaking one per run exhausted this host's Docker network pool
+	// ("all predefined address pools have been fully subnetted") under
+	// -count=2, breaking unrelated tests — the exact "leftover state
+	// poisons the next run" failure class this package exists to prevent
+	// in the product, reappearing in its own test suite.
+	defaultNetwork := suffix + "proj_default"
 	t.Cleanup(func() {
 		exec.Command("docker", "compose", "-f", composePath, "-f", overlayPath, "--profile", tortureuDisabledProfile, "down", "-v").Run()
 		forceRemoveContainers(sutContainer, redisContainer, backendContainer, proxyContainer)
+		forceRemoveNetworks(defaultNetwork, suffix+"_sut", suffix+"_egress")
 	})
 
 	// Step 1: the "before Apply ever runs" state — a plain `up`, exactly

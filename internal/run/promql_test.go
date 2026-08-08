@@ -152,3 +152,77 @@ func waitForContainer(t *testing.T, name string) bool {
 	t.Fatal("container's httpd never became reachable via docker exec")
 	return false
 }
+
+// spec: R-CFG-17
+//
+// This is the exact configuration an E1 finding reproduced deterministically
+// outside TortureU: BusyBox `nc localhost <port>` resolves "localhost" to
+// ::1 first and never falls back to the A record, so any IPv4-only
+// listener (Redpanda's Pandaproxy binds 0.0.0.0, as do many real services)
+// was unreachable through the tunnel — the caller saw a bare EOF.
+// TestHTTPPromQuerier_ReachesInStackPrometheusViaContainerNamespace above
+// uses BusyBox httpd, which happens to also accept connections on ::1, so
+// it could not have caught this: it would pass identically whether or not
+// the v4/v6 fix existed. This test's server binds AF_INET only — genuinely
+// unreachable on ::1 — which is the one configuration that actually
+// exercises containerHopScript's fallback-across-addresses logic. This is
+// the proof E1 asked for: with this fix, the dual-homed
+// Prometheus/Redpanda workaround E1 had to restore in its own harness is
+// no longer necessary.
+func TestHTTPPromQuerier_ReachesIPv4OnlyInStackServiceViaContainerNamespace(t *testing.T) {
+	dockerAvailable(t)
+
+	name := "promv4-" + uniqueSuffix("prom")
+	script := `import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("0.0.0.0", 9090))
+s.listen(5)
+body = b'{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"1"]}]}}'
+resp = b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body
+while True:
+    c, _ = s.accept()
+    c.recv(4096)
+    c.sendall(resp)
+    c.close()
+`
+	out, err := exec.Command("docker", "run", "-d", "--name", name,
+		"--label", "com.docker.compose.service="+name,
+		"python:3-alpine", "python3", "-c", script,
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker run: %v: %s", err, out)
+	}
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+
+	// Confirm the premise: reachable on 127.0.0.1, genuinely not on ::1 —
+	// an AF_INET-only socket never listens on ::1 at all, unlike
+	// BusyBox httpd's own dual-stack default.
+	waitForIPv4Server(t, name)
+	if err := exec.Command("docker", "exec", name, "wget", "-qO-", "-T", "1", "http://[::1]:9090/").Run(); err == nil {
+		t.Fatal("server unexpectedly answered on ::1 — this test needs a genuinely IPv4-only listener to prove the fix")
+	}
+	if portOut, _ := exec.Command("docker", "port", name).Output(); len(portOut) != 0 {
+		t.Fatalf("container unexpectedly has a published port (%s)", portOut)
+	}
+
+	q := HTTPPromQuerier{BaseURL: "http://" + name + ":9090"}
+	holds, observed, err := q.Query("up")
+	if err != nil {
+		t.Fatalf("Query: %v — an IPv4-only in-stack target must still be reachable through the tunnel (try 127.0.0.1 then ::1, not just one hardcoded address)", err)
+	}
+	if !holds || observed != "1" {
+		t.Errorf("holds=%v observed=%q, want holds=true observed=\"1\"", holds, observed)
+	}
+}
+
+func waitForIPv4Server(t *testing.T, name string) {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		if err := exec.Command("docker", "exec", name, "wget", "-qO-", "-T", "1", "http://127.0.0.1:9090/").Run(); err == nil {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("IPv4-only server never became reachable via docker exec")
+}
