@@ -103,11 +103,15 @@ func TestPorcupine_UnknownAndEmptyHistoryAreNotPasses(t *testing.T) {
 	}
 }
 
-// spec: R-CLI-8 — TortureU's own capture cassettes (R-CLI-9) carry seq and
-// duration_ms but no absolute call/return times, so they cannot be used as
-// a porcupine history. Reconstructing timestamps would fabricate the
-// concurrency the whole check depends on; the limit is disclosed instead.
-func TestPorcupine_DisclosesCassetteCannotBeUsedDirectly(t *testing.T) {
+// spec: R-CLI-8 — R-CLI-13 added call_ns/return_ns to the cassette, so the
+// timestamp blocker this emit used to document is gone. What survives is a
+// different limit: a cassette records HTTP exchanges, and deciding which
+// exchange is a get or a put on which key needs the application's own
+// semantics. Guessing that would fabricate the operations the checker
+// reasons over, exactly as inventing timestamps once would have. The
+// emitted output must state the surviving limit and must NOT still claim
+// cassettes lack call/return times.
+func TestPorcupine_DisclosesWhatACassetteStillCannotSupply(t *testing.T) {
 	out, err := Porcupine(mustParse(t, porcupineFixture), porcupineSystem())
 	if err != nil {
 		t.Fatalf("Porcupine: %v", err)
@@ -118,6 +122,13 @@ func TestPorcupine_DisclosesCassetteCannotBeUsedDirectly(t *testing.T) {
 	for _, want := range []string{"call_ns", "return_ns"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the required history schema field %q is not documented:\n%s", want, out)
+		}
+	}
+	// The superseded claim must be gone, not merely supplemented — a stale
+	// "cassettes have no timestamps" tells the reader something false now.
+	for _, stale := range []string{"NO\n// absolute call/return times", "never an absolute call or return time"} {
+		if strings.Contains(out, stale) {
+			t.Errorf("output still carries the superseded no-timestamps claim %q:\n%s", stale, out)
 		}
 	}
 }
