@@ -25,14 +25,16 @@ func TestTranslateErrorRate_RechecksRangeIndependentlyOfParser(t *testing.T) {
 	}
 }
 
-// spec: R-EXE-17
+// spec: R-EXE-21
 func TestTranslateErrorRate_StatusDefaultsWhenAbsent(t *testing.T) {
-	// R-CFG-14 lists `status` as error_rate's modifier without a stated
-	// default. SPEC.md does not state one (flagged as a gap, mirroring
-	// queuefault's defaultPoisonPillCount precedent) — 500 (Internal
-	// Server Error) is the smallest, least-invented default: it is the
-	// generic "the mocked dependency broke" response a fault verb named
-	// error_rate is trying to simulate.
+	// R-EXE-21: error_rate's injected status defaults to 500 when
+	// unstated — a server error is what a client's retry/timeout/circuit
+	// breaker paths are written against, so the default must land there,
+	// not on some other status a "tidy this constant up" edit might drift
+	// to (a 4xx would exercise validation handling instead, a different
+	// test entirely). See TestTranslateErrorRate_UsesExplicitStatus
+	// alongside this one: together they prove 500 is a *default*, not a
+	// hardcoded value that happens to ignore the modifier.
 	f := config.Fault{
 		Name:   "stripe_errors",
 		Target: "api.stripe.com",
@@ -55,7 +57,13 @@ func TestTranslateErrorRate_StatusDefaultsWhenAbsent(t *testing.T) {
 }
 
 // spec: R-EXE-15
+// spec: R-EXE-21
 func TestTranslateErrorRate_UsesExplicitStatus(t *testing.T) {
+	// The other half of R-EXE-21's proof: 500 only applies when status is
+	// unstated. An explicit status (here 503, not the default) MUST be
+	// honoured — otherwise TestTranslateErrorRate_StatusDefaultsWhenAbsent
+	// could pass just as well with Status hardcoded to 500 and the
+	// `status` modifier never read at all.
 	f := config.Fault{
 		Name:   "stripe_errors",
 		Target: "api.stripe.com",
