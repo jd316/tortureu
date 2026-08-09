@@ -48,3 +48,31 @@ func TestRun_AbortedResetCarriesTheReason(t *testing.T) {
 		t.Errorf("error = %q, want it to carry the reset failure's own text", v.Error)
 	}
 }
+
+// spec: R-VER-16
+//
+// A compose reset prints a long progress log and then the reason. Relaying
+// the raw tail joined by "; " buried the cause in a wall of "Container X
+// Created" noise, on the one line a user reads first. Prefer the lines that
+// actually indicate failure.
+func TestShellResetter_SurfacesTheCauseNotTheProgressLog(t *testing.T) {
+	script := `
+echo " Container demo-db-1  Creating"
+echo " Container demo-db-1  Created"
+echo " Container demo-web-1  Creating"
+echo " Container demo-web-1  Created"
+echo " Container demo-db-1  Starting"
+echo "Error response from daemon: invalid mount config: bind source path does not exist: db/password.txt" >&2
+exit 1`
+	err := ShellResetter{}.Reset(script)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "db/password.txt") {
+		t.Fatalf("cause missing from %q", msg)
+	}
+	if strings.Contains(msg, "Created") {
+		t.Errorf("progress noise relayed alongside the cause:\n%s", msg)
+	}
+}

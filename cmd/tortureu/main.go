@@ -9,14 +9,6 @@ import (
 	"os"
 )
 
-// stubVerbs are declared in registry.yaml (R-CLI-2) but not implemented in
-// v0 (PLAN.md Task 8): they exit 2 naming themselves rather than silently
-// doing nothing or pretending to succeed. Empty now that emit has
-// graduated (R-CLI-8 proposed, internal/emit) — kept as a map (not
-// removed) because stubVerbs[verb] is still the fallback dispatch rule
-// below and a future stub verb only needs an entry here, not a new case.
-var stubVerbs = map[string]bool{}
-
 func main() {
 	os.Exit(Main(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -51,9 +43,6 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		return runEmit(rest, stdout, stderr)
 	case verb == "trend":
 		return runTrend(os.Stdin, rest, stdout, stderr)
-	case stubVerbs[verb]:
-		fmt.Fprintf(stderr, "tortureu %s: not implemented in v0\n", verb)
-		return 2
 	default:
 		fmt.Fprintf(stderr, "tortureu: unknown verb %q\n\n%s", verb, usage)
 		return 2

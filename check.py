@@ -245,7 +245,13 @@ ok(not orphans, "every internal package has a caller" + (f" — UNWIRED: {orphan
 # `planned:`. The final review found ~34 entries instructing users to run verbs that exit 2,
 # and a header naming `tortureu suggest`, which is not a verb at all. Telling someone to run a
 # command that cannot run is the documentation form of "built but unreachable".
-IMPLEMENTED = {'init', 'run', 'doctor', 'mcp', 'smoke', 'check', 'emit', 'capture', 'replay', 'trend'}
+# Derived from cmd/tortureu/main.go's own dispatch, not restated here: a hand-written set can be
+# padded with a verb nobody implemented and this gate would pass. main.go used to carry an empty
+# `stubVerbs` map and an unreachable "not implemented in v0" branch to express the same guarantee;
+# reading the dispatch directly is stronger and leaves no dead code behind.
+IMPLEMENTED = set(re.findall(r'case verb == "(\w+)"', open('cmd/tortureu/main.go').read()))
+if not IMPLEMENTED:
+    raise SystemExit("check.py: could not read any verb from cmd/tortureu/main.go's dispatch")
 # Flags a how: may name. Verb-level checking is not enough: `tortureu run --db-load` passes a
 # verb check and still tells a user to pass a flag that does not exist.
 REAL_FLAGS = set()
