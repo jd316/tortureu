@@ -27,8 +27,15 @@ func (s *Server) callDescribeSystem(raw json.RawMessage) (string, error) {
 	if err := unmarshalArgs(raw, &args); err != nil {
 		return "", err
 	}
+	// R-DET-15: an agent that passes no compose path gets the same
+	// Compose-Specification precedence a human does, so `compose.yaml`
+	// works without the agent knowing to name it.
 	if args.ComposePath == "" {
-		args.ComposePath = "docker-compose.yml"
+		if p, rerr := detect.ResolveComposeFile("."); rerr == nil {
+			args.ComposePath = p
+		} else {
+			args.ComposePath = detect.DefaultComposePath
+		}
 	}
 	sys, err := detect.Detect(args.ComposePath)
 	if err != nil {
@@ -49,7 +56,7 @@ func (s *Server) callProposeExperiments(raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	if args.ComposePath == "" {
-		args.ComposePath = "docker-compose.yml"
+		args.ComposePath = detect.DefaultComposePath
 	}
 	if args.Dir == "" {
 		args.Dir = "."

@@ -376,6 +376,19 @@ else:
     ok(not _stale, "E1 figures stated in docs match the committed results"
        + (f" — {_stale[:3]}" if _stale else f" ({_e1})"))
 
+# R-DET-15 names every entry point that must resolve a compose filename by precedence. `capture`
+# and the MCP tools were missed when it landed and kept a hardcoded "docker-compose.yml", so
+# `capture` reported "could not detect the system from docker-compose.yml" on a repo using
+# compose.yaml. Only internal/detect may spell that filename now.
+_hard = []
+for _f in glob.glob('cmd/tortureu/*.go') + glob.glob('internal/**/*.go', recursive=True):
+    if _f.endswith('_test.go') or _f.startswith('internal/detect/'):
+        continue
+    if '"docker-compose.yml"' in open(_f).read():
+        _hard.append(_f)
+ok(not _hard, "no hardcoded docker-compose.yml outside internal/detect (R-DET-15)"
+   + (f" — {_hard}" if _hard else ""))
+
 # README must name every implemented verb. It said "All nine verbs are real" and listed nine
 # while ten existed — `trend` was invisible to anyone reading the front page. A count in prose
 # cannot be checked, but the presence of each verb name can.

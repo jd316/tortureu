@@ -96,6 +96,35 @@ func buildDoctorReport(findings []doctor.Finding, reg *doctor.Registry, sys *det
 	b.WriteString(renderPrereqs(prereqs))
 	b.WriteString("\n")
 
+	// R-CLI-20: what detection DID determine, named plainly. Without this the
+	// report never said which service it treated as the system under test, so
+	// a wrong guess was invisible and `-service` had no visible effect.
+	if sys != nil {
+		b.WriteString("DETECTED\n")
+		if sys.SUT != "" {
+			fmt.Fprintf(&b, "  system under test: %s\n", sys.SUT)
+		} else {
+			b.WriteString("  system under test: not decided — see GAPS below, and name it with -service\n")
+		}
+		if sys.Lang != "" {
+			fmt.Fprintf(&b, "  language: %s\n", sys.Lang)
+		}
+		b.WriteString("\n")
+	}
+
+	// R-CLI-20 / R-DET-7: what detection could not determine, before the
+	// audit that depends on it. doctor referenced Gaps nowhere, so an
+	// undecided SUT, an unrecognised image or an unfollowed manifest left
+	// the audit quietly empty with no stated reason — while `init` printed
+	// every one of them.
+	if sys != nil && len(sys.Gaps) > 0 {
+		b.WriteString("GAPS (what detection could not determine — R-DET-7)\n")
+		for _, g := range sys.Gaps {
+			fmt.Fprintf(&b, "  - %s\n", g)
+		}
+		b.WriteString("\n")
+	}
+
 	b.WriteString("RESILIENCE AUDIT (hints only, R-AUD-3)\n")
 	if len(findings) == 0 {
 		b.WriteString("  (no known client libraries detected)\n")
@@ -180,6 +209,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	compose := fs.String("compose", detect.DefaultComposePath, "path to the compose file to detect")
+	service := fs.String("service", "", "name the system under test when R-DET-19 cannot single one out (as `init -service` does)")
 	// registryPath default is "" (not "registry.yaml"): the normal path is
 	// the registry embedded in the binary (R-COV-8), independent of the
 	// working directory, so `doctor` also works everywhere but this repo.
@@ -198,7 +228,10 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	sys, err := detect.Detect(composePath)
+	// R-CLI-20: an explicit -service resolves what R-DET-19 refuses to guess.
+	// Without it an ambiguous stack was a dead end here: no SUT, an empty
+	// audit, and no way for the user to say which service was theirs.
+	sys, err := detect.DetectWithSUT(composePath, *service)
 	if err != nil {
 		fmt.Fprintf(stderr, "tortureu doctor: detect: %v\n", err)
 		return 2

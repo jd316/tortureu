@@ -49,7 +49,15 @@ func runCapture(args []string, stdout, stderr io.Writer) int {
 	switch *engine {
 	case "proxy":
 	case "keploy":
-		return runCaptureKeploy(*compose, stdout, stderr)
+		// R-DET-15: resolve the compose filename here too. This verb was
+		// missed when precedence landed, so it reported "could not detect
+		// the system from docker-compose.yml" on a repo using compose.yaml.
+		composePath, cerr := detect.ResolveComposeArg(*compose)
+		if cerr != nil {
+			fmt.Fprintf(stderr, "tortureu capture: %v\n", cerr)
+			return 2
+		}
+		return runCaptureKeploy(composePath, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "tortureu capture: -engine %q is not a capture engine; supported: %s\n",
 			*engine, strings.Join(captureEngines, ", "))

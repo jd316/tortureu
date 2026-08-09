@@ -214,6 +214,24 @@ nothing is reported at all — the overwhelming case stays silent.
 *(specified before the fix, per R-PROC-2; found while verifying R-DET-16 against real repositories,
 where the alphabetical pick is visible in the emitted `base_url`)*
 
+
+**R-CLI-20** *(proposed)* — `doctor` **MUST** name the system under test it detected, **MUST**
+report detection's gaps (**R-DET-7**), and **MUST** accept `-service` to name the system under test
+when **R-DET-19** could not.
+
+`doctor` is the verb whose entire purpose is telling a user what TortureU can and cannot determine
+about their repo, and it referenced `System.Gaps` nowhere — so every gap detection produced was
+invisible there: an unrecognised image, a manifest read but not followed, the languages found when
+none could be chosen, and an undecided system under test. `init` printed all of them; `doctor`
+printed none. The same fact reported by one verb and hidden by the other is worse than either
+behaviour alone, because the user cannot tell which to trust.
+
+Without `-service`, an ambiguous stack is also unresolvable at `doctor`: `init` lets the user say
+which service is theirs, `doctor` gave them no way to, so the audit stayed empty with no stated
+reason and no remedy.
+
+*(specified before the fix, per R-PROC-2; found by running `doctor` against a stack with two
+candidate `build:` services after R-DET-19 began refusing to guess)*
 **R-DET-2** — A compose service with an `image:` and no `build:` **MUST** be classified as a
 dependency.
 

@@ -17,6 +17,8 @@
 // against that wording creeping back in.
 package mcp
 
+import "github.com/jdb316/tortureu/internal/detect"
+
 // Tool is one entry TortureU's MCP surface exposes to a calling agent.
 type Tool struct {
 	Name        string
@@ -47,7 +49,7 @@ var Tools = []Tool{
 				"compose_path": {
 					Type:        "string",
 					Description: "Path to an existing docker-compose.yml to detect against.",
-					Default:     "docker-compose.yml",
+					Default:     detect.DefaultComposePath,
 				},
 			},
 		},
@@ -61,7 +63,7 @@ var Tools = []Tool{
 				"compose_path": {
 					Type:        "string",
 					Description: "Path to an existing docker-compose.yml to detect against.",
-					Default:     "docker-compose.yml",
+					Default:     detect.DefaultComposePath,
 				},
 				"dir": {
 					Type:        "string",
