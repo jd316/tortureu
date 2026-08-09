@@ -97,10 +97,17 @@ type System struct {
 	Gaps        []string // things we could not classify; reported, never guessed (R-DET-3, R-DET-7)
 	Lang        string   // detected from manifest
 
-	// otelClientSeen, otelClientUnknown and otelCollectorSeen feed
-	// Coverage.LacksOtel; set by detectLockfiles and the compose service
-	// loop respectively, combined once both have run.
+	// awsClientSeen, azureClientSeen, otelClientSeen and manifestUnread are
+	// the manifest evidence behind Coverage.AWS,
+	// Coverage.Azure and Coverage.LacksOtel (R-DET-18). Every manifest
+	// R-DET-1 permits contributes — the compose-project root's and each
+	// service's build context — and the tri-state facts are settled only
+	// once all of them have been read, because a single manifest's "not
+	// here" cannot distinguish absence from not-looked-there (R-COV-6).
+	// otelCollectorSeen is the compose half of lacks:otel (R-DET-12).
+	awsClientSeen     bool
+	azureClientSeen   bool
 	otelClientSeen    bool
-	otelClientUnknown bool
 	otelCollectorSeen bool
+	manifestUnread    bool
 }

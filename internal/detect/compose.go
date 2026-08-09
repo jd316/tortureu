@@ -212,15 +212,21 @@ func Detect(composePath string) (*System, error) {
 		return nil, err
 	}
 
+	// R-DET-18: every manifest R-DET-1 permits has now been read — the
+	// project root's and each service's build context — so platform:aws and
+	// platform:azure can be settled. Not before: one manifest's "not here"
+	// cannot tell absence from not-looked-there (R-COV-6).
+	finalizeManifestFacts(sys)
+
 	// R-COV-5 lacks:otel, tri-state (R-COV-6): a verified collector or
 	// client wins outright — an OTel collector in compose proves the system
 	// has OTel regardless of whether its manifest could be parsed. Only
-	// once neither is confirmed does an unparsed manifest make the fact
+	// once neither is confirmed does an unread manifest make the fact
 	// unknown rather than true.
 	switch {
 	case sys.otelClientSeen || sys.otelCollectorSeen:
 		sys.Coverage.LacksOtel = FactFalse
-	case sys.otelClientUnknown:
+	case sys.manifestUnread:
 		sys.Coverage.LacksOtel = FactUnknown
 	default:
 		sys.Coverage.LacksOtel = FactTrue

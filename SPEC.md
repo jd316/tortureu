@@ -150,6 +150,34 @@ existing rule, since a prebuilt binary or an ecosystem outside R-DET-1's list le
 *(specified before the fix, per R-PROC-2; found cross-checking why a verdict candidate's `source`
 field rendered empty)*
 
+**R-DET-18** *(proposed)* — The **manifest-derived Coverage facts** (`platform:aws`,
+`platform:azure`, and the client half of `lacks:otel` — R-COV-5) **MUST** be established from every
+manifest R-DET-1 permits reading, on the same footing as R-DET-17's language: the compose-project
+root's *and* each service's own build-context manifest. Each manifest **MUST** be matched against the
+SDK table for **its own** language, not for whichever language `System.Lang` ended up holding.
+
+Where a manifest was read but its declared dependencies were not (R-DET-14's aggregator-pom case),
+each fact it would have decided **MUST** be `FactUnknown`, wherever that manifest was — a service
+build context included. `FactFalse` is a positive claim of absence and **MUST** be reserved for
+"every manifest R-DET-1 permits was read, and none of them declares it".
+
+Before this requirement, only the root manifest could establish these facts, so the ordinary
+monorepo — nothing at the root, `boto3` in `api/pyproject.toml` — reported `platform:aws` as
+`FactFalse`: **verified absent**, when the truth was "we did not look there". That is the precise
+distinction **R-COV-6** exists to keep, and consumers act on it differently — `emit localstack`
+refuses with "no AWS SDK found" on `FactFalse` and with "the manifest could not be read" on
+`FactUnknown`, and `doctor` treats `FactUnknown` as unevaluable rather than false. A wrong `FactFalse`
+therefore does not merely lose information; it makes those refusals lie.
+
+What does **not** change: a repo with **no** readable manifest anywhere keeps `FactFalse`, because
+within R-DET-1's bound there is genuinely nothing that could declare an SDK — the honest reading of
+"we looked everywhere we are allowed to look". And per **R-DET-10** these facts stay **manifest-only**
+in both directions: a `localstack` compose image makes an `aws` *dependency* (§3.1) and **MUST NOT**
+make `platform:aws` true, since a `dep:`-sourced signal is not a `lockfile`-sourced one.
+
+*(specified before the fix, per R-PROC-2; found in the same sweep as R-DET-17 and confirmed by the
+coordinator as the more serious half — an unhelpful empty string versus an unsupportable claim)*
+
 **R-DET-2** — A compose service with an `image:` and no `build:` **MUST** be classified as a
 dependency.
 

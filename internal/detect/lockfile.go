@@ -373,43 +373,70 @@ func detectLockfiles(dir string, sys *System, service string) error {
 	}
 	sys.Lang = info.lang
 
-	// A manifest that was read decides platform:aws/azure and the
-	// otel-client half of lacks:otel; absent one, there is nothing that
-	// could declare a dependency, so absence is verified, not guessed.
-	sys.Coverage.AWS = FactFalse
-	sys.Coverage.Azure = FactFalse
-	for _, imp := range info.imports {
-		matchClient(sys, info.clientTable, imp, service)
-		if hasImportPrefix(imp, awsSDKImports[sys.Lang]) {
-			sys.Coverage.AWS = FactTrue
-		}
-		if hasImportPrefix(imp, azureSDKImports[sys.Lang]) {
-			sys.Coverage.Azure = FactTrue
-		}
-		if hasImportPrefix(imp, otelClientImports[sys.Lang]) {
-			sys.otelClientSeen = true
-		}
-	}
-
+	applyManifestFacts(sys, info, service)
 	if len(info.unread) > 0 {
-		// R-COV-6: the manifest points at dependency sources R-DET-1 does
-		// not let us read, and they may well declare an AWS/Azure SDK or an
-		// OTel client. That is "undetermined", not "verified absent":
-		// defaulting to false here would, for lacks:otel, actively
-		// recommend OTel setup to a team that already has it.
-		if sys.Coverage.AWS == FactFalse {
-			sys.Coverage.AWS = FactUnknown
-		}
-		if sys.Coverage.Azure == FactFalse {
-			sys.Coverage.Azure = FactUnknown
-		}
-		if !sys.otelClientSeen {
-			sys.otelClientUnknown = true
-		}
 		sys.Gaps = append(sys.Gaps, unreadGap(info, "", dir))
 	}
 
 	return nil
+}
+
+// applyManifestFacts folds one manifest into the facts it can decide
+// (R-DET-18): its clients (R-DET-5, attributed to service) and the
+// manifest-sourced Coverage evidence — platform:aws, platform:azure and the
+// client half of lacks:otel.
+//
+// It records *evidence*, not verdicts: the tri-state values themselves are
+// settled once, in finalizeManifestFacts, after every manifest R-DET-1
+// permits has been read. Deciding per-manifest is what produced the bug this
+// requirement fixes, since the first manifest's "nothing found here" was
+// indistinguishable from "nothing found anywhere".
+//
+// The SDK tables are keyed by *this* manifest's language, not System.Lang: a
+// Node service's "@aws-sdk/client-s3" is invisible to the Go table, so a
+// polyglot stack would silently miss it.
+func applyManifestFacts(sys *System, info manifestInfo, service string) {
+	if len(info.unread) > 0 {
+		// R-COV-6: the manifest points at dependency sources R-DET-1 does
+		// not let us read, and they may well declare an AWS/Azure SDK or an
+		// OTel client. That is "undetermined", not "verified absent":
+		// defaulting to false would, for lacks:otel, actively recommend
+		// OTel setup to a team that already has it.
+		sys.manifestUnread = true
+	}
+	for _, imp := range info.imports {
+		matchClient(sys, info.clientTable, imp, service)
+		if hasImportPrefix(imp, awsSDKImports[info.lang]) {
+			sys.awsClientSeen = true
+		}
+		if hasImportPrefix(imp, azureSDKImports[info.lang]) {
+			sys.azureClientSeen = true
+		}
+		if hasImportPrefix(imp, otelClientImports[info.lang]) {
+			sys.otelClientSeen = true
+		}
+	}
+}
+
+// finalizeManifestFacts settles the tri-state manifest facts once every
+// manifest has been read (R-DET-18, R-COV-6). FactFalse is a positive claim
+// of absence, so it is reserved for "every manifest R-DET-1 permits was read
+// and none declares it" — including the repo with no manifest at all, where
+// nothing inside R-DET-1's bound could declare one.
+func finalizeManifestFacts(sys *System) {
+	sys.Coverage.AWS = manifestFact(sys, sys.awsClientSeen)
+	sys.Coverage.Azure = manifestFact(sys, sys.azureClientSeen)
+}
+
+func manifestFact(sys *System, seen bool) Fact {
+	switch {
+	case seen:
+		return FactTrue
+	case sys.manifestUnread:
+		return FactUnknown
+	default:
+		return FactFalse
+	}
 }
 
 // unreadGap phrases the R-DET-7 gap for a manifest whose declared
@@ -491,9 +518,7 @@ func detectServiceManifests(services map[string]types.ServiceConfig, rootDir str
 		} else if !slices.Contains(otherLangs, info.lang) {
 			otherLangs = append(otherLangs, info.lang)
 		}
-		for _, imp := range info.imports {
-			matchClient(sys, info.clientTable, imp, name)
-		}
+		applyManifestFacts(sys, info, name)
 		if len(info.unread) > 0 {
 			// A manifest we could only partly follow MUST still surface
 			// rather than vanish — the same rule R-DET-14 applies at the

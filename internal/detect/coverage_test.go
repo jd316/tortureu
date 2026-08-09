@@ -285,3 +285,156 @@ func TestCoverageHasNoTrafficCaptureField(t *testing.T) {
 		}
 	}
 }
+
+// spec: R-DET-18
+//
+// The ordinary monorepo: nothing at the compose-project root, the AWS SDK
+// declared in the service's own build-context manifest. Reporting FactFalse
+// here is not a lost detail — it is a claim of verified absence that
+// `emit localstack` and `doctor` both act on.
+func TestPlatformAwsIsEstablishedFromAServiceBuildContextManifest(t *testing.T) {
+	dir := t.TempDir()
+	compose := writeFile(t, dir, "docker-compose.yml", `
+services:
+  api:
+    build: ./api
+  db:
+    image: postgres:16
+`)
+	writeFile(t, dir, "api/pyproject.toml", "[project]\nname = \"api\"\ndependencies = [\"boto3\", \"redis\"]\n")
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if sys.Coverage.AWS != detect.FactTrue {
+		t.Errorf("Coverage.AWS = %v, want true (boto3 declared in api/pyproject.toml)", sys.Coverage.AWS)
+	}
+	if sys.Coverage.Azure != detect.FactFalse {
+		t.Errorf("Coverage.Azure = %v, want false (that manifest was read and declares no Azure SDK)", sys.Coverage.Azure)
+	}
+}
+
+// spec: R-DET-18
+//
+// Each manifest is matched against the SDK table for its own language. A
+// Node service's "@aws-sdk/client-s3" is invisible to the Go table, so
+// matching against whatever System.Lang happens to hold silently misses it.
+func TestPlatformFactsMatchEachManifestAgainstItsOwnLanguagesSDKTable(t *testing.T) {
+	dir := t.TempDir()
+	compose := writeFile(t, dir, "docker-compose.yml", `
+services:
+  gateway:
+    build: ./gateway
+  worker:
+    build: ./worker
+`)
+	writeFile(t, dir, "gateway/go.mod", "module example.com/gateway\n\ngo 1.22\n")
+	writeFile(t, dir, "worker/package.json", `{"name":"worker","dependencies":{"@aws-sdk/client-s3":"3.0.0"}}`)
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if sys.Coverage.AWS != detect.FactTrue {
+		t.Errorf("Coverage.AWS = %v, want true (@aws-sdk/client-s3 in worker/package.json)", sys.Coverage.AWS)
+	}
+}
+
+// spec: R-DET-18
+//
+// An OTel client in a service's own manifest means the system has OTel, so
+// lacks:otel is verified false — recommending OTel setup to a team that
+// already has it is the failure R-COV-6 exists to prevent.
+func TestLacksOtelIsFalseWhenAServiceManifestDeclaresAnOtelClient(t *testing.T) {
+	dir := t.TempDir()
+	compose := writeFile(t, dir, "docker-compose.yml", `
+services:
+  api:
+    build: ./api
+`)
+	writeFile(t, dir, "api/go.mod", `
+module example.com/api
+
+go 1.22
+
+require go.opentelemetry.io/otel v1.28.0
+`)
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if sys.Coverage.LacksOtel != detect.FactFalse {
+		t.Errorf("Coverage.LacksOtel = %v, want false (an OTel client is declared in api/go.mod)", sys.Coverage.LacksOtel)
+	}
+}
+
+// spec: R-DET-18
+//
+// The aggregator-pom case, in a service build context rather than at the
+// root: a manifest we could only partly follow makes its facts
+// undetermined, never "verified absent".
+func TestUnreadableServiceManifestMakesPlatformFactsUnknownNotFalse(t *testing.T) {
+	dir := t.TempDir()
+	compose := writeFile(t, dir, "docker-compose.yml", `
+services:
+  api:
+    build: ./api
+`)
+	writeFile(t, dir, "api/pom.xml", `<project>
+  <artifactId>platform</artifactId>
+  <packaging>pom</packaging>
+  <modules>
+    <module>checkout-api</module>
+  </modules>
+</project>`)
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if sys.Coverage.AWS != detect.FactUnknown {
+		t.Errorf("Coverage.AWS = %v, want unknown (api/pom.xml's modules were not read)", sys.Coverage.AWS)
+	}
+	if sys.Coverage.Azure != detect.FactUnknown {
+		t.Errorf("Coverage.Azure = %v, want unknown (api/pom.xml's modules were not read)", sys.Coverage.Azure)
+	}
+	if sys.Coverage.LacksOtel != detect.FactUnknown {
+		t.Errorf("Coverage.LacksOtel = %v, want unknown — a false default would suggest OTel setup to a team that may already have it", sys.Coverage.LacksOtel)
+	}
+}
+
+// spec: R-DET-10
+//
+// The facts stay manifest-only in both directions: a localstack image is an
+// `aws` dependency (§3.1) and must not make platform:aws true, because a
+// dep:-sourced signal is not a lockfile-sourced one.
+func TestLocalstackImageDoesNotMakePlatformAwsTrue(t *testing.T) {
+	dir := t.TempDir()
+	compose := writeFile(t, dir, "docker-compose.yml", `
+services:
+  api:
+    build: ./api
+  aws:
+    image: localstack/localstack:3
+`)
+	writeFile(t, dir, "api/go.mod", "module example.com/api\n\ngo 1.22\n")
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	var found bool
+	for _, d := range sys.Deps {
+		if d.Type == "aws" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("deps = %+v, want the localstack image classified as an aws dependency", sys.Deps)
+	}
+	if sys.Coverage.AWS != detect.FactFalse {
+		t.Errorf("Coverage.AWS = %v, want false — a compose image must not establish a manifest-sourced fact", sys.Coverage.AWS)
+	}
+}
