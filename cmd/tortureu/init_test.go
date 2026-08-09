@@ -512,3 +512,133 @@ func TestInitEmitsBaseURLFromTheContainerPortNotThePublishedHostPort(t *testing.
 		t.Errorf("target.base_url = %q, want %q\n%s", cfg.Target.BaseURL, want, got)
 	}
 }
+
+// spec: R-DET-19
+//
+// A derived pick must not read as a detected fact: the file says it was
+// derived from the depends_on graph and names the override, so a user whose
+// front door is not the graph root can fix it in one flag.
+func TestBuildInitMarksADerivedSUTAsAnAssumptionAndNamesTheOverride(t *testing.T) {
+	sys := &detect.System{
+		SUT:           "nginx",
+		SUTChoice:     detect.SUTChoiceDerived,
+		SUTCandidates: []string{"nginx", "web1", "web2"},
+		SUTPorts:      []string{"80"},
+	}
+	out := buildInit(sys, "./docker-compose.yml")
+	content := string(out.YAML)
+
+	cfg, err := config.Parse([]byte(content))
+	if err != nil {
+		t.Fatalf("config.Parse rejected the generated file: %v\n%s", err, content)
+	}
+	if got, want := cfg.Target.Service, "nginx"; got != want {
+		t.Errorf("target.service = %q, want %q", got, want)
+	}
+	if !strings.Contains(content, "-service") {
+		t.Errorf("generated file does not name the -service override:\n%s", content)
+	}
+	for _, want := range []string{"web1", "web2"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("generated file does not name the other candidate %s:\n%s", want, content)
+		}
+	}
+}
+
+// spec: R-DET-19
+//
+// The refusal case, mirroring R-CLI-19's for base_url: no service is named,
+// every candidate is, and `-service` is the one-flag fix.
+func TestBuildInitRefusesToNameAnUndecidedSUTAndReportsEveryCandidate(t *testing.T) {
+	sys := &detect.System{
+		SUTChoice:     detect.SUTChoiceUndecided,
+		SUTCandidates: []string{"result", "vote", "worker"},
+	}
+	out := buildInit(sys, "./docker-compose.yml")
+	content := string(out.YAML)
+
+	if strings.Contains(content, "\n  service:") {
+		t.Errorf("init named a service it did not decide on:\n%s", content)
+	}
+	for _, want := range []string{"result", "vote", "worker", "-service"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("generated file does not name %s:\n%s", want, content)
+		}
+	}
+	// The gap for this is detection's own (R-DET-19), reported to every
+	// consumer rather than re-invented here, so buildInit must not print a
+	// second copy of it.
+	if hasGapContaining(out.Gaps, "system under test") {
+		t.Errorf("gaps = %v, want detection's single report, not a duplicate", out.Gaps)
+	}
+}
+
+// spec: R-DET-19
+//
+// The single-build-service case must stay silent: no assumption to disclose,
+// so no noise about one.
+func TestBuildInitSaysNothingAboutTheChoiceWhenThereWasOnlyOneBuildService(t *testing.T) {
+	sys := &detect.System{SUT: "api", SUTChoice: detect.SUTChoiceOnly, SUTPorts: []string{"8080"}}
+	content := string(buildInit(sys, "./docker-compose.yml").YAML)
+
+	if strings.Contains(content, "-service") || strings.Contains(content, "depends_on") {
+		t.Errorf("generated file discusses a choice that was never made:\n%s", content)
+	}
+}
+
+// spec: R-DET-19
+//
+// End to end: -service settles the ambiguity without editing anything by
+// hand, and the base_url follows the service the caller named.
+func TestInitServiceFlagSettlesAnAmbiguousStack(t *testing.T) {
+	dir := t.TempDir()
+	compose := filepath.Join(dir, "docker-compose.yml")
+	body := "services:\n" +
+		"  frontend:\n    build: ./frontend\n    ports: [\"3000:3000\"]\n" +
+		"  backend:\n    build: ./backend\n    ports: [\"8000:8000\"]\n"
+	if err := os.WriteFile(compose, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outPath := filepath.Join(dir, "torture.yaml")
+
+	var out, errb bytes.Buffer
+	if code := runInit([]string{"-compose", compose, "-service", "backend", "-out", outPath}, &out, &errb); code != 0 {
+		t.Fatalf("runInit exit %d: %s", code, errb.String())
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse(got)
+	if err != nil {
+		t.Fatalf("config.Parse: %v\n%s", err, got)
+	}
+	if cfg.Target.Service != "backend" {
+		t.Errorf("target.service = %q, want backend\n%s", cfg.Target.Service, got)
+	}
+	if want := "http://localhost:8000"; cfg.Target.BaseURL != want {
+		t.Errorf("target.base_url = %q, want %q", cfg.Target.BaseURL, want)
+	}
+}
+
+// spec: R-DET-19
+func TestInitFailsLoudlyWhenServiceFlagNamesNoComposeService(t *testing.T) {
+	dir := t.TempDir()
+	compose := filepath.Join(dir, "docker-compose.yml")
+	if err := os.WriteFile(compose, []byte("services:\n  api:\n    build: .\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outPath := filepath.Join(dir, "torture.yaml")
+
+	var out, errb bytes.Buffer
+	code := runInit([]string{"-compose", compose, "-service", "nope", "-out", outPath}, &out, &errb)
+	if code == 0 {
+		t.Fatalf("runInit succeeded with a service that is not in the compose file: %s", out.String())
+	}
+	if !strings.Contains(errb.String(), "nope") || !strings.Contains(errb.String(), "api") {
+		t.Errorf("stderr does not name both the bad service and the real one: %s", errb.String())
+	}
+	if _, err := os.Stat(outPath); err == nil {
+		t.Errorf("torture.yaml was written despite the refusal")
+	}
+}

@@ -64,9 +64,39 @@ func buildInit(sys *detect.System, composePath string) initOutput {
 	var gaps []string
 	b.WriteString("target:\n")
 	fmt.Fprintf(&b, "  compose: %s\n", composePath)
-	if sys.SUT != "" {
+	switch {
+	case sys.SUT != "":
 		fmt.Fprintf(&b, "  service: %s\n", sys.SUT)
-	} else {
+		if sys.SUTChoice == detect.SUTChoiceDerived {
+			// R-DET-19: a derived pick is an assumption, and an assumption
+			// that reads as a detected fact is the failure this project
+			// rejects everywhere else. Say where it came from and how to
+			// change it — a proxy is usually the front door, but the graph
+			// root is not always the service whose behaviour is under test.
+			fmt.Fprintf(&b, "  # service was DERIVED, not declared: %d compose services build (%s),\n",
+				len(sys.SUTCandidates), strings.Join(sys.SUTCandidates, ", "))
+			fmt.Fprintf(&b, "  # and %s is the only one nothing else depends_on — so load enters\n", sys.SUT)
+			b.WriteString("  # there. If another of them is what you mean to torture, regenerate\n")
+			b.WriteString("  # with: tortureu init -service <name>\n")
+		}
+
+	case sys.SUTChoice == detect.SUTChoiceUndecided:
+		// R-DET-19: several build: services and no evidence between them.
+		// Naming one would silently torture the wrong container and report a
+		// verdict about it; `run` refusing a missing target.service costs one
+		// flag instead.
+		fmt.Fprintf(&b, "  # service: NOT CHOSEN — %d compose services declare build: and the\n", len(sys.SUTCandidates))
+		b.WriteString("  # depends_on graph does not single one out. Pick the one whose\n")
+		b.WriteString("  # behaviour you are testing and regenerate with -service <name>:\n")
+		for _, c := range sys.SUTCandidates {
+			fmt.Fprintf(&b, "  #   tortureu init -service %s\n", c)
+		}
+		// No gap is appended here: detection already reports this one
+		// (R-DET-19's own message, which every consumer sees, not just
+		// init), and repeating it would print the same fact twice under
+		// "gaps (not hidden)".
+
+	default:
 		// R-CLI-4: never write an empty required field. `service: ` with
 		// nothing after it is syntactically a present, empty YAML value —
 		// config.Parse's own emptiness check would then reject it with a
@@ -171,7 +201,15 @@ func writeBaseURL(b *strings.Builder, sys *detect.System) []string {
 		return nil
 
 	case 0:
-		if sys.SUT == "" {
+		switch {
+		case sys.SUTChoice == detect.SUTChoiceUndecided:
+			// Nothing is wrong with this repo's ports — the service above is
+			// simply not chosen yet, and base_url follows from it. One
+			// action to report, not two (R-DET-19 already reports it).
+			b.WriteString("  # base_url: follows from the service above — pick one with -service and\n")
+			b.WriteString("  # regenerate, and this is filled in from that service's own port.\n")
+			return nil
+		case sys.SUT == "":
 			// No SUT at all: the missing service: above is already the gap
 			// to fix, and naming a second one here would just be noise.
 			b.WriteString("  # base_url: not derivable — no system under test was detected (see above).\n")
@@ -287,6 +325,10 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	compose := fs.String("compose", detect.DefaultComposePath, "path to the compose file to detect")
+	// R-DET-19: the one-flag fix for a stack where several services build
+	// and the depends_on graph does not say which is under test — and the
+	// override where it does but picked the wrong one.
+	service := fs.String("service", "", "compose service that is the system under test (default: derived, see R-DET-19)")
 	out := fs.String("out", "torture.yaml", "path to write the generated config")
 	// -ci is a bool, and the provider is the positional argument after it
 	// (`tortureu init --ci gitlab`), because the flag has to work both bare
@@ -311,7 +353,7 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	sys, err := detect.Detect(composePath)
+	sys, err := detect.DetectWithSUT(composePath, *service)
 	if err != nil {
 		fmt.Fprintf(stderr, "tortureu init: detect: %v\n", err)
 		return 2

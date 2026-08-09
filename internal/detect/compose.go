@@ -97,8 +97,19 @@ var defaultPorts = map[string]string{
 }
 
 // Detect reads a compose file (via compose-go, R-DET-11) and language
-// manifests (R-DET-1) to describe the system.
+// manifests (R-DET-1) to describe the system, letting R-DET-19 decide the
+// SUT where more than one service declares build:.
 func Detect(composePath string) (*System, error) {
+	return DetectWithSUT(composePath, "")
+}
+
+// DetectWithSUT is Detect with the system under test named explicitly,
+// which settles R-DET-19's ambiguity outright: a caller who says which
+// service is under test is never overruled by a derived pick. A sutService
+// that is not in the compose file is an error naming the services that are
+// — falling back would run everything against something the caller did not
+// ask for, having said nothing about it.
+func DetectWithSUT(composePath, sutService string) (*System, error) {
 	absPath, err := filepath.Abs(composePath)
 	if err != nil {
 		return nil, err
@@ -125,14 +136,26 @@ func Detect(composePath string) (*System, error) {
 	sort.Strings(names)
 
 	sys := &System{}
+
+	// R-DET-19: decide the SUT before classifying anything, so that the
+	// ports recorded for base_url (R-DET-16) belong to the service actually
+	// chosen rather than to whichever build: service the scan saw last.
+	if err := chooseSUT(sys, project.Services, names, sutService); err != nil {
+		return nil, err
+	}
+
 	for _, name := range names {
 		svc := project.Services[name]
 
-		// R-DET-8: build+image is the SUT, never a dependency, even though
-		// it also has an image tag (the build's output, not a pull ref).
-		if svc.Build != nil {
-			sys.SUT = name
+		if name == sys.SUT {
 			sys.SUTPorts = listenPorts(svc.Ports, svc.Expose)
+			continue
+		}
+		// R-DET-8: a build: service is the SUT and never a dependency, even
+		// though it may also carry an image tag (the build's output, not a
+		// pull ref) — and that holds for the build: services R-DET-19 did
+		// not choose too: they are neither dependency nor gap.
+		if svc.Build != nil {
 			continue
 		}
 		if svc.Image == "" {
@@ -233,6 +256,73 @@ func Detect(composePath string) (*System, error) {
 	}
 
 	return sys, nil
+}
+
+// chooseSUT settles which compose service is the system under test and
+// records how, per R-DET-19. The choice is evidence-based and visible,
+// because everything downstream hangs off it: the fault targets, the verdict,
+// and target.base_url.
+//
+// requested wins outright. Otherwise a single build: service is the SUT with
+// nothing reported (R-DET-8's plain case, the overwhelming one). Where
+// several build:, the candidates are those no other service depends_on — an
+// application sits above its dependencies, so load enters the graph at the
+// top — and if that is exactly one it is chosen and marked derived. If it is
+// not, no SUT is chosen and every candidate is reported: `run` refuses a
+// config with no target.service in one line, whereas a wrong one silently
+// tortures the wrong container and produces a verdict about it.
+func chooseSUT(sys *System, services types.Services, names []string, requested string) error {
+	if requested != "" {
+		if _, ok := services[requested]; !ok {
+			return fmt.Errorf("service %q is not in the compose file; it declares %s",
+				requested, strings.Join(names, ", "))
+		}
+		sys.SUT, sys.SUTChoice = requested, SUTChoiceRequested
+		return nil
+	}
+
+	var builds []string
+	for _, name := range names {
+		if services[name].Build != nil {
+			builds = append(builds, name)
+		}
+	}
+
+	switch len(builds) {
+	case 0:
+		// R-CLI-4/R-DET-8: init already reports "no service declares build:"
+		// for this; there is nothing to choose.
+		sys.SUTChoice = SUTChoiceNone
+		return nil
+	case 1:
+		sys.SUT, sys.SUTChoice = builds[0], SUTChoiceOnly
+		return nil
+	}
+
+	dependedOn := map[string]bool{}
+	for _, name := range names {
+		for dep := range services[name].DependsOn {
+			dependedOn[dep] = true
+		}
+	}
+	var roots []string
+	for _, name := range builds {
+		if !dependedOn[name] {
+			roots = append(roots, name)
+		}
+	}
+
+	sys.SUTCandidates = builds
+	if len(roots) == 1 {
+		sys.SUT, sys.SUTChoice = roots[0], SUTChoiceDerived
+		return nil
+	}
+
+	sys.SUTChoice = SUTChoiceUndecided
+	sys.Gaps = append(sys.Gaps, fmt.Sprintf(
+		"system under test not decided: %d compose services declare build: (%s) and the depends_on graph does not single one out — name it with `-service <name>`, because a wrong guess tortures the wrong container and reports a verdict about it",
+		len(builds), strings.Join(builds, ", ")))
+	return nil
 }
 
 // listenPorts returns the ports a service itself listens on, per R-DET-16:

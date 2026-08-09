@@ -79,6 +79,16 @@ type Coverage struct {
 type System struct {
 	SUT string // compose service name of the system under test (R-DET-8)
 
+	// SUTChoice records *how* SUT was decided (R-DET-19), so init can show a
+	// derived pick as an assumption rather than a fact, and say nothing at
+	// all in the ordinary single-build-service case.
+	SUTChoice string
+
+	// SUTCandidates is every build: service that was in the running, set
+	// only when there was more than one — the list init names when the
+	// choice was derived or refused (R-DET-19).
+	SUTCandidates []string
+
 	// SUTPorts is the ports the SUT itself listens on, deduplicated and in
 	// compose order (R-DET-16): the container side of ports: plus every
 	// expose: entry. It is the container side and not the published host
@@ -111,3 +121,22 @@ type System struct {
 	otelCollectorSeen bool
 	manifestUnread    bool
 }
+
+// How System.SUT was decided (R-DET-19). Only SUTChoiceDerived and
+// SUTChoiceUndecided are worth reporting: the first is an assumption the
+// user may need to override, the second is a refusal they must resolve.
+const (
+	// SUTChoiceOnly: exactly one compose service declares build:, so there
+	// was nothing to choose between (R-DET-8's plain case).
+	SUTChoiceOnly = "only"
+	// SUTChoiceRequested: the caller named it (`init -service <name>`).
+	SUTChoiceRequested = "requested"
+	// SUTChoiceDerived: several build: services, and exactly one of them is
+	// depended on by nothing else — the top of the depends_on graph.
+	SUTChoiceDerived = "derived"
+	// SUTChoiceUndecided: several build: services and the graph does not
+	// single one out. No SUT is chosen; the candidates are reported.
+	SUTChoiceUndecided = "undecided"
+	// SUTChoiceNone: no compose service declares build: at all.
+	SUTChoiceNone = "none"
+)

@@ -178,6 +178,42 @@ make `platform:aws` true, since a `dep:`-sourced signal is not a `lockfile`-sour
 *(specified before the fix, per R-PROC-2; found in the same sweep as R-DET-17 and confirmed by the
 coordinator as the more serious half — an unhelpful empty string versus an unsupportable claim)*
 
+**R-DET-19** *(proposed)* — Where **more than one** compose service declares `build:`, R-DET-8 does
+not say which is the system under test, and the implementation picked whichever sorted last. Every
+verdict, every fault target and every `base_url` hangs off that choice, so it **MUST** be made on
+evidence and **MUST** be visible:
+
+1. a service the caller names explicitly (`init -service <name>`) **MUST** win outright. A name that
+   is not a service in the compose file **MUST** be an error naming the services that are — never a
+   silent fall back to a derived pick.
+2. with exactly one `build:` service, it is the SUT (R-DET-8, unchanged).
+3. otherwise the candidates are the `build:` services that **no other service `depends_on`**. An
+   application sits above its dependencies, so load enters the graph at the top. If exactly one such
+   service exists it **MUST** be chosen, and `init` **MUST** mark it in the file it writes as derived
+   rather than declared, naming `-service` as the override.
+4. otherwise **no SUT is chosen**: `init` **MUST** omit `target.service` and report a gap naming
+   every candidate, exactly as **R-CLI-19** does for an undecidable `base_url`. A guess here is
+   worse than an absence — `run` refuses a config with no `target.service` in one line, whereas a
+   wrong one silently tortures the wrong container and produces a verdict about it.
+
+Measured over the nine real multi-`build:` stacks available (eight in `docker/awesome-compose` plus
+`dockersamples/example-voting-app`): step 3 singles out exactly one candidate in **seven** of them,
+and in every one it is the front door — `proxy` for `nginx-flask-mysql` and `nginx-aspnet-mysql`,
+`nginx` for `nginx-nodejs-redis`, `frontend` for the three `react-*` stacks. Two are genuinely
+ambiguous and reach step 4: `react-rust-postgres` (`backend` and `frontend`, neither depending on the
+other) and `example-voting-app` (`result` and `worker`). The alphabetical pick got two of the nine
+plainly wrong — `web2` rather than `nginx`, and, for `example-voting-app`, `worker`: a background
+C# consumer that publishes no port at all, so `init` named as the system under test the one service
+in that repo which cannot serve a request. No E1 corpus case has more than one `build:` service, so
+none of them changes.
+
+What does not change: a `build:` service that is not chosen is still neither a dependency nor a gap
+(R-DET-2 and R-DET-8 classify by `build:`, not by being the SUT), and with a single `build:` service
+nothing is reported at all — the overwhelming case stays silent.
+
+*(specified before the fix, per R-PROC-2; found while verifying R-DET-16 against real repositories,
+where the alphabetical pick is visible in the emitted `base_url`)*
+
 **R-DET-2** — A compose service with an `image:` and no `build:` **MUST** be classified as a
 dependency.
 

@@ -379,6 +379,9 @@ func TestLangIsTakenWhenEveryServiceManifestAgreesAndTheSUTHasNone(t *testing.T)
 services:
   zproxy:
     build: ./zproxy
+    depends_on:
+      - api
+      - worker
   api:
     build: ./api
   worker:
@@ -410,6 +413,9 @@ func TestLangIsLeftEmptyWithAGapWhenServicesDisagreeAndTheSUTHasNoManifest(t *te
 services:
   zproxy:
     build: ./zproxy
+    depends_on:
+      - api
+      - worker
   api:
     build: ./api
   worker:
