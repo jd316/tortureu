@@ -49,7 +49,13 @@ func runEmit(args []string, stdout, stderr io.Writer) int {
 	// looks like it found no dependency, when it was never told of one.
 	var sys *detect.System
 	if emit.NeedsSystem(tool) {
-		s, derr := detect.Detect(cfg.Target.Compose)
+		// R-DET-19: target.service is authoritative and already validated, so
+		// detection must not be left to re-derive it. On a stack with several
+		// candidate build: services R-DET-19 correctly names none, and an empty
+		// sys.SUT would silently degrade two things that key off it — the
+		// audit-candidate join (R-VER-4) and the Jaeger service lookup
+		// (R-VER-13) — both of which fail closed rather than loudly.
+		s, derr := detect.DetectWithSUT(cfg.Target.Compose, cfg.Target.Service)
 		sys = s
 		if derr != nil {
 			fmt.Fprintf(stderr, "tortureu emit: could not detect the system from %s: %v\n", cfg.Target.Compose, derr)
