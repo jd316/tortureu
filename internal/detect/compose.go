@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/loader"
+	"github.com/compose-spec/compose-go/v2/types"
 )
 
 // depPattern is one recognizer for the R-DET-9 vocabulary: an image whose
@@ -130,6 +132,7 @@ func Detect(composePath string) (*System, error) {
 		// it also has an image tag (the build's output, not a pull ref).
 		if svc.Build != nil {
 			sys.SUT = name
+			sys.SUTPorts = listenPorts(svc.Ports, svc.Expose)
 			continue
 		}
 		if svc.Image == "" {
@@ -224,6 +227,53 @@ func Detect(composePath string) (*System, error) {
 	}
 
 	return sys, nil
+}
+
+// listenPorts returns the ports a service itself listens on, per R-DET-16:
+// the container side (Target) of each ports: entry, plus every expose:
+// entry, deduplicated and in declaration order.
+//
+// The container side is what target.base_url needs, even though a base URL
+// looks host-shaped: internal/run dials it from inside the SUT container's
+// own network namespace (k6's `--network container:<id>`, R-DC2-3's fix, and
+// --fuzz's identical attachment), where the published host port is not bound
+// at all. Dep.Address reads the same field for a different reason — a
+// dependency is dialled from inside the compose network (R-DET-4).
+//
+// Dropped, because none of them names one reachable TCP port: a zero
+// target, a non-TCP port, and a port range (`8000-8010`, which compose-go
+// keeps unexpanded) — which member of a range serves the API is exactly
+// what compose does not say, and R-CLI-19 refuses to guess.
+func listenPorts(ports []types.ServicePortConfig, expose []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(port string) {
+		if port == "" || port == "0" || strings.Contains(port, "-") || seen[port] {
+			return
+		}
+		seen[port] = true
+		out = append(out, port)
+	}
+
+	for _, p := range ports {
+		if p.Protocol != "" && p.Protocol != "tcp" {
+			continue
+		}
+		if p.Target == 0 {
+			continue
+		}
+		add(strconv.FormatUint(uint64(p.Target), 10))
+	}
+	for _, e := range expose {
+		// expose: entries keep their raw compose spelling, which may carry
+		// a protocol suffix ("3000/udp").
+		port, proto, hasProto := strings.Cut(e, "/")
+		if hasProto && proto != "tcp" {
+			continue
+		}
+		add(port)
+	}
+	return out
 }
 
 // depType normalizes an image reference to an R-DET-9 dependency type, or

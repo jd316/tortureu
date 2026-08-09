@@ -401,3 +401,114 @@ func TestInitWarnsAboutMissingPrerequisiteButStillSucceeds(t *testing.T) {
 		t.Errorf("stdout lists k6 as missing-and-needed; it is not required:\n%s", out.String())
 	}
 }
+
+// spec: R-CLI-19
+func TestBuildInitWritesBaseURLWhenTheSUTDeclaresExactlyOnePort(t *testing.T) {
+	sys := &detect.System{SUT: "checkout-api", SUTPorts: []string{"8080"}}
+	out := buildInit(sys, "./docker-compose.yml")
+	content := string(out.YAML)
+
+	if !strings.Contains(content, "base_url: http://localhost:8080") {
+		t.Errorf("missing detected base_url:\n%s", content)
+	}
+	// The scheme is not detectable from compose, so it must be labelled.
+	if !strings.Contains(content, "assum") {
+		t.Errorf("base_url comment does not mark the scheme as an assumption:\n%s", content)
+	}
+	cfg, err := config.Parse([]byte(content))
+	if err != nil {
+		t.Fatalf("config.Parse rejected the generated file: %v\n%s", err, content)
+	}
+	if got, want := cfg.Target.BaseURL, "http://localhost:8080"; got != want {
+		t.Errorf("parsed target.base_url = %q, want %q", got, want)
+	}
+}
+
+// spec: R-CLI-19
+//
+// Several ports are a refusal, not a tie-break: immich's dev SUT declares
+// 3000 and 24678, the second being Vite's HMR socket, so any "pick one"
+// rule measures the file-watcher instead of the application.
+func TestBuildInitRefusesToPickAmongSeveralPortsAndNamesThemAll(t *testing.T) {
+	sys := &detect.System{SUT: "immich-web", SUTPorts: []string{"3000", "24678"}}
+	out := buildInit(sys, "./docker-compose.yml")
+	content := string(out.YAML)
+
+	cfg, err := config.Parse([]byte(content))
+	if err != nil {
+		t.Fatalf("config.Parse rejected the generated file: %v\n%s", err, content)
+	}
+	if cfg.Target.BaseURL != "" {
+		t.Errorf("base_url = %q, want empty — init must not pick among candidates", cfg.Target.BaseURL)
+	}
+	for _, want := range []string{"http://localhost:3000", "http://localhost:24678"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("candidate %s not named in the generated file:\n%s", want, content)
+		}
+	}
+	if !hasGapContaining(out.Gaps, "base_url") {
+		t.Errorf("gaps = %v, want the undecided base_url surfaced", out.Gaps)
+	}
+}
+
+// spec: R-CLI-19
+func TestBuildInitReportsNoDeclaredPortWithoutInventingOne(t *testing.T) {
+	sys := &detect.System{SUT: "checkout-api"}
+	out := buildInit(sys, "./docker-compose.yml")
+	content := string(out.YAML)
+
+	cfg, err := config.Parse([]byte(content))
+	if err != nil {
+		t.Fatalf("config.Parse rejected the generated file: %v\n%s", err, content)
+	}
+	if cfg.Target.BaseURL != "" {
+		t.Errorf("base_url = %q, want empty — nothing is declared to derive it from", cfg.Target.BaseURL)
+	}
+	if strings.Contains(content, "localhost:8080") {
+		t.Errorf("init invented a base URL for a SUT that declares no port:\n%s", content)
+	}
+	if !hasGapContaining(out.Gaps, "base_url") {
+		t.Errorf("gaps = %v, want the missing base_url surfaced", out.Gaps)
+	}
+}
+
+// hasGapContaining reports whether any gap mentions sub.
+func hasGapContaining(gaps []string, sub string) bool {
+	for _, g := range gaps {
+		if strings.Contains(g, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// spec: R-CLI-19
+//
+// End to end through the real verb, on the shape E1's control case has:
+// "8081:8080" must yield the container port, since k6 dials base_url from
+// inside the SUT's own network namespace.
+func TestInitEmitsBaseURLFromTheContainerPortNotThePublishedHostPort(t *testing.T) {
+	dir := t.TempDir()
+	compose := filepath.Join(dir, "docker-compose.yml")
+	body := "services:\n  checkout-api:\n    build: .\n    ports: [\"8081:8080\"]\n"
+	if err := os.WriteFile(compose, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outPath := filepath.Join(dir, "torture.yaml")
+
+	var out, errb bytes.Buffer
+	if code := runInit([]string{"-compose", compose, "-out", outPath}, &out, &errb); code != 0 {
+		t.Fatalf("runInit exit %d: %s", code, errb.String())
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse(got)
+	if err != nil {
+		t.Fatalf("config.Parse: %v\n%s", err, got)
+	}
+	if want := "http://localhost:8080"; cfg.Target.BaseURL != want {
+		t.Errorf("target.base_url = %q, want %q\n%s", cfg.Target.BaseURL, want, got)
+	}
+}

@@ -77,7 +77,18 @@ type Coverage struct {
 
 // System is what detection knows about a repo.
 type System struct {
-	SUT         string // compose service name of the system under test (R-DET-8)
+	SUT string // compose service name of the system under test (R-DET-8)
+
+	// SUTPorts is the ports the SUT itself listens on, deduplicated and in
+	// compose order (R-DET-16): the container side of ports: plus every
+	// expose: entry. It is the container side and not the published host
+	// side because everything that dials target.base_url does so from
+	// inside the SUT container's own network namespace (internal/run's k6
+	// and fuzz), where the published port is not bound at all. Empty when
+	// compose declares no port, which init reports rather than papers over
+	// (R-CLI-19).
+	SUTPorts []string
+
 	Deps        []Dep
 	Egress      []string          // external hosts found (R-DET-4)
 	EgressClass map[string]string // Egress entry -> "internal" (in-compose) or "unclassified" (R-DET-4)

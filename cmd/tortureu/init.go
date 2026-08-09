@@ -65,7 +65,7 @@ func buildInit(sys *detect.System, composePath string) initOutput {
 	b.WriteString("target:\n")
 	fmt.Fprintf(&b, "  compose: %s\n", composePath)
 	if sys.SUT != "" {
-		fmt.Fprintf(&b, "  service: %s\n\n", sys.SUT)
+		fmt.Fprintf(&b, "  service: %s\n", sys.SUT)
 	} else {
 		// R-CLI-4: never write an empty required field. `service: ` with
 		// nothing after it is syntactically a present, empty YAML value —
@@ -79,9 +79,11 @@ func buildInit(sys *detect.System, composePath string) initOutput {
 		// and the gap is surfaced the same way an unclassified host is
 		// (in the file, and on stdout via the Gaps list), not guessed.
 		b.WriteString("  # no system under test detected — no compose service declares build:.\n")
-		b.WriteString("  # name it yourself: service: <compose-service-name> (see R-DET-8)\n\n")
+		b.WriteString("  # name it yourself: service: <compose-service-name> (see R-DET-8)\n")
 		gaps = append(gaps, "no system under test detected: no compose service declares build: — target.service must be set by hand")
 	}
+
+	gaps = append(gaps, writeBaseURL(&b, sys)...)
 
 	var hosts []string
 	for h := range sys.EgressClass {
@@ -120,6 +122,80 @@ func buildInit(sys *detect.System, composePath string) initOutput {
 	gaps = append(gaps, sys.Gaps...)
 
 	return initOutput{YAML: []byte(b.String()), Gaps: gaps}
+}
+
+// writeBaseURL writes target.base_url, or an explanation of why it could
+// not be written, and returns the gaps that go with it (R-CLI-19). It
+// closes the target: block with a blank line either way.
+//
+// The rule is a three-way split on how many ports the SUT declares
+// (R-DET-16), and only the first case produces a value:
+//
+//	one     → base_url, with its two assumptions named
+//	several → nothing, every candidate named for the user to choose from
+//	none    → nothing, and what that means said out loud
+//
+// The URL is http://localhost:<container port>, not the published host
+// port: `run` dials it from inside the SUT container's own network
+// namespace, where the SUT's loopback is the SUT and the published port is
+// not bound (see internal/run/load.go). Getting this backwards is the one
+// mistake here with teeth — for an asymmetric mapping like E1's own
+// "8081:8080" it produces a file that looks detected, runs, and fails every
+// single request.
+//
+// Picking among several would be nearly as bad: it looks detected too, and
+// measures whatever answers on a debugger or admin port. An empty base_url
+// is instead R-EXE-28's loud refusal, which names the field — so a missing
+// value costs one edit, and a wrong one costs a verdict about the wrong
+// process.
+func writeBaseURL(b *strings.Builder, sys *detect.System) []string {
+	defer b.WriteString("\n")
+
+	urls := make([]string, 0, len(sys.SUTPorts))
+	for _, port := range sys.SUTPorts {
+		urls = append(urls, "http://localhost:"+port)
+	}
+
+	switch len(urls) {
+	case 1:
+		fmt.Fprintf(b, "  base_url: %s\n", urls[0])
+		// Two assumptions, both stated: the scheme (compose says nothing
+		// about TLS, and a port number is not evidence of it — reading 443
+		// as https would be a guess dressed as detection), and loopback
+		// binding.
+		fmt.Fprintf(b, "  # base_url uses the port %s declares in the compose file, dialled on\n", sys.SUT)
+		b.WriteString("  # localhost because load runs inside that container's own network\n")
+		b.WriteString("  # namespace. Two assumptions: that the service speaks http:// rather\n")
+		b.WriteString("  # than TLS, and that it listens on loopback and not only on its\n")
+		b.WriteString("  # container IP. Change it if either is wrong for this service.\n")
+		return nil
+
+	case 0:
+		if sys.SUT == "" {
+			// No SUT at all: the missing service: above is already the gap
+			// to fix, and naming a second one here would just be noise.
+			b.WriteString("  # base_url: not derivable — no system under test was detected (see above).\n")
+			return []string{"target.base_url not written: no system under test was detected — set both service: and base_url: by hand"}
+		}
+		fmt.Fprintf(b, "  # base_url: NOT DETECTED — the compose file declares no port for %s\n", sys.SUT)
+		b.WriteString("  # (no ports: and no expose:), so there is nothing to derive it from.\n")
+		b.WriteString("  # Set the port the service actually listens on:\n")
+		b.WriteString("  #   base_url: http://localhost:<port>\n")
+		return []string{fmt.Sprintf(
+			"target.base_url not written: compose declares no port for SUT %s (nothing to derive it from) — set it by hand before `tortureu run`", sys.SUT)}
+
+	default:
+		fmt.Fprintf(b, "  # base_url: NOT CHOSEN — %s declares %d ports, and compose does not say\n", sys.SUT, len(urls))
+		b.WriteString("  # which one serves the traffic you want measured. Uncomment one (http://\n")
+		b.WriteString("  # is an assumption; localhost is where load runs, inside this\n")
+		b.WriteString("  # container's own network namespace):\n")
+		for _, u := range urls {
+			fmt.Fprintf(b, "  #   base_url: %s\n", u)
+		}
+		return []string{fmt.Sprintf(
+			"target.base_url not written: SUT %s declares %d ports (%s) — pick one; guessing could point load at a debugger or admin port",
+			sys.SUT, len(urls), strings.Join(urls, ", "))}
+	}
 }
 
 // runInitCI implements `tortureu init --ci [provider]` (R-CLI-11): write a CI

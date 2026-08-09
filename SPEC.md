@@ -228,6 +228,35 @@ usable, whatever the rest of it does.
 *(found cross-checking the growth strategy's time-to-first-verdict gate against real repositories
 rather than against fixtures this project wrote; specified before the fix, per R-PROC-2)*
 
+**R-DET-16** *(proposed)* — Detection **MUST** record the ports the system under test itself
+**listens on** — the *container* side of a compose `ports:` entry (`target`), together with any
+`expose:` entry — so that `init` can derive a `base_url` without guessing (**R-CLI-19**).
+
+It is the container side, not the published host side, because of where the load is dialled from:
+`run` executes k6 inside the SUT container's own network namespace (`--network container:<id>`, the
+**R-DC2-3** fix in `internal/run/load.go`), and `--fuzz` joins the identical container
+(**R-EXE-27**). Inside that namespace `localhost:<container port>` is the SUT's own loopback, and the
+published host port is not bound at all. Every other consumer of `target.base_url` reads its port
+the same way: `emit netem/iptables` filters the SUT's own `INPUT --dport` with it, and
+`emit kind` maps it as a `containerPort`. A `base_url` built from the *host* side would therefore be
+wrong for exactly the mappings where the two differ — E1's own control case publishes `8081:8080`,
+so the host reading gives `localhost:8081`, an address nothing in that namespace answers on.
+
+Two entries **MUST NOT** be recorded, neither of which names a reachable TCP port a base URL could
+use: a `target` of `0`, and a non-TCP (`udp`) port. A port *range* needs no special rule: compose-go
+expands `8000-8002` into its individual members, each of which is a genuine candidate, and
+**R-CLI-19**'s several-ports refusal then names them all — compose does not say which member serves
+the API, so that is the honest outcome rather than a special case.
+
+Duplicates **MUST** collapse: `ports: ["8080:8080"]` alongside `expose: ["8080"]` is one port, not
+two, and counting it twice would send **R-CLI-19** down its several-candidates refusal for a service
+with a single obvious answer.
+
+*(specified before the fix, per R-PROC-2; resolves the detection half of **TBD-15**. The
+container-side reading was found by cross-checking the emitted `base_url` against the E1 corpus's
+committed configs: `case8-control`'s says `8080` with a comment explaining exactly this, and it is
+right)*
+
 **R-DET-10** — A `dep:` predicate whose only source is `lockfile` **MUST NOT** be inferred from a
 compose image, and vice versa. Mis-sourcing produces suggestions that never fire.
 
@@ -1076,6 +1105,37 @@ message. For a tool whose adoption barrier is fear (RESEARCH.md: 62% cite fear o
 disruption), a first run that fails to start is the worst possible introduction. *(found by
 running `tortureu init` on a synthetic repo)*
 
+**R-CLI-19** *(proposed)* — `init` **MUST** write `target.base_url` when, and only when, the SUT
+declares **exactly one** listening port (**R-DET-16**), as `http://localhost:<port>`. In every other
+case it **MUST NOT** write a value, and **MUST** instead say in the file what it found and why it
+refused, and report the same as a gap (**R-DET-7**):
+
+| Ports the SUT declares | What `init` writes |
+|---|---|
+| exactly one | `base_url: http://localhost:<port>`, with the assumptions named |
+| several | no value — a comment naming **every** candidate URL, for the user to choose between |
+| none | no value — a comment saying compose declares no port for this service |
+
+`localhost` is correct rather than the compose service name because of where the dial happens
+(**R-DET-16**): k6 runs inside the SUT's own network namespace, so the SUT's loopback is the SUT.
+That it *binds* loopback (rather than only its container IP) is an assumption, and the same one E1's
+own configs already make.
+
+The scheme is also an assumption and **MUST** be labelled as one. `http` is the defensible default —
+a container that terminates TLS itself is the rare case, and compose gives no evidence either way —
+but a port number is **not** evidence: `443` or `8443` **MUST NOT** be read as `https`, because a
+scheme guessed from a convention is exactly the confident-wrong-answer failure **R-EXE-28** exists
+to stop.
+
+Several ports **MUST NOT** be resolved by picking one, by any rule (lowest, first, "the
+HTTP-looking one"). A `base_url` naming a debugger or an admin port looks detected, runs, and
+measures the wrong thing — strictly worse than the empty field, which **R-EXE-28** turns into a loud
+refusal naming the field. The measured case is `immich`'s dev compose, whose SUT declares `3000` and
+`24678`: the second is Vite's HMR socket, and load pointed at it would measure the dev server's
+file-watcher rather than the application.
+
+*(specified before the fix, per R-PROC-2; resolves the `init` half of **TBD-15**)*
+
 **R-CLI-3** — `doctor` **MUST** report uncovered domains and `know`-tier suggestions with their
 trigger condition, labelled by tier per **R-SCOPE-4**.
 
@@ -1572,17 +1632,41 @@ nothing to suggest, and only the second is honest.
   host and host schemathesis cannot connect — and namespace-joined runs of both reach them,
   sustaining ~1000 tps and reporting the SUT's planted `500` as a finding.
 
-- **TBD-15** — Whether `init` should derive `target.base_url` from the SUT's published compose port.
-  It does not today: `buildInit` writes `compose:` and `service:` and no `base_url` at all, so every
-  new user must hand-edit before their first useful run. The information is usually right there —
-  `flask-redis`'s SUT declares `'8000:8000'` — but `detect.System` records published ports only for
-  *dependencies* (`Dep.Address`), never for the SUT, so exposing it is a detection change rather
-  than a formatting one.
+- ~~**TBD-15**~~ — **RESOLVED 2026-08-09: yes, but only when the SUT declares exactly one port —
+  and it is the container port, not the published host port.** Detection now records the SUT's own
+  listening ports (**R-DET-16**) and `init` emits `base_url` from them under **R-CLI-19**'s
+  three-way rule: one port → `http://localhost:<port>`; several → no value and a comment naming
+  every candidate; none → no value and a comment saying compose declares none.
 
-  Not guessed in the meantime: a service may publish several ports, or none (the R-DC2-3 case,
-  where the SUT is deliberately unreachable from the host), and picking one silently would produce
-  a `base_url` that looks detected and is wrong. **R-EXE-28** makes the empty case a loud refusal
-  rather than a meaningless verdict, which is the safe half; this TBD is the convenient half.
+  Three decisions worth keeping. First, **which side of `ports:`** — and the obvious answer is the
+  wrong one. A `base_url` looks like a host-side address, so the host side (`published`) is what the
+  work started from; it is wrong, because nothing dials `base_url` from the host. `run` executes k6
+  inside the SUT container's network namespace (`internal/run/load.go`, the **R-DC2-3** fix) and
+  `--fuzz` joins the same container, where `localhost:<container port>` is the SUT's own loopback and
+  the published port is not bound at all. The other consumers agree: `emit iptables` filters the SUT's
+  own `INPUT --dport` with that port and `emit kind` maps it as a `containerPort`. E1's control case
+  is the discriminator — it publishes `8081:8080`, the host reading yields `http://localhost:8081`,
+  and its committed `torture.yaml` says `8080` with a comment explaining precisely why. Emitting the
+  host side would have shipped a `base_url` that is *silently wrong exactly when the mapping is
+  asymmetric* — a config that looks detected, runs, and fails every request.
+
+  Second, **several ports are a refusal, not a tie-break.** The measured case is `immich`'s dev
+  compose, whose SUT declares `3000` and `24678` (Vite's HMR socket); `docker/awesome-compose`'s
+  `react-express-mysql` publishes `80`, `9229` and `9230`, two of them Node's inspector. Any
+  "pick the lowest" or "pick the first" rule points load at the wrong process a large fraction of the
+  time, and naming all candidates costs the user one uncomment.
+
+  Third, **`expose:` counts.** A port that is exposed but not published is unreachable from the host
+  and perfectly reachable from inside the namespace where the load actually runs, so refusing it
+  would have withheld a correct answer — `react-express-mongodb`'s backend is the real example. What
+  is still refused: a `0` target, a `udp` port, and a port *range*, none of which names one reachable
+  TCP port.
+
+  Verified against real repositories rather than fixtures, with the built binary: `flask-redis`
+  (one port → `base_url: http://localhost:8000`), `immich`'s `docker-compose.dev.yml` (two → refusal
+  naming both), `nginx-golang` (none → refusal, no invented port), and all nine E1 corpus cases,
+  each of which now reproduces the `base_url` its committed `torture.yaml` already carried —
+  `case8-control` included, at `8080` and not `8081`.
 
 - **TBD-5** — Whether to adopt the `grafana/k6-summary` JSON Schema once it leaves
   work-in-progress, replacing our own `handleSummary()` shape.
