@@ -1,0 +1,138 @@
+{
+  "timestamp_utc": "2026-08-09T08:02:20Z",
+  "commit": "72ca62b",
+  "platform": {
+    "os": "Linux 7.0.0-29-generic",
+    "docker_version": "29.5.3",
+    "cpu_model": "AMD Ryzen 7 5800H with Radeon Graphics",
+    "cpu_cores": 16,
+    "cgroup_version": "v2"
+  },
+  "results": [
+    {
+      "verb": "latency",
+      "requested": "+300ms",
+      "measured": "p50 delta = 301.83ms",
+      "tolerance": "±10ms (p50 delta, measured with jitter: 0 so the tolerance exceeds the sampling noise — see note)",
+      "verdict": "pass",
+      "stats": {
+        "n": 40,
+        "mean": 301.7610498000181,
+        "stddev": 0.4552777580062554,
+        "p50": 301.98090449994197
+      },
+      "translated_action": "{Fault:{Name:lat_primary At: For: Target:echo:9000 Verb:latency Inject:map[jitter:50ms latency:300ms]} Kind:toxic Toxic:0x2040846d4300 Docker:\u003cnil\u003e Owner:}",
+      "notes": [
+        "measured with `latency: 300ms` and no jitter. Measuring this row from the jittered toxic gave the median a standard error of jitter/sqrt(n) = 7.9ms at n=40, making ±10ms only 1.26 SE — a correct implementation reads as a MISS 20.6% of the time, and did twice (289.85ms, 288.82ms)."
+      ],
+      "secondary_numeric_measurement": {
+        "verb": "latency",
+        "requested": "+300ms (numeric ms, bypassing the unit-string gap)",
+        "measured": "p50 delta = 301.65ms",
+        "tolerance": "±10ms (p50 delta)",
+        "verdict": "pass",
+        "stats": {
+          "n": 40,
+          "mean": 301.59293902497666,
+          "stddev": 0.5387592686308432,
+          "p50": 301.80575500003215
+        },
+        "translated_action": "{Fault:{Name:lat_secondary At: For: Target:echo:9000 Verb:latency Inject:map[jitter:0 latency:300]} Kind:toxic Toxic:0x2040848f22c0 Docker:\u003cnil\u003e Owner:}"
+      }
+    },
+    {
+      "verb": "jitter",
+      "requested": "uniform ±50ms -\u003e stddev ~= 28.87ms (j/sqrt(3), R-EXE-24)",
+      "measured": "stddev of delta = 26.33ms",
+      "tolerance": "±15% (stddev of delta, vs the uniform-distribution target)",
+      "verdict": "pass",
+      "stats": {
+        "n": 40,
+        "mean": 306.1199025499491,
+        "stddev": 26.334029847317957,
+        "p50": 306.52703550003935
+      },
+      "translated_action": "{Fault:{Name:lat_primary At: For: Target:echo:9000 Verb:latency Inject:map[jitter:50ms latency:300ms]} Kind:toxic Toxic:0x2040846d4300 Docker:\u003cnil\u003e Owner:}",
+      "notes": [
+        "R-EXE-24: Toxiproxy's jitter is a UNIFORM offset in [-jitter,+jitter], so the target is jitter/sqrt(3) = 28.87ms, not the raw 50ms parameter. Measured stddev=26.33ms vs target 28.87ms (8.8% off, tolerance ±15%)."
+      ],
+      "secondary_numeric_measurement": {
+        "verb": "jitter",
+        "requested": "uniform ±50ms -\u003e stddev ~= 28.87ms (j/sqrt(3), numeric ms, bypassing the unit-string gap)",
+        "measured": "stddev of delta = 15.67ms",
+        "tolerance": "±15% (stddev of delta, vs the uniform-distribution target)",
+        "verdict": "miss",
+        "stats": {
+          "n": 40,
+          "mean": 11.784836299932522,
+          "stddev": 15.673870533573846,
+          "p50": 0.5408164997788845
+        },
+        "translated_action": "{Fault:{Name:jit_secondary At: For: Target:echo:9000 Verb:latency Inject:map[jitter:50 latency:0]} Kind:toxic Toxic:0x2040848f2400 Docker:\u003cnil\u003e Owner:}",
+        "notes": [
+          "R-EXE-24: with latency=0, any negative computed delay clamps to zero, which can pull the measured stddev further from the j/sqrt(3) target than the combined latency+jitter case does. Measured stddev=15.67ms vs target 28.87ms (45.7% off, tolerance ±15%)."
+        ]
+      }
+    },
+    {
+      "verb": "bandwidth",
+      "requested": "1 Mbps",
+      "measured": "123637 bytes/sec",
+      "tolerance": "±5% (bytes/sec through the proxy)",
+      "verdict": "pass",
+      "translated_action": "{Fault:{Name:bw_primary At: For: Target:echo:9000 Verb:bandwidth Inject:map[bandwidth:1mbps]} Kind:toxic Toxic:0x204084716100 Docker:\u003cnil\u003e Owner:}",
+      "notes": [
+        "measured 123637 B/s vs requested 125000 B/s (1.1% off, tolerance ±5%)"
+      ],
+      "secondary_numeric_measurement": {
+        "verb": "bandwidth",
+        "requested": "1 Mbps == 125 KB/s (numeric, unit-converted by this harness, NOT by translate.go)",
+        "measured": "123852 bytes/sec",
+        "tolerance": "±5% (bytes/sec through the proxy)",
+        "verdict": "pass",
+        "translated_action": "{Fault:{Name:bw_secondary At: For: Target:echo:9000 Verb:bandwidth Inject:map[bandwidth:125]} Kind:toxic Toxic:0x2040847162a0 Docker:\u003cnil\u003e Owner:}",
+        "notes": [
+          "measured 123852 B/s vs requested 125000 B/s (0.9% off, tolerance ±5%)"
+        ]
+      }
+    },
+    {
+      "verb": "down",
+      "requested": "connection refused",
+      "measured": "refused",
+      "tolerance": "exact (error class at client)",
+      "verdict": "pass",
+      "translated_action": "{Fault:{Name:down_test At: For: Target:echo:9000 Verb:down Inject:map[down:true]} Kind:toxic Toxic:0x204084716120 Docker:\u003cnil\u003e Owner:}"
+    },
+    {
+      "verb": "pause",
+      "requested": "no response, conn held open (SIGSTOP-equivalent freeze)",
+      "measured": "last 5 of 13 ping attempts (tail of the post-fault observation window)",
+      "tolerance": "exact (client sees timeout not RST)",
+      "verdict": "pass",
+      "translated_action": "{Fault:{Name:pause_test At: For: Target:12f4e8152e65e5bd98db09a90ff39b73e8f223a9fc9c0589b8874a0854640dbc Verb:pause Inject:map[pause:true]} Kind:docker Toxic:\u003cnil\u003e Docker:0x204084760870 Owner:}",
+      "notes": [
+        "outcome counts after fault: map[timeout:5]"
+      ]
+    },
+    {
+      "verb": "kill",
+      "requested": "SIGKILL delivered, exit 137",
+      "measured": "status=exited exit_code=137",
+      "tolerance": "exact (signal + exit code, not client RST — see R-EXE-25)",
+      "verdict": "pass",
+      "translated_action": "{Fault:{Name:kill_test At: For: Target:fd5b57f899fae24cfdf76f3d41e8a9252654611e133ccae8470e2f8e239dc91b Verb:kill Inject:map[kill:true]} Kind:docker Toxic:\u003cnil\u003e Docker:0x204084708300 Owner:}"
+    },
+    {
+      "verb": "cpu",
+      "requested": "90% of quota",
+      "measured": "94.3% of one core (cgroup cpu.stat usage_usec delta / wall time)",
+      "tolerance": "±5% (cgroup cpu.stat)",
+      "verdict": "pass",
+      "translated_action": "{Fault:{Name:cpu_test At: For: Target:f678ec6382c867ce9754f21e9f73b82d3971f8b2990752e48705bbda406df2c2 Verb:cpu Inject:map[cpu:90% workers:4]} Kind:docker Toxic:\u003cnil\u003e Docker:0x204084708f90 Owner:}",
+      "notes": [
+        "translateDocker's \"cpu\" case sets Args[\"amount\"]=f.Inject[\"cpu\"] (\"90%\"), but DockerApplier.ApplyDocker's \"stress\" case never reads Args[\"amount\"] at all — it only reads Args[\"workers\"] and runs `stress-ng --cpu \u003cworkers\u003e` with no load percentage. Requested 90%, measured 94.3% (4 unthrottled stress-ng workers, no cgroup CPU quota set for the cpu verb)."
+      ]
+    }
+  ]
+}

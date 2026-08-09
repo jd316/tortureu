@@ -84,10 +84,21 @@ func runLatencyJitter() (latency Result, jitter Result) {
 				jitter.note("post-fault measurement failed: %v", merr)
 			} else {
 				afterStats := computeStats(after)
-				delta := afterStats.P50 - baselineStats.P50
-				latency.Stats = &afterStats
-				latency.Measured = fmt.Sprintf("p50 delta = %.2fms", delta)
-				latency.Verdict = verdictAbs(delta, 300, 10)
+
+				// The latency row is measured from a SEPARATE, jitter-free
+				// toxic, not from these jittered samples. Measuring a median
+				// under deliberately-added uniform noise of ±50ms gives that
+				// median a standard error of jitter/sqrt(n) = 7.9ms at n=40,
+				// so the ±10ms tolerance was only 1.26 standard errors and a
+				// PERFECT implementation would be reported as a MISS 20.6% of
+				// the time. It duly was, twice: 289.85ms then 288.82ms, both
+				// within 1.5 SE of 300 and both published as misses.
+				//
+				// Isolating the variable is what makes ±10ms mean something:
+				// with no jitter the only spread left is real network noise.
+				// The jitter row still comes from the combined toxic below,
+				// because a jitter measurement needs jitter.
+				latency = measureLatencyAlone(s, baselineStats, latency)
 
 				deltas := make([]float64, len(after))
 				for i, v := range after {
@@ -607,4 +618,37 @@ func splitLines(s string) []string {
 		lines = append(lines, s[start:])
 	}
 	return lines
+}
+
+// measureLatencyAlone measures the latency row from a jitter-free toxic on an
+// already-running stack, so the ±10ms tolerance is compared against a signal
+// whose only spread is network noise rather than the ±50ms this project asks
+// Toxiproxy to add on purpose. See the call site for the arithmetic.
+func measureLatencyAlone(s *b1Stack, baselineStats Stats, latency Result) Result {
+	latency.Tolerance = "±10ms (p50 delta, measured with jitter: 0 so the tolerance exceeds the sampling noise — see note)"
+
+	only := config.Fault{
+		Name: "lat_only", Target: echoTarget, Verb: "latency",
+		Inject: map[string]any{"latency": "300ms"},
+	}
+	if _, aerr := s.applyFault(only); aerr != nil {
+		latency.Verdict = "unmeasured"
+		latency.note("jitter-free latency toxic failed to apply: %v", aerr)
+		return latency
+	}
+	samples, merr := s.pingSamples(pingIterations)
+	s.manager.Teardown()
+	if merr != nil {
+		latency.Verdict = "unmeasured"
+		latency.note("jitter-free latency measurement failed: %v", merr)
+		return latency
+	}
+
+	st := computeStats(samples)
+	delta := st.P50 - baselineStats.P50
+	latency.Stats = &st
+	latency.Measured = fmt.Sprintf("p50 delta = %.2fms", delta)
+	latency.Verdict = verdictAbs(delta, 300, 10)
+	latency.note("measured with `latency: 300ms` and no jitter. Measuring this row from the jittered toxic gave the median a standard error of jitter/sqrt(n) = 7.9ms at n=%d, making ±10ms only 1.26 SE — a correct implementation reads as a MISS 20.6%% of the time, and did twice (289.85ms, 288.82ms).", pingIterations)
+	return latency
 }

@@ -47,7 +47,7 @@ effect. `make bench` runs it; results land in `benchmarks/results/<date>-<commit
 | `cpu: 90%` | 90% of quota | cgroup cpu.stat | ±5% |
 
 **Platform:** Linux 7.0.0-29-generic, Docker 29.5.3, AMD Ryzen 7 5800H (16 cores), cgroup v2.
-Measured `2026-08-08T14:37:09Z` at commit `698d549`
+Measured `2026-08-09T08:02:43Z` at commit `72ca62b`
 ([full JSON](benchmarks/results/2026-08-08-698d549.json)). Not yet measured on macOS or
 Docker Desktop — those rows do not exist yet, and BENCHMARKS.md does not claim they do.
 
@@ -75,34 +75,43 @@ e.g. `inject: { latency: 300ms, jitter: 50ms }`, run through the real `fault.Tra
 
 | Fault | Requested | Measured | Tolerance | Verdict |
 |---|---|---|---|---|
-| `latency: 300ms` | +300ms | p50 delta = 289.85ms (n=40, stddev 30.74ms) | ±10ms | **MISS** — see finding 1 |
-| `jitter: 50ms` | stddev target 28.87ms (`50/√3`) | stddev of delta = 30.74ms (n=40, same sample as latency) | ±15% | **PASS** (6.5% off target) |
+| `latency: 300ms` | +300ms | p50 delta = 301.83ms (n=40, jitter-free toxic) | ±10ms | **PASS** (0.6% off) |
+| `jitter: 50ms` | stddev target 28.87ms (`50/√3`) | stddev of delta = 26.33ms (n=40, combined toxic) | ±15% | **PASS** (8.8% off target) |
 | `bandwidth: 1mbps` | 1 Mbps (125,000 B/s) | 123,206 bytes/sec through the proxy (1.4% off) | ±5% | **PASS** |
 | `down` | connection refused | client saw `ConnectionRefusedError` | exact | **PASS** |
 | `pause` (SIGSTOP-equivalent freeze) | no response, conn held open | 5/5 post-fault attempts timed out on an open connection, no RST | exact | **PASS** |
 | `kill` (SIGKILL) | signal + exit code: SIGKILL, exit 137 | `docker inspect` on the echo container read `status=exited exit_code=137` | exact | **PASS** |
 | `cpu: 90%` | 90% of quota | cgroup v2 `cpu.stat` measured 94.1% of one core (`--cpu-load` now divided across 4 workers) | ±5% | **PASS** |
 
-Six of seven rows pass. `jitter` and `kill` — both MISSes in the previous run — now pass
-against the corrected tolerance and the corrected measurement layer respectively; `cpu`
-now passes against the fixed divide-by-workers logic. `latency` is the one row that missed
-*this* run, by a hair (10.15ms against a ±10ms budget) — see finding 1, which is new: the
-prior two runs measured `latency` at 297.56ms and 295.34ms, comfortably inside tolerance.
+**All seven rows pass.** `jitter` and `kill` — both MISSes in an earlier run — pass against the
+corrected tolerance and the corrected measurement layer respectively; `cpu` passes against the fixed
+divide-by-workers logic; and `latency` passes now that it is measured from a jitter-free toxic
+instead of from a signal this benchmark deliberately adds ±50ms of noise to. See finding 1 for why
+that was a measurement defect rather than the fidelity regression it was published as.
 
 **Findings:**
 
-1. **`latency` missed this run's tolerance by 0.15ms, and the honest read is measurement
-   noise on a shared machine, not a regression.** Across this benchmark's three runs today,
-   `latency`'s measured p50 delta was 297.56ms, then 295.34ms, then 289.85ms against a
-   requested +300ms and a ±10ms budget — only the third missed. The stddev of the raw
-   samples this run (30.74ms, n=40) is itself far larger than in the second run's ~1ms-level
-   secondary measurement, consistent with contention from other processes on the machine
-   this benchmark ran on (this machine was running concurrent, unrelated Docker/Go workloads
-   during this measurement session) rather than a change in how the fault is delivered. This
-   is reported as a miss, not silently re-run until it passed and not smoothed into "still
-   basically 300ms" — but it is flagged as a boundary case worth watching for repeat misses
-   on a quieter machine before treating it as a real fidelity regression, per BENCHMARKS.md's
-   own rule that a MISS gets reported, not rationalized away.
+1. **The `latency` MISS was this benchmark's own defect, not a fidelity problem — and the first
+   explanation given for it was wrong.** It was published as a miss twice (289.85ms, then
+   288.82ms) and both times attributed to contention from other workloads on this machine. That
+   was a guess that happened to point away from the real cause.
+
+   The row was measured from the *jittered* toxic (`latency: 300ms` with `jitter: 50ms`), so the
+   samples are uniform over 250–350ms and the **median** of n=40 has a standard error of
+   `jitter/√n` = **7.9ms**. A ±10ms tolerance is 1.26 standard errors, so a perfectly correct
+   implementation is reported as a MISS **20.6% of the time**. Both published misses were within
+   1.5 SE of 300 — indistinguishable from correct. The earlier passes at 297.56ms and 295.34ms
+   were the same distribution landing on the other side, which is why "it passed before" felt like
+   evidence and was not.
+
+   Fixed by isolating the variable: `latency` is now measured from a **jitter-free** toxic, so
+   ±10ms is compared against a signal whose only spread is real network noise. Measured twice at
+   301.82ms and 301.83ms — 0.6% off. `jitter` still comes from the combined toxic, because
+   measuring jitter needs jitter.
+
+   The lesson is worth more than the row: a tolerance narrower than the measurement's own sampling
+   error does not test the tool, it tests luck. This one produced a false negative that stood in
+   this file — and in the launch go/no-go — for two days.
 2. **`jitter` now passes against the corrected, uniform-distribution tolerance (R-EXE-24).**
    Measured stddev 30.74ms vs. the derived target 28.87ms (`jitter/√3`) is 6.5% off, well
    inside ±15%. This is the same underlying Toxiproxy behavior the previous run measured
@@ -120,6 +129,23 @@ prior two runs measured `latency` at 297.56ms and 295.34ms, comfortably inside t
    workers each targeting `90/4 = 22.5%` rounds to `23%`, summing to `92%` in principle;
    94.1% measured here is within normal `stress-ng`/cgroup-accounting noise of that).
 5. **`down` and `pause` continue to fully match the spec**, unchanged from every prior run.
+
+**Correction, 2026-08-09: the `latency` MISS was a broken measurement, not a fidelity defect.**
+It was published twice as a miss (289.85ms, then 288.82ms) and twice explained away as machine
+contention. It was neither. The row was measured from the *jittered* toxic — `latency: 300ms` with
+`jitter: 50ms` — so the samples are uniform over 250–350ms and the **median** of n=40 of them has a
+standard error of `jitter/√n` = **7.9ms**. A ±10ms tolerance is therefore only 1.26 standard errors,
+and a perfectly correct implementation reads as a MISS **20.6% of the time**. Both published misses
+sat within 1.5 SE of 300 — statistically indistinguishable from correct.
+
+The tolerance was not too tight for Toxiproxy; it was tighter than the noise this benchmark adds on
+purpose. The latency row is now measured from a **jitter-free** toxic, so ±10ms is compared against
+a signal whose only spread is real network noise. Measured twice at 301.82ms and 301.83ms. The
+jitter row still comes from the combined toxic, because measuring jitter needs jitter.
+
+This is worth stating plainly: a benchmark whose tolerance is narrower than its own sampling error
+does not measure the tool, it measures luck — and it produced a false negative that stood in this
+file, and in the go/no-go analysis, for two days.
 
 **Publish:** a table, per platform (Linux/macOS/Docker Desktop). Fault fidelity varies by
 platform and pretending otherwise is how people get bad data. Where a platform can't hit
