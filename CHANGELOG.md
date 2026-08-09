@@ -81,4 +81,8 @@ download that 404s.
   (case 9) is instrumented and does reach `caused`.
 - Harness overhead (B2) is below the benchmark's own run-to-run variance; no signed figure is
   claimed.
-- `TBD-5` stays open pending `grafana/k6-summary` leaving work-in-progress upstream.
+- `TBD-5` stays open, but no longer on upstream: `grafana/k6-summary` has shipped as `1.0.0`. k6
+  emits that shape only behind `--new-machine-readable-summary` (opt-in even in v2.1.0), and the
+  pinned `grafana/k6:0.54.0` cannot emit it at all, so adopting it now needs a k6 major-version
+  bump — which would move the phase markers, threshold recomputation and every B1 fidelity number
+  measured against 0.54.0, and so belongs in its own change with its own re-measurement.

@@ -906,8 +906,11 @@ E1 measured the cost of not doing this: a control backend with **no defect at al
 findings in three of four runs. *(E1 → Task 4, 2026-08-08)*
 
 > Grafana also publishes a JSON Schema for the end-of-test summary (`grafana/k6-summary`),
-> intended as the stable automation contract. It is marked work-in-progress, so v0 targets
-> `handleSummary()` and adopts the schema once it stabilises. *(TBD-5)*
+> intended as the stable automation contract. It has since shipped as `1.0.0` and is no longer
+> work-in-progress, but k6 emits it only behind `--new-machine-readable-summary` (opt-in even in
+> v2.1.0) and our pinned `grafana/k6:0.54.0` cannot emit it at all — so v0 still targets
+> `handleSummary()`. Adopting the schema now depends on a k6 major-version bump, not on upstream.
+> *(TBD-5)*
 
 ---
 
@@ -1775,36 +1778,33 @@ nothing to suggest, and only the second is honest.
   each of which now reproduces the `base_url` its committed `torture.yaml` already carried —
   `case8-control` included, at `8080` and not `8081`.
 
-- **TBD-5** — Whether to adopt the `grafana/k6-summary` JSON Schema once it leaves
-  work-in-progress, replacing our own `handleSummary()` shape.
-- ~~**TBD-6**~~ — **RESOLVED 2026-08-08: `"correlated"`.** The candidates were `"correlated"`, a
-  distinct `"none"`, and the `""` the code actually shipped. The deciding evidence is what the run
-  already does: `internal/run`'s `confidenceFor` derives a finding's confidence from the number of
-  faults *TortureU itself scheduled* and from k6's own end-of-run summary — it never consults
-  `Obs`. A repo with no Jaeger and no Prometheus still yields `correlated` findings today, because
-  both halves of D-4's `correlated` row (a breach observed, exactly one fault active) come from
-  *our* side of the wire: we own the independent variable, and k6 measures the response. The
-  target's telemetry is what buys `caused`, and nothing else.
+- **TBD-5** — **NARROWED 2026-08-09. The upstream precondition is met; the blocker is now our own
+  k6 pin.** This asked whether to adopt the `grafana/k6-summary` JSON Schema "once it leaves
+  work-in-progress". It has: the repo publishes `schemas/summary/1.0.0/schema.json`, describes
+  itself as the official definition and as "a stable, officially supported alternative to parsing
+  human-readable text summaries", and is versioned for code generation.
 
-  So `"none"` would have been false — a ceiling the tool then routinely exceeds — and `""` was
-  worse than false: it is the blank field that renders as nothing and JSON-omits itself
-  (`max_confidence,omitempty` in both `internal/mcp` and `internal/verdict`), so `init` silently
-  said nothing at all about confidence to exactly the repos that most needed telling. The field is
-  a **ceiling, not a promise**: `correlated` says traces are what stand between this repo and
-  `caused`; an individual finding still degrades to `ambiguous` under overlapping faults (R-VER-3).
-  Consumer check: both consumers type the field as a plain string/`Confidence` and pass it through,
-  and `"correlated"` is a value they already carry from the metrics-only path, so no consumer
-  change is required.
-- ~~**TBD-7**~~ — **RESOLVED 2026-08-08: implemented.** `Gemfile`/`Gemfile.lock` (Ruby) and
-  `pom.xml` (Maven) now parse like the other manifests, so R-DET-14's v0 set is the whole of
-  R-DET-1's list. Two details worth keeping. First, Ruby reads the **Gemfile's `gem` declarations**,
-  falling back to the lockfile's `DEPENDENCIES` section — both are direct dependencies; the
-  lockfile's `GEM specs:` block is the transitive closure, and attributing a gem Rails happened to
-  pull in as a *client of this service* would be the guess D-3 forbids. Second, a Maven
-  **aggregator** `pom.xml` (one declaring `<modules>`) is the honest gap case that survives: its
-  real dependencies live in module `pom.xml`s outside any compose-declared directory, so reading
-  the aggregator alone must report `platform:aws`/`azure`/`lacks:otel` as **undetermined**
-  (R-COV-6) and name the unread modules as a gap — never "verified absent".
+  Measured rather than assumed, against real containers:
+
+  - `grafana/k6:latest` is **v2.1.0**, and with `--new-machine-readable-summary` it emits exactly
+    the schema's shape — top level `{config, metadata, results, version}` with `version: "1.0.0"`.
+  - That flag is **opt-in even in v2**: `--summary-export` alone still emits the legacy flat
+    metric map. So the new format is not yet what a k6 user gets by default.
+  - Our pin is **`grafana/k6:0.54.0`**, which cannot emit it at all. Its `--summary-export` output
+    is the flat `{metric: {avg, max, med, min, p(90), p(95), thresholds}}` map every consumer in
+    `internal/run` reads.
+
+  **Decision: not adopted now, and the reason is no longer "upstream is unstable".** Adopting it
+  requires bumping k6 from 0.54.0 to v2.x, and that bump is not a schema swap — it moves the
+  ground under the phase markers `internal/run` scans for on k6's console output (R-EXE-8, the
+  one-clock mechanism), the threshold booleans R-VER-10 recomputes, the absent-`contains` finding
+  behind R-VER-15, and every B1 fidelity number measured against 0.54.0. Doing it as a side effect
+  of this TBD would invalidate published benchmarks without re-measuring them.
+
+  So it stays open as a **scoped, no-longer-blocked** piece of work: bump the pin, re-run B1 and
+  E1, and only then decide whether to read the new shape, keep the legacy one, or accept both. What
+  changed today is that nothing outside this repository is in the way any more.
+
 - **TBD-10** — **RESOLVED 2026-08-08.** Standard-library clients were invisible to D-9's candidate
   mechanism: candidates came from lockfile-detected clients (R-DET-5), and Go's `net/http` never
   appears in a `go.mod` require line, so no knob table could reach it. E1 measured the cost — the
