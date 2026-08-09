@@ -571,7 +571,7 @@ func evaluateThresholds(metrics map[string]any, faults []config.Fault, sys detec
 			// R-VER-13/R-VER-14: a real causal chain, and the `caused`
 			// confidence it earns, when (and only when) spans covering the
 			// fault target can actually be read.
-			applyTraceChain(&finding, sys)
+			applyTraceChain(&finding, sys, faults)
 			findings = append(findings, finding)
 		}
 	}
@@ -617,7 +617,7 @@ func evaluatePromqlAsserts(asserts []config.AssertEntry, querier PromQuerier, fa
 			Broke:      verdict.Broke{Assertion: assertion, Observed: observed},
 		}
 		attribute(&finding, faults, sys.Deps, auditFindings, sys.Lang, sys.SUT)
-		applyTraceChain(&finding, sys)
+		applyTraceChain(&finding, sys, faults)
 		findings = append(findings, finding)
 	}
 	return passed, findings

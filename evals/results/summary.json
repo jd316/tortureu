@@ -1,54 +1,108 @@
 {
-  "note": "Tenth and final round: internal/run/inreach.go's containerNetDialer was fixed (commit e39fe6e) to probe 127.0.0.1 then ::1 and pick whichever answers, instead of hardcoding 'localhost'. Deleted case 4's standalone dual-homed Redpanda/Prometheus workaround entirely and re-ran case 4 with plain docker-compose-managed Redpanda/Prometheus and -broker-url http://redpanda:8082 -prom-url http://prometheus:9090 -- no workaround of any kind. It detects. The reachability finding across rounds 8-9-10 is now closed. A new, secondary observation from this round is recorded below (container-spawn cost of the tunnel mechanism under repeated polling), not a correctness defect.",
-
+  "note": "Eleventh round: added case 9 (case9-multi-fault-traced), the corpus's first OpenTelemetry-instrumented case and its first multi-fault one, to exercise R-VER-17 (attribute a multi-fault finding from real ingested spans). Whole corpus re-run 2026-08-09T00:16Z through the real binary. Case 9 reports confidence `caused`, cause dep_a_slow, with a two-hop chain read off real spans; no other case changed. Two real defects were found building it and fixed: trace ingestion could not reach a Jaeger inside the DC-2-isolated stack (no published host port) and now uses the same in-stack transport as the Prometheus client; and the degradation gate's bare 2x ratio was cleared by sub-millisecond jitter on an UNDISTURBED dependency (587us -> 1.3ms), which made one real cause and one noisy neighbour read as two candidates -- the gate now also requires a 10ms absolute step. Also corrected a factual error carried in the previous summary and in BENCHMARKS.md: cases 3, 6 and 7 are ambiguous because they declare NO faults, not because several were active.",
   "case4_nonidempotent_consumer": {
     "defect": "Non-idempotent consumer: applies its side effect (an in-memory counter increment) for every message it reads off a Redpanda topic, with no per-message dedup check at all.",
     "fault": "duplicate: 1.0 on target 'orders' (a topic name, not a host:port), at: peak for: 5s -- internal/queuefault's BrokerApplier, driving Redpanda's Pandaproxy (Kafka REST Proxy v2-compatible) over plain HTTP, exactly as internal/applier/broker_applier.go documents.",
     "status": "fail",
     "detected": true,
     "assert_form_used": "promql: 'orders_processed_total <= orders_received_total' -- the ONLY assert form that could express this defect. k6 thresholds cannot see it at all: every POST /order still returns 202 whether or not the message is later processed twice, so no duration/failure-rate threshold would ever break. sql: reads as permanently unevaluated (no SQL execution path exists in v0, confirmed by reading internal/run/findings.go's evaluateSQLAsserts). promql: is fully evaluable given a live Prometheus and -prom-url -- confirmed by reading internal/run/findings.go's evaluatePromqlAsserts, which only reports 'not evaluated' when the querier is nil.",
-    "finding": {"assertion": "promql: orders_processed_total <= orders_received_total", "observed": "no results (condition did not hold)"},
+    "finding": {
+      "assertion": "promql: orders_processed_total <= orders_received_total",
+      "observed": "no results (condition did not hold)"
+    },
     "cause_fault": "order_duplicate",
     "cause_target": "orders",
     "confidence": "correlated",
     "candidates": null,
     "candidates_reason": "Same structural gap as poison_pill/duplicate always hits: buildCandidates(fault, deps, lang) looks up depForTarget(deps, f.Target) by exact Dep.Address match, which is always host:port-shaped for every other fault verb -- but queuefault.Translate uses f.Target as a bare topic name (Topic: f.Target), which can never match a Dep.Address. This means D-9 candidates are structurally impossible for poison_pill/duplicate findings specifically, regardless of whether the underlying broker (Redpanda here, a recognized image type) is itself detected -- a narrower, more specific version of the case 1/2/5 gap. Reported, not patched (out of scope).",
     "repeat_runs": "3/3 clean detections across repeat runs, confirming this isn't a fluke.",
-
     "reachability_finding": {
       "title": "CLOSED: internal/run can now reach a broker and Prometheus dual-homed inside the DC-2-isolated stack, with no workaround",
       "history": "Round 8: BrokerApplier/HTTPPromQuerier had no join-the-namespace mechanism at all (plain connection-refused/EOF). Fixed in 562ffd2 with fallbackTransport (direct call, then a Docker network-namespace tunnel on failure). Round 9: the tunnel itself hardcoded 'localhost' as its dial target inside the joined netns, which BusyBox nc resolves to ::1 first with no IPv4 fallback -- broken against any IPv4-only listener (confirmed: Redpanda's Pandaproxy binds 0.0.0.0 only). Round 10 (this round): fixed in e39fe6e -- the tunnel now probes 127.0.0.1 then ::1 and uses whichever answers, instead of guessing.",
       "verification": "Deleted evals/corpus/case4-nonidempotent-consumer/run.sh (the standalone dual-homed Redpanda/Prometheus workaround) entirely. Restored docker-compose.yml to plain compose-managed Redpanda + topic-init + Prometheus (no host-published ports needed on either). Ran `tortureu run -broker-url http://redpanda:8082 -prom-url http://prometheus:9090` directly -- the exact invocation a real user would write against their own docker-compose.yml, with no hand-built dual-homing of any kind. Case 4 detects: status:fail, correctly attributed to order_duplicate. The reachability finding is closed.",
       "secondary_observation_not_a_correctness_defect": "The tunnel mechanism (one `docker run --rm` container per dialed HTTP request, since fallbackTransport builds a fresh http.Transport per RoundTrip) is expensive under repeated polling: BrokerApplier's redeliverOnce ticks every 500ms for the fault's whole duration, and each tick's GET/POST calls each open their own tunnel container. This round's case 4 run took 270s wall-clock and briefly held ~400 short-lived (self-removing, --rm) containers at once, versus roughly 30-90s and a handful of containers for every other corpus case. Nothing leaked (docker ps -a / docker network ls confirmed clean after the run finished) and the result was correct -- this is a cost observation, not a detection or correctness problem, and is not counted as a finding against the reachability fix."
     },
-
     "secondary_findings_from_building_this_fixture": [
       "Pandaproxy's own auto-create-topic-on-first-produce path hung for 5+ seconds per attempt rather than failing fast or succeeding quickly, in this Redpanda version/config -- pre-creating the topic explicitly (via rpk) sidesteps it entirely. Not a TortureU defect (Redpanda's own behavior), but worth recording since it shaped the fixture.",
       "config.Parse's fault-target validation (`knownTargets`) is purely syntactic -- built only from the SUT's own service name and torture.yaml's own declared egress.hosts keys, with no access to detect.System -- so a queue-fault's topic-shaped target has to be declared in egress.hosts even though internal/run's own queuefault routing never actually consults that classification for poison_pill/duplicate (unlike error_rate, which IS checked against class: mock). The declaration is required to pass the parser and then entirely inert. Not a bug -- config.Parse cannot see detect.System's output by design -- but a real rough edge for anyone writing a queue-fault torture.yaml."
     ]
   },
-
   "per_case_recap": {
-    "case1_no_timeout": {"defect": "HTTP client with no timeout", "detected": true, "cause_fault": "dep_slow", "candidates": "none -- custom dep image outside detect's vocabulary, and net/http undetectable via manifest scanning (no goClientPatterns entry, stdlib never appears in go.mod)"},
-    "case2_retry_storm": {"defect": "Retry with no cap or backoff", "detected": true, "cause_fault": "dep_down", "candidates": "none -- same compound gap as case 1"},
-    "case3_pool_exhaustion": {"defect": "Connection pool of 5 (pgx), real postgres, load-only", "detected": true, "cause_fault": null, "candidates": "pgx: MaxConns, MinConns, ConnConfig.ConnectTimeout -- MaxConns is BENCHMARKS.md's own stated right answer"},
-    "case4_nonidempotent_consumer": {"defect": "Non-idempotent consumer, real Redpanda, duplicate fault", "detected": true, "cause_fault": "order_duplicate", "candidates": "none -- queue-fault targets are topic names, which can never match a Dep.Address"},
-    "case5_no_circuit_breaker": {"defect": "No circuit breaker / cascade", "detected": true, "cause_fault": "dep_slow", "candidates": "none -- same compound gap as case 1", "cascade_confirmed_live": "curled /health (no dep call) from inside the SUT's netns during the fault window: 5.37s response"},
-    "case6_unbounded_queue": {"defect": "Unbounded in-memory queue, OOM under sustained load", "detected": true, "cause_fault": null, "candidates": "correctly none -- in-process queue, no client library exists"},
-    "case7_cache_stampede": {"defect": "Cache stampede on TTL expiry, real redis, load-only", "detected": true, "cause_fault": null, "candidates": "go-redis: PoolSize/DialTimeout/ReadTimeout/WriteTimeout, honestly caveated (none actually fixes a stampede)"},
-    "case8_control": {"defect": "none (control)", "detected": false, "findings": 0, "note": "0 findings across 21+ consecutive runs spanning seven code-path states now, the last several via make eval itself"}
+    "case1_no_timeout": {
+      "defect": "HTTP client with no timeout",
+      "detected": true,
+      "cause_fault": "dep_slow",
+      "candidates": "none -- custom dep image outside detect's vocabulary, and net/http undetectable via manifest scanning (no goClientPatterns entry, stdlib never appears in go.mod)"
+    },
+    "case2_retry_storm": {
+      "defect": "Retry with no cap or backoff",
+      "detected": true,
+      "cause_fault": "dep_down",
+      "candidates": "none -- same compound gap as case 1"
+    },
+    "case3_pool_exhaustion": {
+      "defect": "Connection pool of 5 (pgx), real postgres, load-only",
+      "detected": true,
+      "cause_fault": null,
+      "candidates": "pgx: MaxConns, MinConns, ConnConfig.ConnectTimeout -- MaxConns is BENCHMARKS.md's own stated right answer"
+    },
+    "case4_nonidempotent_consumer": {
+      "defect": "Non-idempotent consumer, real Redpanda, duplicate fault",
+      "detected": true,
+      "cause_fault": "order_duplicate",
+      "candidates": "none -- queue-fault targets are topic names, which can never match a Dep.Address"
+    },
+    "case5_no_circuit_breaker": {
+      "defect": "No circuit breaker / cascade",
+      "detected": true,
+      "cause_fault": "dep_slow",
+      "candidates": "none -- same compound gap as case 1",
+      "cascade_confirmed_live": "curled /health (no dep call) from inside the SUT's netns during the fault window: 5.37s response"
+    },
+    "case6_unbounded_queue": {
+      "defect": "Unbounded in-memory queue, OOM under sustained load",
+      "detected": true,
+      "cause_fault": null,
+      "candidates": "correctly none -- in-process queue, no client library exists"
+    },
+    "case7_cache_stampede": {
+      "defect": "Cache stampede on TTL expiry, real redis, load-only",
+      "detected": true,
+      "cause_fault": null,
+      "candidates": "go-redis: PoolSize/DialTimeout/ReadTimeout/WriteTimeout, honestly caveated (none actually fixes a stampede)"
+    },
+    "case8_control": {
+      "defect": "none (control)",
+      "detected": false,
+      "findings": 0,
+      "note": "0 findings across 21+ consecutive runs spanning seven code-path states now, the last several via make eval itself"
+    }
   },
-
   "metrics": {
-    "detection": "7/7 planted defects detected (all cases 1-7 now built and measured). Case 8 (control) correctly found nothing. The corpus is complete.",
-    "attribution": "4/4 fault-driven cases (1, 2, 4, 5) named the correct causing fault exactly (Cause.fault and Cause.target both matched the planted fault). Cases 3, 6, 7 are load-only by design -- no fault exists to attribute, not counted as a hit or a miss.",
+    "detection": "8/8 planted defects detected (cases 1-7 and 9). Case 8 (control) correctly found nothing.",
+    "attribution": "5/8 findings-bearing cases named a causing fault (1, 2, 4, 5, 9) = 62.5%, which is BELOW this project's 70% bar and is reported as such. Cases 3, 6 and 7 declare no faults at all, so there is no candidate cause for any mechanism to name -- they are a permanent floor on this denominator, not a fixable miss. On the denominator attribution can affect (findings from runs that had faults) it is 5/5, including the one multi-fault case, which is 1/1.",
     "candidates": "2/7 findings-bearing cases carry a candidate list: case 3 (pgx -- MaxConns, the exactly-right knob) and case 7 (go-redis, present and honestly caveated). Cases 1, 2, 4, 5 carry none -- three distinct, precisely diagnosed structural reasons, all reported rather than routed around: (a) a custom application image outside detect's closed vocabulary never becomes a detect.Dep (cases 1, 2, 5); (b) net/http can never be discovered as a client via manifest scanning regardless of vocabulary, since it's stdlib and never appears in a go.mod require line, and internal/detect's own recognition table has no net/http entry either (cases 1, 2, 5); (c) a queue-fault's topic-shaped target can never match a Dep.Address, which is always host:port-shaped (case 4). Case 6 correctly carries none (in-process queue, no client library exists to find).",
-    "false_positive_on_control": "0, across 21+ consecutive case-8 runs spanning seven different code-path states. Never non-zero once actually measured."
+    "false_positive_on_control": "0, across 21+ consecutive case-8 runs spanning seven different code-path states. Never non-zero once actually measured.",
+    "confidence": "1/1: the only OTel-instrumented case (9) reaches `caused` with a real chain; the seven cases with no tracing top out at `correlated`. That is D-4's claim, now measured on both sides."
   },
-
   "make_eval": {
     "status": "wired, complete, and re-verified end to end this round with all 7 built cases plus the control -- no case-specific workaround remains anywhere in the corpus",
     "what_it_does": "evals/run_case.sh: builds the real tortureu binary, builds each case's pre-built dependency image, runs every evals/corpus/case*/torture.yaml through the real binary (case 4 now gets its -broker-url/-prom-url flags from a plain per-case EXTRA_ARGS table, no special runner script), tears down every case's compose stack unconditionally, and exits non-zero if case 8 produced any findings.",
     "verified": "Full `make eval` run this round (case 4 using plain compose-managed Redpanda/Prometheus, no workaround): all 7 built cases ran and detected their planted defect, case 8 passed with 0 findings, exit 0, and docker ps -a / docker network ls showed nothing left over afterward."
+  },
+  "case9_multi_fault_traced": {
+    "defect": "Two faults active at once (dep-a slowed 3s via Toxiproxy, dep-b taken down), with the SUT calling dep-a with no timeout and dep-b with a 200ms timeout it tolerates. Only dep-a is on the path that breaks the SLO.",
+    "instrumentation": "Go SUT with the real OpenTelemetry SDK exporting OTLP/HTTP spans to a jaegertracing/jaeger:2.10.0 service in its own compose stack. Client spans carry server.address/server.port, which is what internal/trace matches a fault target against.",
+    "status": "fail",
+    "detected": true,
+    "confidence": "caused",
+    "cause_fault": "dep_a_slow",
+    "cause_target": "dep-a:9091",
+    "chain": [
+      "dep-a:9091 latency 845us -> 3002.8ms (n=200 spans)",
+      "checkout-api POST /checkout latency 1.9ms -> 3003.6ms (n=200 spans)"
+    ],
+    "why_it_matters": "R-VER-3's fault-count rule can only call this finding ambiguous. The attribution comes entirely from the spans: exactly one of the two fault targets showed measured degradation.",
+    "harness_note": "run_case.sh gained a per-case EXTRA_ENV table so this case can set TORTUREU_TRACE_URL=http://jaeger:16686 -- the default probe (localhost:16686) cannot work, because DC-2 enforcement leaves the stack's Jaeger with no published host port."
   }
 }

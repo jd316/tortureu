@@ -58,6 +58,16 @@ declare -A EXTRA_ARGS=(
   [case4-nonidempotent-consumer]="-broker-url http://redpanda:8082 -prom-url http://prometheus:9090"
 )
 
+# Case 9 names its trace backend explicitly. It has to: DC-2 enforcement
+# leaves the stack's Jaeger with no published host port, so the default
+# probe (localhost:16686) finds nothing -- internal/run reaches
+# `jaeger:16686` through the same in-stack transport it uses for
+# Prometheus (R-VER-13). This is an environment variable rather than a flag
+# because the endpoint is a property of the machine, not of the scenario.
+declare -A EXTRA_ENV=(
+  [case9-multi-fault-traced]="TORTUREU_TRACE_URL=http://jaeger:16686"
+)
+
 run_one_case() {
   local case_dir="$1"
   local case_name
@@ -114,7 +124,8 @@ run_one_case() {
 
   rm -f "$overlay"
   local extra="${EXTRA_ARGS[$case_name]:-}"
-  (cd "$case_dir" && "$TORTUREU_BIN" run -config torture.yaml -json $extra) >"$out" 2>"$errout"
+  local extra_env="${EXTRA_ENV[$case_name]:-}"
+  (cd "$case_dir" && env $extra_env "$TORTUREU_BIN" run -config torture.yaml -json $extra) >"$out" 2>"$errout"
   local rc=$?
   local status findings
   status="$(python3 -c "import json,sys

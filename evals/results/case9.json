@@ -1,0 +1,197 @@
+{
+  "run_id": "2026-08-09T00:22:19Z-checkout-api-8964c0",
+  "scenario": "checkout-api",
+  "status": "fail",
+  "started_at": "2026-08-09T00:22:19Z",
+  "duration_s": 34,
+  "commit": "9c1e6af6103966f3ae29c1497f805515c43da6b3",
+  "reset": "clean",
+  "findings": [
+    {
+      "id": "f1",
+      "confidence": "caused",
+      "broke": {
+        "assertion": "http_req_duration: p(95)\u003c500",
+        "observed": "3004.15ms",
+        "at": ""
+      },
+      "cause": {
+        "fault": "dep_a_slow",
+        "target": "dep-a:9091",
+        "inject": {
+          "latency": "3s"
+        },
+        "window": [
+          "peak+5s",
+          "peak+5s+10s"
+        ]
+      },
+      "chain": [
+        {
+          "at": "dep-a:9091",
+          "observed": "latency 845µs -\u003e 3002.7ms (n=200 spans)"
+        },
+        {
+          "at": "checkout-api POST /checkout",
+          "observed": "latency 1.9ms -\u003e 3003.4ms (n=200 spans)"
+        }
+      ],
+      "candidates": [
+        {
+          "library": "net/http",
+          "source": "",
+          "knobs": [
+            "Client.Timeout",
+            "Transport.ResponseHeaderTimeout",
+            "Transport.DialContext",
+            "Transport.TLSHandshakeTimeout",
+            "Transport.MaxIdleConnsPerHost"
+          ]
+        },
+        {
+          "library": "net/http",
+          "source": "",
+          "knobs": [
+            "Client.Timeout",
+            "Transport.ResponseHeaderTimeout",
+            "Transport.DialContext",
+            "Transport.TLSHandshakeTimeout",
+            "Transport.MaxIdleConnsPerHost"
+          ]
+        }
+      ]
+    }
+  ],
+  "passed": [],
+  "egress_audit": {
+    "mocked": [],
+    "blocked": [],
+    "real": [],
+    "unclassified": []
+  },
+  "observability": {
+    "traces": true,
+    "metrics": false,
+    "logs": false,
+    "max_confidence": "caused"
+  },
+  "metrics": {
+    "data_received": {
+      "count": 49206,
+      "rate": 1968.162400788665
+    },
+    "data_sent": {
+      "count": 36696,
+      "rate": 1467.7821294017165
+    },
+    "dropped_iterations": {
+      "count": 32,
+      "rate": 1.2799495351224908
+    },
+    "http_req_blocked": {
+      "avg": 0.04566846762589928,
+      "max": 0.478462,
+      "med": 0.007134,
+      "min": 0.003908,
+      "p(90)": 0.2509542,
+      "p(95)": 0.2992198
+    },
+    "http_req_connecting": {
+      "avg": 0.02668284652278177,
+      "max": 0.370444,
+      "med": 0,
+      "min": 0,
+      "p(90)": 0.16628940000000003,
+      "p(95)": 0.2024174
+    },
+    "http_req_duration": {
+      "avg": 1007.0168299448447,
+      "max": 3028.009471,
+      "med": 2.59842,
+      "min": 1.786529,
+      "p(90)": 3003.9513362,
+      "p(95)": 3004.1530088,
+      "thresholds": {
+        "p(95)\u003c500": {
+          "ok": false
+        }
+      }
+    },
+    "http_req_duration{expected_response:true}": {
+      "avg": 1007.0168299448447,
+      "max": 3028.009471,
+      "med": 2.59842,
+      "min": 1.786529,
+      "p(90)": 3003.9513362,
+      "p(95)": 3004.1530088
+    },
+    "http_req_failed": {
+      "fails": 417,
+      "passes": 0,
+      "value": 0
+    },
+    "http_req_receiving": {
+      "avg": 0.054496067146282995,
+      "max": 0.159155,
+      "med": 0.051377,
+      "min": 0.016923,
+      "p(90)": 0.07695400000000001,
+      "p(95)": 0.085537
+    },
+    "http_req_sending": {
+      "avg": 0.02956180815347723,
+      "max": 0.146314,
+      "med": 0.021642,
+      "min": 0.008436,
+      "p(90)": 0.05956240000000005,
+      "p(95)": 0.0801214
+    },
+    "http_req_tls_handshaking": {
+      "avg": 0,
+      "max": 0,
+      "med": 0,
+      "min": 0,
+      "p(90)": 0,
+      "p(95)": 0
+    },
+    "http_req_waiting": {
+      "avg": 1006.9327720695444,
+      "max": 3027.874701,
+      "med": 2.51489,
+      "min": 1.724195,
+      "p(90)": 3003.837645,
+      "p(95)": 3004.0580952
+    },
+    "http_reqs": {
+      "count": 417,
+      "rate": 16.679342379564957
+    },
+    "iteration_duration": {
+      "avg": 1002.3793932482091,
+      "max": 3028.421587,
+      "med": 2.86385,
+      "min": 0.147944,
+      "p(90)": 3004.2443955999997,
+      "p(95)": 3004.2969083999997
+    },
+    "iterations": {
+      "count": 419,
+      "rate": 16.759339225510114
+    },
+    "vus": {
+      "max": 55,
+      "min": 0,
+      "value": 0
+    },
+    "vus_max": {
+      "max": 59,
+      "min": 27,
+      "value": 59
+    }
+  },
+  "artifacts": {
+    "warnings": [
+      "achieved throughput 16.7rps trails target 20.0rps by more than 5% — the load generator may be the bottleneck"
+    ]
+  }
+}

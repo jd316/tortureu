@@ -615,8 +615,25 @@ The chain is derived as follows, and every value in it is measured:
 - Each hop's `observed` is that hop's own **measured latency change** across every sampled span
   with the same service and operation: baseline is the median of the fastest quartile, degraded is
   the p95, and the span count is reported so a reader can weigh it.
-- If the target hop shows **no degradation** (p95 below twice the baseline), the chain **MUST**
-  stay empty. Traces existing is not evidence that the fault reached the request path.
+- If the target hop shows **no degradation**, the chain **MUST** stay empty. Traces existing is not
+  evidence that the fault reached the request path. Degradation is **both** a ratio and an absolute
+  step: p95 at least **twice** the baseline **and** at least **10ms above** it. The ratio alone is
+  not enough at sub-millisecond span durations, where ordinary scheduler and timer jitter clears it
+  routinely — measured on E1's case 9, where an *undisturbed* dependency's 587µs baseline against a
+  1.3ms p95 read as "2.2x degraded" while the genuinely faulted dependency next to it went from
+  817µs to 3002ms. A step that small cannot explain an SLO breach measured in hundreds of
+  milliseconds, and counting it as evidence is what turns a measurement into a coin toss —
+  under **R-VER-17** it is what makes one real cause and one noisy neighbour look like two
+  candidates.
+
+An **explicitly configured** endpoint **MUST** be queried through the same reach-into-the-stack
+transport the orchestrator's other outbound calls use (**R-DC2-3**: a direct call first, falling
+back to a tunnel through the target container's own network namespace). A trace backend that is
+part of the system under test's own compose stack has, under DC-2 enforcement, **no published host
+port** — measured on E1's case 9, where the topology overlay left the stack's Jaeger reachable only
+from inside the internal network, so a plain host-process HTTP client could never read a single
+span and every finding stayed unattributed. The guessed `localhost` endpoint is exempt: nobody
+named it, so it stays a plain, cheap probe.
 
 The chain **MUST** stay empty — exactly as when no ingestion exists — when traces are absent,
 the backend is unreachable or unsupported, no span matches the fault's target, no degradation is
@@ -689,6 +706,44 @@ the request path through the degraded dependency, which is what `caused` asserts
 
 *(both proposed by the implementer and specified before citation, per R-PROC-2; they resolve
 TBD-9, and R-VER-3's `caused` row had no producer anywhere in the codebase before them)*
+
+**R-VER-17** *(proposed)* — When **two or more** faults were active, a finding's `cause` **MUST**
+stay unset unless real ingested spans show that **exactly one** of those faults' targets degraded.
+When they do, `cause` **MUST** be set to that one fault and the chain built from its target per
+**R-VER-13**.
+
+"Degraded" is **R-VER-13**'s own measured gate applied per candidate target, and nothing weaker: a
+target counts as degraded exactly when **R-VER-13**'s derivation produces a non-empty chain for it
+— a real span matching that `host:port`, whose p95 clears **both** halves of **R-VER-13**'s gate
+(twice its own fastest-quartile baseline, and at least 10ms above it). There is deliberately no
+second, looser definition of degradation for this rule.
+
+The candidate set is the active faults' non-empty `host:port` targets. A fault whose target is not
+an address (a queue fault's topic name) is not a candidate and **MUST NOT** be attributed this way,
+because no span attribute names it.
+
+Attribution **MUST** be refused — the finding staying `ambiguous` with `cause` unset and `chain`
+empty, exactly as **R-VER-3**'s fault-count rule leaves it — when **any** of these hold:
+
+- two or more candidate targets degraded (two degraded dependencies is genuinely ambiguous, and
+  naming one of them would be a guess dressed as a measurement);
+- no candidate target degraded;
+- trace data is absent, the backend is unreachable, unsupported or unreadable, or it returned no
+  traces;
+- two or more of the active faults share the single degraded target — degradation cannot
+  distinguish between them.
+
+Confidence then follows **R-VER-14** unchanged: a chain was actually built, so the finding earns
+`caused`, clamped to the `observability.max_confidence` ceiling. A finding attributed under this
+rule but carrying **no** chain **MUST NOT** be produced: the attribution and the chain are read off
+the same spans, so either both exist or neither does.
+
+*(proposed by the implementer and specified before citation, per R-PROC-2. Measured gap: **R-VER-3**'s
+fault-count rule collapses every multi-fault finding to `ambiguous` with no cause, and **R-VER-13**'s
+chain builder returned early unless a cause was *already* set — so ingested traces could raise the
+confidence of an attributed finding but could never attribute one. That is precisely the case D-4
+reserves traces for: "overlapping faults, no traces" is `ambiguous` **because** there are no traces,
+and this rule says what changes when there are.)*
 
 **R-VER-9** — Human output **MUST** be rendered from the same verdict document as machine output.
 No second code path.

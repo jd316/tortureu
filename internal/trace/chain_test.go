@@ -111,3 +111,26 @@ func TestBuildChainRefusesPortMismatch(t *testing.T) {
 		t.Fatalf("got %+v, want no chain: the span names a different port on the same host", hops)
 	}
 }
+
+// spec: R-VER-13
+func TestNoChainWhenTheStepIsSubMillisecondNoise(t *testing.T) {
+	// 587µs -> 1.3ms is 2.2x — it clears the ratio gate — but the whole
+	// step is 0.7ms, which is jitter at these durations and cannot explain
+	// anything a k6 SLO measures. Real numbers, read off E1 case 9's
+	// undisturbed dependency.
+	base := time.Unix(1700000000, 0)
+	var traces []Trace
+	for i := 0; i < 20; i++ {
+		d := 587 * time.Microsecond
+		if i >= 18 {
+			d = 1300 * time.Microsecond
+		}
+		traces = append(traces, Trace{ID: "t", Spans: []Span{
+			{SpanID: "a", Service: "checkout-api", Operation: "GET dep-b", Start: base, Duration: d,
+				Attrs: map[string]string{"server.address": "dep-b", "server.port": "9092"}},
+		}})
+	}
+	if hops := BuildChain(traces, "dep-b:9092"); len(hops) != 0 {
+		t.Errorf("chain = %+v, want none: a 0.7ms step is noise, not evidence", hops)
+	}
+}

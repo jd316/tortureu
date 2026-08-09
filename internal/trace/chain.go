@@ -20,6 +20,21 @@ import (
 // reader alongside the fault declaration, not a claim made in place of one.
 const degradationFactor = 2
 
+// minDegradationStep is the smallest absolute latency increase that counts
+// as degradation at all, alongside degradationFactor (R-VER-13).
+//
+// The ratio on its own is meaningless at sub-millisecond durations: E1's
+// case 9 measured an *undisturbed* dependency at 587µs baseline / 1.3ms p95
+// — 2.2x, "degraded" by the factor alone — sitting next to the genuinely
+// faulted one at 817µs -> 3002ms. Under R-VER-17 that reads as two
+// candidate causes and refuses to name either, which is a real cause lost
+// to jitter. 10ms is chosen as the floor because it is an order of
+// magnitude above that jitter and two orders below the SLOs these verdicts
+// are about (k6 thresholds in the hundreds of milliseconds): a dependency
+// that got 5ms slower cannot be the explanation for a p95 that blew past
+// 500ms.
+const minDegradationStep = 10 * time.Millisecond
+
 // peerAttrs are the span attributes that name which peer a client span
 // talked to, in the order they are consulted. Both the current OTel
 // semantic conventions (server.address / server.port) and the older,
@@ -77,7 +92,7 @@ func BuildChain(traces []Trace, target string) []Hop {
 	}
 
 	targetStat, ok := stats[statKey(best)]
-	if !ok || targetStat.degraded < time.Duration(degradationFactor)*targetStat.baseline {
+	if !ok || !targetStat.degradedEnough() {
 		return nil
 	}
 
@@ -114,6 +129,14 @@ type stat struct {
 	baseline time.Duration // median of the fastest quartile
 	degraded time.Duration // p95
 	n        int
+}
+
+// degradedEnough is R-VER-13's gate: a real step, both in proportion and in
+// absolute terms. Both halves are required; see degradationFactor and
+// minDegradationStep for why neither alone is evidence.
+func (s stat) degradedEnough() bool {
+	return s.degraded >= time.Duration(degradationFactor)*s.baseline &&
+		s.degraded-s.baseline >= minDegradationStep
 }
 
 func (s stat) observed() string {
@@ -208,6 +231,18 @@ func portOK(s *Span, port string) bool {
 		}
 	}
 	return true
+}
+
+// IsAddress reports whether target is the "host:port" shape a span can be
+// matched against at all. R-VER-17's candidate set is exactly the faults
+// whose targets pass this: a queue fault's target is a bare topic name,
+// which no span attribute in peerAttrs ever carries, so including it as a
+// candidate could only ever produce a silent non-match — and a rule that
+// says "exactly one candidate degraded" must not count candidates it is
+// structurally incapable of measuring.
+func IsAddress(target string) bool {
+	host, port := splitTarget(target)
+	return host != "" && port != ""
 }
 
 // splitTarget splits "host:port" into its parts; a bare host yields an

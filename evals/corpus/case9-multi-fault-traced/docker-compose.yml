@@ -1,0 +1,34 @@
+version: "3.8"
+services:
+  checkout-api:
+    build: ./api
+    ports:
+      - "8080:8080"
+    environment:
+      DEP_A_URL: "http://dep-a:9091/"
+      DEP_B_URL: "http://dep-b:9092/"
+      OTEL_ENDPOINT: "http://jaeger:4318/v1/traces"
+      OTEL_SERVICE_NAME: "checkout-api"
+    depends_on:
+      - dep-a
+      - dep-b
+      - jaeger
+
+  # Two interchangeable downstream dependencies, both off-the-shelf images
+  # so R-DET-8's "build: is the SUT" rule cannot misidentify either of them.
+  # Distinct ports: one Toxiproxy container fronts both, and it cannot
+  # bind the same listen port twice.
+  dep-a:
+    image: traefik/whoami:v1.10.1
+    command: ["--port", "9091"]
+  dep-b:
+    image: traefik/whoami:v1.10.1
+    command: ["--port", "9092"]
+
+  # Real tracing backend. Its UI/query port is published because that is
+  # where internal/run's ingestion looks by default (R-VER-13); 4318 is the
+  # OTLP/HTTP endpoint the SUT exports to, inside the stack.
+  jaeger:
+    image: jaegertracing/jaeger:2.10.0
+    ports:
+      - "16686:16686"

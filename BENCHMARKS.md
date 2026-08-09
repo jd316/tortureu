@@ -236,6 +236,7 @@ A set of small backends, each with exactly one deliberate defect, in several lan
 | 6 | Unbounded in-memory queue | OOM under sustained spike |
 | 7 | Cache stampede on expiry | thundering herd at TTL boundary |
 | 8 | **Control: no defect** | `pass` — must not invent a finding |
+| 9 | Two simultaneous faults, one hot dependency (OTel-instrumented) | `caused` by the fault whose target actually degraded, from real spans |
 
 Case 8 carries the most weight. A tool that always finds something is a random-number
 generator with good typography.
@@ -255,7 +256,7 @@ overfit to — so cases are added when we *fail* in the wild, never trimmed when
 
 ### Results
 
-Measured `2026-08-08T23:10:22Z` at commit `fee7974`, whole corpus in one run
+Measured `2026-08-09T00:16:51Z`, whole corpus in one run
 (`bash evals/run_case.sh`), every case driven through the real `tortureu run` binary. Per-case
 verdict JSON is in [`evals/results/`](evals/results/).
 
@@ -269,33 +270,58 @@ verdict JSON is in [`evals/results/`](evals/results/).
 | 6 | Unbounded in-memory queue | fail | 1 | *ambiguous* | ambiguous | n/a |
 | 7 | Cache stampede on expiry | fail | 1 | *ambiguous* | ambiguous | n/a |
 | 8 | **Control: no defect** | **pass** | **0** | — | — | — |
+| 9 | Two faults at once, one hot dependency (OTel) | fail | 1 | `dep_a_slow` | **caused** | ✅ `Client.Timeout` |
 
 ```
-detection      7/7   every planted defect produced a finding
-attribution    4/7   findings that named a causing fault
-candidates     2/3   cases whose ground truth names a config knob
+detection      8/8   every planted defect produced a finding
+attribution    5/8   findings that named a causing fault
+candidates     3/4   cases whose ground truth names a config knob
 false positive 0     on the control (the metric that carries the most weight)
-confidence     not scored on this corpus — see below
+confidence     1/1   the one OTel-instrumented case reaches `caused`; the seven without
+                     tracing top out at `correlated`, which is exactly D-4's claim
 ```
 
 **Where this is weaker than it looks, stated rather than buried:**
 
-- **Attribution is 4/7, not 7/7.** Cases 3, 6 and 7 return `ambiguous`: more than one fault was
-  active, so no single cause is named. That is the designed behaviour (R-VER-4 — a cause is only
-  claimed when one fault can carry it), but it means those three findings tell you *something
-  broke* without telling you *what did it*, which is the whole product claim. Narrowing a
-  multi-fault run to one cause needs the per-fault time windows TBD-9's resolution also wants.
+- **Attribution is 5/8, not 8/8 — and the earlier reading of *why* was wrong.** This document
+  previously said cases 3, 6 and 7 return `ambiguous` because "more than one fault was active".
+  They declare **no faults at all** (check their `torture.yaml`: case 3 is a pool sized 5, case 6
+  an unbounded queue, case 7 a cache stampede — all three are static defects under load, with
+  nothing injected). With zero faults there is no candidate cause to name, so no attribution
+  mechanism, traces included, may name one: `ambiguous` is the only honest label and those three
+  are a permanent floor on this metric, not a defect to fix. Multi-fault attribution — the thing
+  the old note described — is now implemented (**R-VER-17**) and is what case 9 measures: two
+  faults active, and the spans say which target actually degraded. On the denominator that rule
+  can affect, findings from runs that *had* faults, attribution is 5/5.
+- **5/8 is below the 70% bar this project set for itself (62.5%).** Stated rather than smoothed
+  over: the bar is not met on the whole-corpus denominator, and it cannot be met by improving
+  attribution, because three of the eight cases have nothing to attribute to. Either the metric's
+  denominator is wrong (it counts findings whose ground truth has no causing fault) or the corpus
+  needs more fault-driven cases. Both are corpus/metric work, not verdict-layer work; neither is
+  done here, and the corpus was deliberately not tuned to make the number look better.
 - **Case 2's candidate miss is structural, not a bug.** Its ground truth is "retry config", but
   the planted defect is hand-rolled retry over Go's `net/http`, which has **no** retry knob to
   name. No candidate list can supply one; the honest fix is code, not configuration. Counting it
   as a miss keeps the score honest, but the ceiling here is 2/3, not 3/3.
-- **`caused` is never reached on this corpus, so trace ingestion is unvalidated by E1.** Every
-  case tops out at `correlated` because no corpus case runs OTel/Jaeger. The trace pipeline that
-  produces `caused` (R-VER-13) is verified separately against a live Jaeger, but E1's own
-  `confidence` metric — "`caused` rate with OTel vs `correlated` without, validates D-4" — cannot
-  be scored until the corpus gains an instrumented case. That case does not exist yet.
-- **7 cases plus 1 control is a small corpus.** It is enough to catch a tool that invents
-  findings; it is not enough to put a confidence interval on 4/7.
+- **`caused` is now reached, by exactly one case.** Case 9 is the corpus's first
+  OpenTelemetry-instrumented fixture: a Go SUT exporting real OTLP spans to a real Jaeger in its
+  own compose stack, two faults firing at once (`dep-a` slowed 3s, `dep-b` taken down), and only
+  `dep-a` on the un-timed hot path. The verdict names `dep_a_slow` and carries the chain it read
+  that from (`dep-a:9091  latency 845µs -> 3002.8ms (n=200 spans)`). The other seven cases still
+  top out at `correlated` because they run no tracing at all — which is D-4's claim, now measured
+  on both sides of it rather than only one. One instrumented case is not a validated `confidence`
+  metric; it is one data point.
+- **Case 9 found two real defects in the code it exercises, both fixed here rather than worked
+  around.** (a) Trace ingestion used a plain host-process HTTP client, so a Jaeger inside the
+  DC-2-isolated stack — which has no published host port — was unreachable, and *no* real run
+  could ever have built a chain. It now uses the same reach-into-the-stack transport as the
+  Prometheus and broker clients (**R-VER-13**). (b) The degradation gate was a bare 2x ratio, and
+  at sub-millisecond span durations jitter clears it routinely: case 9's *undisturbed* dependency
+  measured 587µs -> 1.3ms (2.2x) next to the faulted one's 817µs -> 3002ms, which made one real
+  cause and one noisy neighbour look like two candidates and refused to name either. The gate now
+  also requires a 10ms absolute step (**R-VER-13**).
+- **8 cases plus 1 control is a small corpus.** It is enough to catch a tool that invents
+  findings; it is not enough to put a confidence interval on 5/8.
 
 **A note on the harness itself.** The launch gate used to check only that the control produced zero
 findings. An aborted run also produces zero findings, so a corpus that failed to start printed

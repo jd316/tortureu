@@ -1,0 +1,65 @@
+version: 0
+
+# Case 9: multi-fault attribution from real traces (R-VER-17).
+#
+# Two faults fire at once, so R-VER-3's fault-count rule can only call any
+# finding `ambiguous` on its own. Only one of the two dependencies actually
+# degrades the request path: dep-a is slowed by 3s and the SUT calls it with
+# no timeout, while dep-b is taken down and the SUT's 200ms-timeout call to
+# it fails fast and is tolerated. The verdict must name dep_a_slow, and must
+# do it from the spans rather than from the schedule.
+
+target:
+  compose: ./docker-compose.yml
+  service: checkout-api
+  base_url: http://localhost:8080
+
+egress:
+  default: deny
+  hosts:
+    dep-a:9091: { class: internal }
+    dep-b:9092: { class: internal }
+    # The trace backend the SUT exports to. Declared so DC-2 has a
+    # classification for it; it carries no fault, so nothing intercepts it.
+    jaeger:4318: { class: internal }
+
+reset:
+  # --build: this case's SUT is built from source in-tree, and a stale
+  # image is a stale experiment.
+  command: docker compose down -v && docker compose up -d --build --wait
+
+load:
+  engine: k6
+  model: arrival_rate
+  stages:
+    - phase: ramp_up
+      to: 20rps
+      over: 5s
+    # 20s of peak with the faults firing in the middle: enough fast traffic
+    # before and after the fault window that the trace sample the verdict
+    # is computed over contains both the baseline and the degraded
+    # population (R-VER-13 measures a step, so it needs to see both).
+    - phase: peak
+      hold: 20rps
+      for: 20s
+
+  scenarios:
+    - name: checkout
+      weight: 100
+      flow:
+        - { method: GET, path: /checkout }
+
+faults:
+  - name: dep_a_slow
+    at: peak+5s
+    for: 10s
+    target: dep-a:9091
+    inject: { latency: 3s }
+  - name: dep_b_down
+    at: peak+5s
+    for: 10s
+    target: dep-b:9092
+    inject: { down: true }
+
+assert:
+  - http_req_duration: ["p(95)<500"]
