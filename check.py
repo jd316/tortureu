@@ -317,6 +317,59 @@ _wrong = [f"{p}: says {n}, {len(REGISTERED_EMITTERS)} registered"
 ok(not _wrong, "stated delegate-tier target counts match registered emitters"
    + (f" — {_wrong}" if _wrong else f" ({len(REGISTERED_EMITTERS)})"))
 
+# E1's headline figures appear in README and BENCHMARKS as hand-written numbers, and they have
+# gone stale twice: README claimed "4 of 7" after the corpus grew to 9 cases, and carried a wrong
+# explanation with it. Recompute them from the committed results plus each case's declared fault
+# count, and require any "N/M" the docs state to be one the data supports.
+def _e1_figures():
+    import glob as _g
+    det = defects = att = tot = attw = withf = att_cases = 0
+    for d in sorted(_g.glob('evals/corpus/case*')):
+        num = ''.join(c for c in os.path.basename(d).split('-')[0] if c.isdigit())
+        rj = f'evals/results/case{num}.json'
+        ty = f'{d}/torture.yaml'
+        if not (os.path.exists(rj) and os.path.exists(ty)):
+            return None
+        v = json.load(open(rj))
+        fs = v.get('findings') or []
+        nf = len(yaml.safe_load(open(ty)).get('faults') or [])
+        if 'control' in d:
+            continue
+        defects += 1
+        if fs:
+            det += 1
+        if any((f.get('cause') or {}).get('fault') for f in fs):
+            att_cases += 1
+        for f in fs:
+            tot += 1
+            has = (f.get('cause') or {}).get('fault')
+            att += 1 if has else 0
+            if nf > 0:
+                withf += 1
+                attw += 1 if has else 0
+    return {'detection': f'{det}/{defects}', 'attribution_all': f'{att}/{tot}',
+            'attribution_faulted': f'{attw}/{withf}',
+            # Per-case is the other legitimate denominator: a case with two
+            # findings counts once. BENCHMARKS states it that way.
+            'attribution_per_case': f'{att_cases}/{defects}'}
+
+_e1 = _e1_figures()
+if _e1 is None:
+    ok(True, "E1 figures not checked (results or corpus incomplete)")
+else:
+    _valid = set(_e1.values())
+    _stale = []
+    for _p in ('README.md', 'BENCHMARKS.md', 'CHANGELOG.md'):
+        for _line in open(_p).read().splitlines():
+            if 'detect' not in _line.lower() and 'attribut' not in _line.lower():
+                continue
+            for _n in re.findall(r'\b(\d+)\s*(?:/|\s+of\s+)\s*(\d+)\b', _line):
+                _f = f'{_n[0]}/{_n[1]}'
+                if _f not in _valid:
+                    _stale.append(f'{_p}: states {_f}, data gives {sorted(_valid)}')
+    ok(not _stale, "E1 figures stated in docs match the committed results"
+       + (f" — {_stale[:3]}" if _stale else f" ({_e1})"))
+
 # README must name every implemented verb. It said "All nine verbs are real" and listed nine
 # while ten existed — `trend` was invisible to anyone reading the front page. A count in prose
 # cannot be checked, but the presence of each verb name can.

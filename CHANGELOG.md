@@ -30,8 +30,32 @@ download that 404s.
 - `capture --engine keploy`, and cassettes now carry `call_ns`/`return_ns` so a recorded history
   has real concurrency.
 - Release mechanics: goreleaser config, Dockerfile, CI and release workflows, `CONTRIBUTING.md`.
+- Compose files are resolved by the Compose Specification's own precedence — `compose.yaml`,
+  `compose.yml`, `docker-compose.yaml`, `docker-compose.yml` — so a repo using the canonical name
+  needs no flag.
+- Multi-fault attribution from traces: with several faults active, the one whose target actually
+  degraded becomes the named cause. Two degraded targets, or none, stay `ambiguous`.
 
 ### Fixed
+- `init` failed on the first command against most real repositories: only `docker-compose.yml` was
+  resolved, and of the 40 examples in Docker's own `awesome-compose`, 37 use `compose.yaml` and
+  none use `docker-compose.yml`.
+- `doctor` reported k6 as a missing prerequisite. `run` never uses a host k6 — DC-2's topology
+  leaves the SUT with no published port, so it always runs the pinned container. The first command
+  a new user typed told them to install a tool the tool does not touch.
+- A failed reset would not say why: the shell command's output was discarded, so a real first-run
+  abort rendered `reset: failed` with `"error": null`.
+- An empty `target.base_url` produced a full load of failing requests and a verdict reporting
+  `http_req_failed` = 1.0 — a finding that was entirely an artefact of a missing config field. It
+  is now refused before reset and before load.
+- Trace ingestion used a host HTTP client and so could never reach a Jaeger inside the
+  DC-2-isolated stack, meaning no real run could build a causal chain.
+- The trace degradation gate was a bare 2x ratio, so an undisturbed dependency (587µs to 1.3ms)
+  read as a second candidate cause beside the real one (817µs to 3002ms). It now also requires an
+  absolute step.
+- Observed metric values were emitted as raw floats without units (`3003.2139021999997`) where
+  `VERDICT.md` specifies `4218ms`, and the human rendering printed the full 40-character commit
+  hash where the same document abbreviates it.
 - `check contracts` reported a broken API as passing: `oasdiff breaking` exits 0 even when it finds
   breaking changes (it needs `--fail-on ERR`), and `buf breaking` exits 100, not 1 — so a real
   finding was relayed as a tool error, and a failed baseline as a confident finding.
@@ -50,10 +74,11 @@ download that 404s.
   zero findings, which is what the gate tested for.
 
 ### Known limitations
-- Attribution names a single causing fault in 4 of 7 corpus cases; with several faults active it
-  returns `ambiguous` rather than guessing.
-- No corpus case runs OpenTelemetry, so `caused` is verified against a live Jaeger but not scored
-  by the eval.
+- Attribution is 5/5 on findings from runs that injected a fault, and 5/9 over every finding: three
+  corpus cases inject no fault at all, so there is no cause to name and `ambiguous` is the correct
+  verdict rather than a miss.
+- `caused` requires traces. A repo without OpenTelemetry tops out at `correlated`; one corpus case
+  (case 9) is instrumented and does reach `caused`.
 - Harness overhead (B2) is below the benchmark's own run-to-run variance; no signed figure is
   claimed.
 - `TBD-5` stays open pending `grafana/k6-summary` leaving work-in-progress upstream.

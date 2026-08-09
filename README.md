@@ -17,12 +17,14 @@ One CLI that drives load and fault injection on the same clock **against a local
 > the routes rather than downloading a URL that 404s.
 >
 > **What the evidence actually shows.** On the labelled corpus (`make eval`, results in
-> [`BENCHMARKS.md`](BENCHMARKS.md)) TortureU detects 7/7 planted defects and reports **0 findings
-> on the control** — but names a single causing fault in only **4 of 7**: with several faults
-> active it returns `ambiguous` rather than guessing. `caused` attribution requires traces, so a
-> repo without OpenTelemetry tops out at `correlated`, and the corpus has no instrumented case —
-> the trace path is verified against a live Jaeger, not by the eval. See
-> [`SPEC.md` §12](SPEC.md) for the rest of what is deliberately open.
+> [`BENCHMARKS.md`](BENCHMARKS.md)) TortureU detects **8/8** planted defects and reports **0
+> findings on the control**. It names the causing fault in **5 of 5** findings from runs that
+> injected a fault — including a two-fault run, where traces identify which dependency actually
+> degraded. Three corpus cases inject **no** fault at all (static defects under load); those
+> findings stay `ambiguous`, because with nothing injected there is no cause to name and inventing
+> one would be the whole failure mode this tool exists to avoid. Over every finding regardless,
+> that is 5/9. `caused` needs traces: without OpenTelemetry a verdict tops out at `correlated`.
+> See [`SPEC.md` §12](SPEC.md) for the rest of what is deliberately open.
 
 ## Install
 
