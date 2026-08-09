@@ -125,6 +125,31 @@ Only **direct** dependencies count as clients. Ruby reads the `Gemfile`'s `gem` 
 lockfile's resolved `GEM specs:` closure **MUST NOT** be read as clients, since a gem pulled in
 transitively by a framework is not evidence that this service talks to that dependency.
 
+**R-DET-17** *(proposed)* — The detected language **MUST** be resolved from **every** manifest
+location R-DET-1 permits, not the compose-project root alone, in this order:
+
+1. the compose-project root's manifest, if it has one (existing behaviour, unchanged);
+2. otherwise the **SUT's own build-context manifest** — the SUT is the thing under test, so its
+   language is the one that governs knobs, fixtures and emitted code (R-DET-8 identifies it);
+3. otherwise the language of the other services' manifests, if they all agree;
+4. otherwise **nothing**, plus a gap (R-DET-7) naming every language found.
+
+The ordinary monorepo shape — `docker-compose.yml` at the root, each service's own `go.mod` under
+its build context — reported no language at all, because only the root scan ever set it. That is not
+a cosmetic gap: it renders a verdict candidate's `source` field empty, makes `emit fixtures` refuse
+with "the language was not detected from your lockfile" and `emit testcontainers` refuse as non-Go,
+and drops the manifest source from `doctor`'s knob attribution — for a repo whose language is
+plainly readable from a file R-DET-1 already permits. Measured on the E1 corpus's own `case1`, whose
+`api/go.mod` and `dep/go.mod` both exist and which reported `lang: null`.
+
+Step 4 is a refusal, not a fallback: in a genuinely polyglot stack whose SUT has no manifest, a
+wrong language means wrong knobs and an emitted fixture that does not compile, so the languages found
+are named and none is chosen. A service with no manifest at all remains **not** a gap — R-DET-7's
+existing rule, since a prebuilt binary or an ecosystem outside R-DET-1's list legitimately has none.
+
+*(specified before the fix, per R-PROC-2; found cross-checking why a verdict candidate's `source`
+field rendered empty)*
+
 **R-DET-2** — A compose service with an `image:` and no `build:` **MUST** be classified as a
 dependency.
 

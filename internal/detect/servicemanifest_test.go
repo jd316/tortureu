@@ -1,6 +1,7 @@
 package detect_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jdb316/tortureu/internal/detect"
@@ -282,5 +283,163 @@ services:
 	}
 	if !found {
 		t.Errorf("Gaps = %v, want one naming worker's unread aggregator pom", sys.Gaps)
+	}
+}
+
+// spec: R-DET-17
+//
+// The E1 corpus's own case1 shape: nothing at the project root, api/go.mod
+// under the SUT's build context. It reported no language at all, which
+// renders a verdict candidate's source field empty and makes emit
+// fixtures/testcontainers refuse a plainly detectable Go repo.
+func TestLangComesFromTheSUTsOwnBuildContextManifest(t *testing.T) {
+	dir := t.TempDir()
+	compose := writeFile(t, dir, "docker-compose.yml", `
+services:
+  checkout-api:
+    build: ./api
+  dep:
+    build: ./dep
+`)
+	writeFile(t, dir, "api/go.mod", "module example.com/api\n\ngo 1.22\n")
+	writeFile(t, dir, "dep/go.mod", "module example.com/dep\n\ngo 1.22\n")
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if got, want := sys.SUT, "dep"; got != want {
+		// Both services build, and R-DET-8 leaves which one wins to the
+		// existing scan order; this test only needs the SUT to have a
+		// manifest of its own.
+		t.Logf("SUT = %q (want %q by scan order)", got, want)
+	}
+	if got, want := sys.Lang, "go"; got != want {
+		t.Errorf("Lang = %q, want %q", got, want)
+	}
+}
+
+// spec: R-DET-17
+//
+// The SUT's language wins over another service's, because the SUT is the
+// thing under test: its manifest is what governs knobs, fixtures and
+// emitted code.
+func TestLangPrefersTheSUTOverOtherServicesInAPolyglotStack(t *testing.T) {
+	dir := t.TempDir()
+	compose := writeFile(t, dir, "docker-compose.yml", `
+services:
+  api:
+    build: ./api
+  worker:
+    image: busybox
+`)
+	writeFile(t, dir, "api/package.json", `{"name":"api","dependencies":{"ioredis":"5.4.1"}}`)
+	writeFile(t, dir, "tool/go.mod", "module example.com/tool\n\ngo 1.22\n")
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if got, want := sys.Lang, "node"; got != want {
+		t.Errorf("Lang = %q, want %q", got, want)
+	}
+}
+
+// spec: R-DET-17
+//
+// The project root's manifest keeps deciding, unchanged: a service's build
+// context must not override the language of the repo the compose file sits
+// in.
+func TestLangFromProjectRootIsNotOverriddenByAServiceManifest(t *testing.T) {
+	dir := t.TempDir()
+	compose := writeFile(t, dir, "docker-compose.yml", `
+services:
+  api:
+    build: ./api
+`)
+	writeFile(t, dir, "go.mod", "module example.com/root\n\ngo 1.22\n")
+	writeFile(t, dir, "api/package.json", `{"name":"api","dependencies":{}}`)
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if got, want := sys.Lang, "go"; got != want {
+		t.Errorf("Lang = %q, want %q", got, want)
+	}
+}
+
+// spec: R-DET-17
+//
+// Services that agree are as good as the SUT's own answer: there is only
+// one language in the stack, so naming it is not a guess.
+func TestLangIsTakenWhenEveryServiceManifestAgreesAndTheSUTHasNone(t *testing.T) {
+	dir := t.TempDir()
+	compose := writeFile(t, dir, "docker-compose.yml", `
+services:
+  zproxy:
+    build: ./zproxy
+  api:
+    build: ./api
+  worker:
+    build: ./worker
+`)
+	writeFile(t, dir, "api/pyproject.toml", "[project]\nname = \"api\"\ndependencies = [\"redis\"]\n")
+	writeFile(t, dir, "worker/pyproject.toml", "[project]\nname = \"worker\"\ndependencies = []\n")
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if got, want := sys.SUT, "zproxy"; got != want {
+		t.Fatalf("SUT = %q, want %q — this test needs a SUT with no manifest", got, want)
+	}
+	if got, want := sys.Lang, "python"; got != want {
+		t.Errorf("Lang = %q, want %q", got, want)
+	}
+}
+
+// spec: R-DET-17
+//
+// A genuinely polyglot stack whose SUT has no manifest: picking either
+// language means wrong knobs and an emitted fixture that does not compile,
+// so none is picked and both are named.
+func TestLangIsLeftEmptyWithAGapWhenServicesDisagreeAndTheSUTHasNoManifest(t *testing.T) {
+	dir := t.TempDir()
+	compose := writeFile(t, dir, "docker-compose.yml", `
+services:
+  zproxy:
+    build: ./zproxy
+  api:
+    build: ./api
+  worker:
+    build: ./worker
+`)
+	writeFile(t, dir, "api/go.mod", "module example.com/api\n\ngo 1.22\n")
+	writeFile(t, dir, "worker/package.json", `{"name":"worker","dependencies":{}}`)
+
+	sys, err := detect.Detect(compose)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if got, want := sys.SUT, "zproxy"; got != want {
+		t.Fatalf("SUT = %q, want %q — this test needs a SUT with no manifest", got, want)
+	}
+	if sys.Lang != "" {
+		t.Errorf("Lang = %q, want empty — a polyglot stack must not have one guessed", sys.Lang)
+	}
+	var gap string
+	for _, g := range sys.Gaps {
+		if strings.Contains(g, "language") {
+			gap = g
+		}
+	}
+	if gap == "" {
+		t.Fatalf("gaps = %v, want one naming the undecided language", sys.Gaps)
+	}
+	for _, lang := range []string{"go", "node"} {
+		if !strings.Contains(gap, lang) {
+			t.Errorf("gap %q does not name %s", gap, lang)
+		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -460,6 +461,9 @@ func detectServiceManifests(services map[string]types.ServiceConfig, rootDir str
 	}
 	sort.Strings(names)
 
+	sutLang := ""
+	var otherLangs []string
+
 	root := filepath.Clean(rootDir)
 	for _, name := range names {
 		svc := services[name]
@@ -482,6 +486,11 @@ func detectServiceManifests(services map[string]types.ServiceConfig, rootDir str
 			// list).
 			continue
 		}
+		if name == sys.SUT {
+			sutLang = info.lang
+		} else if !slices.Contains(otherLangs, info.lang) {
+			otherLangs = append(otherLangs, info.lang)
+		}
 		for _, imp := range info.imports {
 			matchClient(sys, info.clientTable, imp, name)
 		}
@@ -492,7 +501,51 @@ func detectServiceManifests(services map[string]types.ServiceConfig, rootDir str
 			sys.Gaps = append(sys.Gaps, unreadGap(info, name, ctxDir))
 		}
 	}
+
+	resolveLang(sys, sutLang, otherLangs)
 	return nil
+}
+
+// resolveLang settles System.Lang from the manifests read above, per
+// R-DET-17's order: the compose-project root first (already set by
+// detectLockfiles, and never overridden), then the SUT's own build context,
+// then the other services if they agree, then nothing plus a gap.
+//
+// The last step is a refusal rather than a fallback: Lang decides which
+// knobs a verdict candidate names (internal/run), whether `emit fixtures`
+// and `emit testcontainers` will generate at all, and which manifest
+// doctor attributes a knob to. A wrong language there is wrong knobs and an
+// emitted fixture that does not compile, so a polyglot stack whose SUT has
+// no manifest gets both languages named and neither chosen.
+func resolveLang(sys *System, sutLang string, otherLangs []string) {
+	if sys.Lang != "" || sutLang == "" && len(otherLangs) == 0 {
+		return
+	}
+	if sutLang != "" {
+		// The SUT is the thing under test, so its own manifest decides even
+		// when other services disagree — that disagreement is not a
+		// question about the SUT.
+		sys.Lang = sutLang
+		return
+	}
+	if len(otherLangs) == 1 {
+		sys.Lang = otherLangs[0]
+		return
+	}
+	sorted := slices.Clone(otherLangs)
+	slices.Sort(sorted)
+	sys.Gaps = append(sys.Gaps, fmt.Sprintf(
+		"language not determined: the SUT (%s) has no manifest R-DET-1 can read and the other services disagree (%s) — knobs, `emit fixtures` and `emit testcontainers` need one, so name it rather than let a wrong guess emit code that does not compile",
+		sutName(sys), strings.Join(sorted, ", ")))
+}
+
+// sutName renders the SUT for a message, being explicit when there is none
+// rather than leaving an empty pair of brackets.
+func sutName(sys *System) string {
+	if sys.SUT == "" {
+		return "none detected"
+	}
+	return sys.SUT
 }
 
 func fileExists(dir, name string) bool {
