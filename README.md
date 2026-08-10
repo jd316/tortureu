@@ -12,13 +12,14 @@ One CLI that drives load and fault injection on the same clock **against a local
 `docker-compose` stack — no Kubernetes** — and returns a single verdict naming what broke and why.
 
 <p align="center">
-  <img src="docs/demo.svg" alt="tortureu run: load and a dependency fault on one clock, returning a verdict that names the cause" width="880">
+  <img src="docs/demo.svg" alt="tortureu run with two faults active: it reads the traces, names the one dependency that actually degraded, and prints the causal chain" width="900">
 </p>
 
-*Real output, not a mockup — every line above is captured from
-[`evals/corpus/case1-no-timeout`](evals/corpus), and a test renders the same verdict to keep it
-that way. [`What comes back`](#what-comes-back) explains each line, including what it refuses to
-claim. On a stack with OpenTelemetry the same run returns `caused` plus the per-hop chain.*
+*Real output, not a mockup — captured from [`evals/corpus/case9-multi-fault-traced`](evals/corpus),
+where **two** faults run at once. It read the spans, found that only `dep-a` actually degraded, and
+named it; two degraded targets or none would leave it `ambiguous` rather than guessing. Without
+OpenTelemetry the same run returns `correlated` and no chain, because a chain that was not measured
+would have to be invented. [`What comes back`](#what-comes-back) explains every line.*
 
 ```sh
 git clone https://github.com/jdb316/tortureu && cd tortureu/examples/quickstart

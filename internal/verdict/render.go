@@ -94,7 +94,10 @@ func Render(v Verdict) string {
 		b.WriteString("\n")
 
 		for _, hop := range f.Chain {
-			fmt.Fprintf(&b, "    %-14s%s\n", hop.At, hop.Observed)
+			// %-14s pads only when the name is shorter than 14; a longer hop
+			// ("checkout-api POST /checkout") got no padding at all and ran
+			// straight into its measurement. Always separate, then pad.
+			fmt.Fprintf(&b, "    %-14s %s\n", hop.At, hop.Observed)
 		}
 		if len(f.Chain) > 0 {
 			b.WriteString("\n")

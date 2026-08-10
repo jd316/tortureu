@@ -353,3 +353,46 @@ func TestRender_AbortedCarriesItsReason(t *testing.T) {
 		t.Errorf("aborted rendering does not carry the reason:\n%s", out)
 	}
 }
+
+// spec: R-VER-13
+//
+// Chain hops are padded with %-14s, which adds nothing when the hop name is
+// longer than 14 characters — so a real hop rendered as
+// "checkout-api POST /checkoutlatency 2ms -> 3003.7ms", running the name
+// straight into its measurement. This is the causal chain, the output nothing
+// else produces, so it is the last line that should be unreadable.
+func TestRender_ChainHopNameNeverRunsIntoItsMeasurement(t *testing.T) {
+	out := Render(Verdict{
+		Scenario: "s", Status: StatusFail,
+		Findings: []Finding{{
+			Confidence: Caused,
+			Broke:      Broke{Assertion: "http_req_duration: p(95)<500", Observed: "3004.15ms"},
+			Cause:      &Cause{Fault: "dep_a_slow", Target: "dep-a:9091"},
+			Chain: []ChainHop{
+				{At: "dep-a:9091", Observed: "latency 884µs -> 3002.9ms"},
+				{At: "checkout-api POST /checkout", Observed: "latency 2ms -> 3003.7ms"},
+			},
+		}},
+	})
+	if strings.Contains(out, "/checkoutlatency") {
+		t.Errorf("hop name runs into its measurement:\n%s", out)
+	}
+	// Check the chain lines specifically: the hop name also appears inside
+	// the "caused by ... (dep-a:9091)" line, where it is followed by ")".
+	for _, hop := range []string{"dep-a:9091", "checkout-api POST /checkout"} {
+		var line string
+		for _, l := range strings.Split(out, "\n") {
+			if strings.HasPrefix(strings.TrimLeft(l, " "), hop) {
+				line = l
+				break
+			}
+		}
+		if line == "" {
+			t.Fatalf("no chain line for hop %q:\n%s", hop, out)
+		}
+		after := strings.TrimLeft(line, " ")[len(hop):]
+		if !strings.HasPrefix(after, " ") {
+			t.Errorf("no separator after hop %q: %q", hop, line)
+		}
+	}
+}
