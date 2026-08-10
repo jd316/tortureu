@@ -167,10 +167,15 @@ fi
 # never evidence.
 gate_rc=0
 
+# The control requirement applies to a whole-corpus run. A single-case
+# invocation (`run_case.sh <dir>`) legitimately has no case8 line, and
+# demanding one there made every single-case run fail.
 case8_line="$(grep '^case8' "$RESULTS_LINE_FILE" | tail -1)"
 if [ -z "$case8_line" ]; then
-  echo "FAIL: no case8 result at all -- the control never ran, so nothing was proven" >&2
-  gate_rc=1
+  if [ $# -eq 0 ]; then
+    echo "FAIL: no case8 result at all -- the control never ran, so nothing was proven" >&2
+    gate_rc=1
+  fi
 else
   case8_status="$(echo "$case8_line" | cut -d: -f2)"
   case8_findings="$(echo "$case8_line" | cut -d: -f3)"

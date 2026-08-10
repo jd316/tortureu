@@ -506,8 +506,19 @@ func attribute(f *verdict.Finding, faults []config.Fault, deps []detect.Dep, aud
 		f.Candidates = buildCandidatesFromDetectedDeps(deps, auditFindings, lang)
 		return
 	}
+	// Dedupe across faults, not just within one. buildCandidates dedupes
+	// per call, so a client reachable from two active faults was listed
+	// twice verbatim — and the "look at:" block is read as a list of
+	// distinct things to try (R-VER-4).
+	seen := map[string]bool{}
 	for _, fault := range faults {
-		f.Candidates = append(f.Candidates, buildCandidates(fault, deps, auditFindings, lang, sut)...)
+		for _, c := range buildCandidates(fault, deps, auditFindings, lang, sut) {
+			if seen[c.Library] {
+				continue
+			}
+			seen[c.Library] = true
+			f.Candidates = append(f.Candidates, c)
+		}
 	}
 }
 
