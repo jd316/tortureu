@@ -81,8 +81,9 @@ download that 404s.
   (case 9) is instrumented and does reach `caused`.
 - Harness overhead (B2) is below the benchmark's own run-to-run variance; no signed figure is
   claimed.
-- `TBD-5` stays open, but no longer on upstream: `grafana/k6-summary` has shipped as `1.0.0`. k6
-  emits that shape only behind `--new-machine-readable-summary` (opt-in even in v2.1.0), and the
-  pinned `grafana/k6:0.54.0` cannot emit it at all, so adopting it now needs a k6 major-version
-  bump — which would move the phase markers, threshold recomputation and every B1 fidelity number
-  measured against 0.54.0, and so belongs in its own change with its own re-measurement.
+- k6 is pinned to `grafana/k6:2.1.0` (was `0.54.0`), and `TBD-5` is resolved. The blocker was a
+  silent inversion, not upstream instability: k6 >=2 reports a threshold bool as *crossed* where
+  <=1.x reported *ok*, so a naive bump would have read every passing assertion as broken. The
+  parser now normalises both shapes and still refuses a third. E1 is identical on the new pin
+  (8/8 detection, 5/5 attribution on faulted runs, 0 on the control) and B1 does not depend on the
+  pin at all — it drives the fault path directly.

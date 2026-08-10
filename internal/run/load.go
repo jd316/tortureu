@@ -55,7 +55,7 @@ import (
 // for reproducibility; SPEC.md does not name one (escalated in the Task 7
 // report alongside this package's other placeholder pins, e.g.
 // topology.go's proxyImage).
-const k6Image = "grafana/k6:0.54.0"
+const k6Image = "grafana/k6:2.1.0"
 
 // k6ContainerScriptPath/k6ContainerSummaryPath are where the script and
 // summary live inside the k6 container in container mode. /tmp rather than

@@ -947,7 +947,7 @@ the measured value. This is not distrust of k6 as a load generator — its measu
 reason we drive it — but a verdict is the thing this tool exists to produce, so it is the thing we
 must be able to derive and defend ourselves.
 
-The reason is concrete. k6 0.54.0's `--summary-export` reports **every threshold as `false` on any
+The reason is concrete. k6 0.54.0's `--summary-export` reported **every threshold as `false` on any
 arrival-rate executor regardless of the measured value**, and **R-CFG-6 permits only** arrival-rate,
 so the single executor family we may use is the one where its export is unusable. Worse,
 `--summary-export`'s writer recomputes independently and **silently discards** whatever
@@ -961,9 +961,9 @@ findings in three of four runs. *(E1 → Task 4, 2026-08-08)*
 > Grafana also publishes a JSON Schema for the end-of-test summary (`grafana/k6-summary`),
 > intended as the stable automation contract. It has since shipped as `1.0.0` and is no longer
 > work-in-progress, but k6 emits it only behind `--new-machine-readable-summary` (opt-in even in
-> v2.1.0) and our pinned `grafana/k6:0.54.0` cannot emit it at all — so v0 still targets
-> `handleSummary()`. Adopting the schema now depends on a k6 major-version bump, not on upstream.
-> *(TBD-5)*
+> v2.1.0). The pin is now `grafana/k6:2.1.0` (TBD-5), so the shape is available — but it stays
+> opt-in, and R-VER-10 recomputes every verdict from measured values anyway, so v0 still targets
+> `handleSummary()` and adopting the richer document has no forcing reason. *(TBD-5)*
 
 ---
 
@@ -1831,36 +1831,41 @@ nothing to suggest, and only the second is honest.
   each of which now reproduces the `base_url` its committed `torture.yaml` already carried —
   `case8-control` included, at `8080` and not `8081`.
 
-- **TBD-5** — **DECIDED 2026-08-09: stay on `grafana/k6:0.54.0` until the summary shape is handled
-  explicitly. The blocker is measured, not assumed.**
+- **TBD-5** — **RESOLVED 2026-08-09: pinned to `grafana/k6:2.1.0`.**
 
-  The upstream precondition is met — `grafana/k6-summary` ships `schemas/summary/1.0.0` as the
-  official contract, and `grafana/k6:latest` (v2.1.0) emits exactly that shape behind
-  `--new-machine-readable-summary` (opt-in even in v2). Our pin cannot emit it at all.
+  The blocker was never upstream instability — `grafana/k6-summary` shipped `1.0.0` as the official
+  contract. It was a **silent inversion** in the threshold shape, measured against real containers:
 
-  What settles the decision is a **silent inversion**, measured against v2.1.0 rather than reasoned
-  about. `--summary-export` in both versions still emits the flat metric map, but the threshold
-  entry changed:
-
-  | | k6 0.54.0 (pinned) | k6 v2.1.0 |
+  | | k6 0.54.0 | k6 2.1.0 |
   |---|---|---|
-  | threshold **passed** | `{"ok": true}` | `false` |
-  | threshold **failed**  | `{"ok": false}` | `true` |
+  | assertion held | `{"ok": true}` | `false` |
+  | assertion broke | `{"ok": false}` | `true` |
 
-  The bool now reports *crossed*, the opposite of *ok*. A pin bump without touching the parser
-  therefore does not fail loudly — `internal/run`'s type assertion drops to `ok=false` and **every
-  assertion in the run is reported as broken**, a verdict full of findings about a service that is
-  fine.
+  k6 ≤1.x reports *ok*; k6 ≥2.x reports *crossed*. Bumping the pin without touching the parser
+  would not have failed loudly — the type assertion drops to `ok=false` and every assertion reads
+  as broken. **R-VER-19** now normalises both shapes at the parse boundary and **R-VER-18** refuses
+  anything that is neither, so widening did not become "accept whatever turns up".
 
-  **R-VER-18 now refuses an unrecognised shape** rather than falling through, because
-  `K6Runner.Image` is caller-configurable and this was already reachable without any pin change.
-  That closes the danger; the bump itself remains open work, and it is now a known quantity: teach
-  the parser both shapes (or adopt `--new-machine-readable-summary` wholesale), then re-run B1 and
-  E1, since every published fidelity number was measured against 0.54.0.
+  With that closed, the bump was made and measured rather than assumed:
 
-  Verified compatible in the same session, so the bump is not blocked on them: phase markers still
-  arrive on console as `TORTUREU_PHASE_START <phase> <ns>` with `source=console` (R-EXE-8), and
-  `--summary-export` still produces the flat metric shape R-VER-15 reads.
+  - **E1 is byte-identical** on 2.1.0 — detection 8/8, attribution 5/5 on faulted runs (5/9 over
+    every finding), 0 findings on the control. This is expected rather than lucky: **R-VER-10**
+    recomputes every verdict from measured values instead of trusting k6's booleans, so the
+    threshold shape was never the primary path.
+  - **B1 is unaffected by construction** — it drives `fault.Translate` → `fault.Manager` →
+    `ToxiproxyApplier` directly and references k6 nowhere, so no published fidelity number depends
+    on the pin.
+  - Phase markers still arrive on console as `TORTUREU_PHASE_START <phase> <ns>` with
+    `source=console` (**R-EXE-8**), and `--summary-export` still emits the flat metric map
+    **R-VER-15** reads.
+
+  Two real k6 2.1.0 summaries — one where the threshold held, one where k6 printed "thresholds have
+  been crossed" — are committed under `internal/run/testdata/` and asserted against, so the polarity
+  claim travels with the test rather than living on the machine that measured it.
+
+  Still not adopted: `--new-machine-readable-summary`. It remains opt-in even in v2, and
+  **R-VER-10**'s recomputation makes the richer document unnecessary for the verdict. That is a
+  separate decision with no forcing reason behind it.
 
 - **TBD-10** — **RESOLVED 2026-08-08.** Standard-library clients were invisible to D-9's candidate
   mechanism: candidates came from lockfile-detected clients (R-DET-5), and Go's `net/http` never

@@ -419,6 +419,14 @@ if _b1:
     ok(not _bad, f"B1 verdicts in BENCHMARKS.md match {os.path.basename(_latest)}"
        + (f" — {_bad[:3]}" if _bad else f" ({_pass}/{_tot} pass)"))
 
+# The k6 pin and the docs that describe it must agree. TBD-5's resolution rests on the pin being
+# 2.1.0; a silent revert to 0.54.0 would leave SPEC claiming a bump that did not happen.
+_pin = re.search(r'const k6Image = "grafana/k6:([\d.]+)"', open('internal/run/load.go').read())
+if _pin:
+    _v = _pin.group(1)
+    ok(f'grafana/k6:{_v}' in open('SPEC.md').read(),
+       f"SPEC names the k6 image actually pinned (grafana/k6:{_v})")
+
 # README must name every implemented verb. It said "All nine verbs are real" and listed nine
 # while ten existed — `trend` was invisible to anyone reading the front page. A count in prose
 # cannot be checked, but the presence of each verb name can.
