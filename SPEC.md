@@ -232,6 +232,23 @@ reason and no remedy.
 
 *(specified before the fix, per R-PROC-2; found by running `doctor` against a stack with two
 candidate `build:` services after R-DET-19 began refusing to guess)*
+
+**R-CLI-21** *(proposed)* — `doctor` **MUST** state whether fault fidelity has been *measured* on
+the platform it is running on, and **MUST NOT** imply it has where it has not.
+
+B1 measures how closely an injected fault matches what was asked for, and every published B1 number
+comes from **Linux with cgroup v2**. Fault delivery is platform-dependent — `netem`, cgroup CPU
+quota and container pause all run in the Docker VM's kernel, and on macOS and Windows that is a
+different kernel from the user's. A verdict there may be perfectly correct or quietly off, and
+today nothing tells the reader which.
+
+This is the project's own rule applied to itself: a number we have not measured is reported as
+unmeasured, never inferred. A user on an unmeasured platform is told so once, plainly, with what it
+does and does not affect — the orchestration, the egress topology and the attribution logic are the
+same everywhere; only the *magnitude* of an injected fault is unverified.
+
+*(specified before the fix, per R-PROC-2; raised because "macOS fidelity is unmeasured" was being
+carried as a launch caveat in prose that no user would ever read)*
 **R-DET-2** — A compose service with an `image:` and no `build:` **MUST** be classified as a
 dependency.
 

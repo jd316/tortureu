@@ -96,6 +96,13 @@ func buildDoctorReport(findings []doctor.Finding, reg *doctor.Registry, sys *det
 	b.WriteString(renderPrereqs(prereqs))
 	b.WriteString("\n")
 
+	// R-CLI-21: whether B1's fidelity numbers cover this platform. Carried
+	// here because "macOS is unmeasured" was true and lived only in launch
+	// notes no user would ever read.
+	b.WriteString("FAULT FIDELITY\n")
+	fmt.Fprintf(&b, "  fault magnitude has %s\n", currentFidelityNote())
+	b.WriteString("\n")
+
 	// R-CLI-20: what detection DID determine, named plainly. Without this the
 	// report never said which service it treated as the system under test, so
 	// a wrong guess was invisible and `-service` had no visible effect.
@@ -137,6 +144,12 @@ func buildDoctorReport(findings []doctor.Finding, reg *doctor.Registry, sys *det
 	}
 	b.WriteString("\n")
 
+	// doctor.Evaluate dereferences sys; a nil System reaches here only from a
+	// caller that had nothing to detect, and panicking on it would turn "we
+	// could not read your compose file" into a crash.
+	if sys == nil {
+		sys = &detect.System{}
+	}
 	entries := doctor.Evaluate(reg, sys)
 	domains := map[string]bool{}
 	covered := map[string]bool{}

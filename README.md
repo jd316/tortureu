@@ -15,8 +15,12 @@ that way. [`What comes back`](#what-comes-back) explains each line, including wh
 claim. On a stack with OpenTelemetry the same run returns `caused` plus the per-hop chain.*
 
 ```sh
-tortureu init && tortureu run          # ~17s to a first verdict on an unfamiliar repo
+git clone https://github.com/jdb316/tortureu && cd tortureu/examples/quickstart
+tortureu run          # a real verdict on a deliberately broken service — Docker only, no k6 needed
 ```
+
+Or point it at your own stack: `tortureu init && tortureu run` — ~17s to a first verdict on a repo
+it has never seen. See [`examples/quickstart`](examples/quickstart).
 
 > **Status: alpha.** The core works and is proven against real Docker: load and faults on one
 > clock, topological egress isolation, fault interception on internal dependencies, and a verdict
@@ -142,7 +146,7 @@ What it does give you is the *candidate config surface* — library plus knob na
 
 | Document | What it is |
 |---|---|
-| [`SPEC.md`](SPEC.md) | normative. 147 numbered requirements. Build against this. |
+| [`SPEC.md`](SPEC.md) | normative. 148 numbered requirements. Build against this. |
 | [`RESEARCH.md`](RESEARCH.md) | the survey: 155 tools across 19 domains, and why each is driven, delegated or merely named |
 | [`VERDICT.md`](VERDICT.md) | verdict schema, exit codes, MCP surface |
 | [`BENCHMARKS.md`](BENCHMARKS.md) | how this gets evaluated, and what we refuse to claim |

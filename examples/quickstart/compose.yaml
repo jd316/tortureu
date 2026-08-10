@@ -1,0 +1,14 @@
+services:
+  checkout-api:
+    build: ./api
+    ports:
+      - "8080:8080"
+    environment:
+      DEP_URL: "http://dep:9090/slow"
+    depends_on:
+      - dep
+
+  dep:
+    build: ./dep
+    ports:
+      - "9090:9090"

@@ -88,8 +88,22 @@ type overlayNetwork struct {
 // proxy" is inert: nothing tells the SUT to dial it instead of the real
 // host. See ComposeTopologyApplier.Apply's doc comment for the fuller
 // picture and its limits.
+// overlayBuild is the subset of a compose build stanza the overlay needs to
+// reproduce a built dependency. Context is emitted absolute, because the
+// overlay file lives in a temp directory while the project directory is the
+// original compose file's.
+type overlayBuild struct {
+	Context    string `yaml:"context"`
+	Dockerfile string `yaml:"dockerfile,omitempty"`
+}
+
 type overlayService struct {
-	Image       string            `yaml:"image,omitempty"`
+	Image string `yaml:"image,omitempty"`
+	// Build carries a dependency that is built from source rather than
+	// pulled. The backend stanza copied only Image, so a `build:`-based
+	// dependency — an ordinary compose shape — produced a service with
+	// neither, and compose rejected the whole project (R-DC2-3).
+	Build       *overlayBuild     `yaml:"build,omitempty"`
 	Networks    any               `yaml:"networks"`
 	Ports       []string          `yaml:"ports,omitempty"`
 	Environment map[string]string `yaml:"environment,omitempty"`
@@ -452,6 +466,7 @@ func (a ComposeTopologyApplier) Apply(composePath string, top egress.Topology, e
 		svc := project.Services[hostname]
 		backend := overlayService{
 			Image:       svc.Image,
+			Build:       overlayBuildFor(svc),
 			Command:     []string(svc.Command),
 			Environment: stringEnv(svc.Environment),
 			Networks:    []string{sutNetwork},
@@ -547,4 +562,15 @@ func (a ComposeTopologyApplier) TeardownDisabled(composePath string, internalHos
 		return fmt.Errorf("run: topology: teardown disabled service(s) %v: %s %v: %w: %s", services, a.bin(), args, err, out)
 	}
 	return nil
+}
+
+// overlayBuildFor reproduces a dependency's build stanza, or nil when the
+// dependency is pulled by image. compose-go resolves Context to an absolute
+// path at load time, which is what the overlay needs: it is written to a temp
+// directory, so a relative context would resolve against the wrong root.
+func overlayBuildFor(svc types.ServiceConfig) *overlayBuild {
+	if svc.Build == nil || svc.Build.Context == "" {
+		return nil
+	}
+	return &overlayBuild{Context: svc.Build.Context, Dockerfile: svc.Build.Dockerfile}
 }
