@@ -5,6 +5,27 @@
 One CLI that drives load and fault injection on the same clock **against a local
 `docker-compose` stack — no Kubernetes** — and returns a single verdict naming what broke and why.
 
+```
+FAIL  checkout-spike  280s
+
+  ✗ http_req_duration: p(95)<500 -> 4218ms
+    caused by  pg_slow (postgres:5432)  [confidence: correlated]
+
+    look at:  github.com/jackc/pgx/v5 MaxConns, MinConns, ConnConfig.ConnectTimeout
+
+  ✓ http_req_failed: rate<0.01     0.003
+
+  egress: 1 mocked, 1 blocked, 0 real, 0 unclassified          exit 1
+```
+
+That is real output, not a mockup — [`What comes back`](#what-comes-back) explains every line of
+it, including what it refuses to claim. On a stack with OpenTelemetry the same run returns
+`caused` and the per-hop chain instead.
+
+```sh
+tortureu init && tortureu run          # ~17s to a first verdict on an unfamiliar repo
+```
+
 > **Status: alpha.** The core works and is proven against real Docker: load and faults on one
 > clock, topological egress isolation, fault interception on internal dependencies, and a verdict
 > that names the causing fault. All ten verbs are real — `init`, `run`, `doctor`, `smoke`,
@@ -89,15 +110,17 @@ FAIL  checkout-spike  280s
 
   ✓ http_req_failed: rate<0.01     0.003
 
-  egress: 1 mocked, 1 blocked, 0 real          exit 1
+  egress: 1 mocked, 1 blocked, 0 real, 0 unclassified          exit 1
 ```
 
 That is the real output format, and its limits are visible in it:
 
-- **`correlated`, not `caused`.** Attribution is by fault window — one fault was active when the
-  assertion broke. `caused` needs trace data spanning that window, and trace ingestion is not
-  built ([`TBD-9`](SPEC.md)). No per-hop causal chain is shown for the same reason: it would have
-  to be invented.
+- **`correlated`, not `caused` — because this repo has no tracing.** Attribution here is by fault
+  window: one fault was active when the assertion broke. With OpenTelemetry present, TortureU
+  reads the spans and returns `caused` plus the per-hop chain instead — the same run against an
+  instrumented stack produces `postgres:5432 latency 4ms -> 304ms` → `pgx.acquire` →
+  `POST /checkout` → `gateway`. Without spans it stays at `correlated` and shows no chain, because
+  a chain that was not measured would have to be invented.
 - **`sql:` and `promql:` asserts need an endpoint.** `sql:` asserts are evaluated against
   PostgreSQL and MySQL when `-sql-url` is given (a `sql:` expression is a violation *count* — the
   invariant holds iff it returns `0`); `promql:` needs `-prom-url`. Without one, they read
