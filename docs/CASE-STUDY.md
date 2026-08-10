@@ -64,16 +64,32 @@ It read the spans, found that only `dep-a`'s target actually degraded, and named
 targets degrade, or none do, it stays `ambiguous` and names nothing — a guess is worth less than
 silence here.
 
-## The result that matters most
+## The results that matter most
 
-Case 8 is a control: same harness, same load, **no planted defect**.
+There are two controls, and they prove different things.
+
+**Case 8** — same harness, same load, **no planted defect and no fault**:
 
 ```
-case8-control:pass:0        →  0 findings, every run
+case8-control:pass:0        →  0 findings
 ```
 
-A tool that always finds something is a random number generator with good typography. The control
-is the only reason to believe the other eight results.
+**Case 10** — a **real** 3s dependency stall is injected, and the service survives it, because it
+has a 500 ms deadline and a degraded-but-valid fallback:
+
+```
+PASS  checkout-api
+
+  ✓ http_req_duration: p(95)<1500     501.096ms
+  ✓ http_req_failed: rate<0.5         0
+```
+
+`501.096ms` is the timeout doing its job. This is the harder guarantee: reporting a finding here
+would mean reporting **the fault we injected** rather than a defect in the service — the subtlest
+way an attribution tool can be wrong, and the one you cannot catch by testing only broken things.
+
+A tool that always finds something is a random number generator with good typography. These two
+cases are the reason to believe the other eight.
 
 ## What it does not do
 

@@ -42,7 +42,8 @@ it has never seen. See [`examples/quickstart`](examples/quickstart).
 >
 > **What the evidence actually shows.** On the labelled corpus (`make eval`, results in
 > [`BENCHMARKS.md`](BENCHMARKS.md)) TortureU detects **8/8** planted defects and reports **0
-> findings on the control**. It names the causing fault in **5 of 5** findings from runs that
+> findings on either control** — one with no defect, and one where a real 3s dependency stall is
+> injected and the service survives it. It names the causing fault in **5 of 5** findings from runs that
 > injected a fault — including a two-fault run, where traces identify which dependency actually
 > degraded. Three corpus cases inject **no** fault at all (static defects under load); those
 > findings stay `ambiguous`, because with nothing injected there is no cause to name and inventing

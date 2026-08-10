@@ -1,4 +1,4 @@
-time="2026-08-10T13:45:04Z" level=info msg="TORTUREU_PHASE_START ramp_up 1786369504103" source=console
-time="2026-08-10T13:45:09Z" level=info msg="TORTUREU_PHASE_START peak 1786369509103" source=console
-time="2026-08-10T13:45:20Z" level=warning msg="Insufficient VUs, reached 110 active VUs and cannot initialize more" executor=ramping-arrival-rate scenario=load
-time="2026-08-10T13:45:29Z" level=error msg="thresholds on metrics 'http_req_duration' have been crossed"
+time="2026-08-10T14:09:31Z" level=info msg="TORTUREU_PHASE_START ramp_up 1786370971509" source=console
+time="2026-08-10T14:09:36Z" level=info msg="TORTUREU_PHASE_START peak 1786370976509" source=console
+time="2026-08-10T14:09:47Z" level=warning msg="Insufficient VUs, reached 110 active VUs and cannot initialize more" executor=ramping-arrival-rate scenario=load
+time="2026-08-10T14:09:56Z" level=error msg="thresholds on metrics 'http_req_duration' have been crossed"

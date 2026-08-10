@@ -170,25 +170,31 @@ gate_rc=0
 # The control requirement applies to a whole-corpus run. A single-case
 # invocation (`run_case.sh <dir>`) legitimately has no case8 line, and
 # demanding one there made every single-case run fail.
-case8_line="$(grep '^case8' "$RESULTS_LINE_FILE" | tail -1)"
-if [ -z "$case8_line" ]; then
-  if [ $# -eq 0 ]; then
-    echo "FAIL: no case8 result at all -- the control never ran, so nothing was proven" >&2
-    gate_rc=1
+# Every control must run clean and find nothing. There are two, and they
+# prove different things: case8 has no fault at all, while case10 has a REAL
+# fault that the service correctly survives — the harder guarantee, because a
+# tool that reports the fault it injected is wrong in the subtlest way.
+for control in case8 case10; do
+  line="$(grep "^$control" "$RESULTS_LINE_FILE" | tail -1)"
+  if [ -z "$line" ]; then
+    if [ $# -eq 0 ]; then
+      echo "FAIL: no $control result at all -- a control never ran, so nothing was proven" >&2
+      gate_rc=1
+    fi
+    continue
   fi
-else
-  case8_status="$(echo "$case8_line" | cut -d: -f2)"
-  case8_findings="$(echo "$case8_line" | cut -d: -f3)"
-  if [ "$case8_status" != "pass" ]; then
-    echo "FAIL: case 8 (control) status=$case8_status -- a control that did not run clean cannot certify anything" >&2
+  st="$(echo "$line" | cut -d: -f2)"
+  fi_count="$(echo "$line" | cut -d: -f3)"
+  if [ "$st" != "pass" ]; then
+    echo "FAIL: $control (control) status=$st -- a control that did not run clean cannot certify anything" >&2
     gate_rc=1
-  elif [ "$case8_findings" != "0" ]; then
-    echo "FAIL: case 8 (control) produced $case8_findings finding(s) -- E1's launch gate requires zero" >&2
+  elif [ "$fi_count" != "0" ]; then
+    echo "FAIL: $control (control) produced $fi_count finding(s) -- E1's launch gate requires zero" >&2
     gate_rc=1
   else
-    echo "OK: case 8 (control) ran clean and produced 0 findings"
+    echo "OK: $control (control) ran clean and produced 0 findings"
   fi
-fi
+done
 
 # Only meaningful for a whole-corpus run; a single-case invocation names its
 # own case and is not expected to cover the rest.

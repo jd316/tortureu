@@ -263,10 +263,14 @@ A set of small backends, each with exactly one deliberate defect, in several lan
 | 6 | Unbounded in-memory queue | OOM under sustained spike |
 | 7 | Cache stampede on expiry | thundering herd at TTL boundary |
 | 8 | **Control: no defect** | `pass` — must not invent a finding |
+| 10 | **Control: real fault, resilient service** | `pass` — must not report the fault it injected |
 | 9 | Two simultaneous faults, one hot dependency (OTel-instrumented) | `caused` by the fault whose target actually degraded, from real spans |
 
-Case 8 carries the most weight. A tool that always finds something is a random-number
-generator with good typography.
+The two controls carry the most weight. Case 8 has no defect and no fault: a tool that always finds
+something is a random-number generator with good typography. **Case 10 is the harder one** — a real
+3s dependency stall is injected and the service survives it, because it has a 500ms deadline and a
+degraded-but-valid fallback. Reporting a finding there would mean reporting *the fault we injected*
+rather than a defect in the service, which is the subtlest way an attribution tool can be wrong.
 
 ### Metrics
 
@@ -298,12 +302,13 @@ verdict JSON is in [`evals/results/`](evals/results/).
 | 7 | Cache stampede on expiry | fail | 1 | *ambiguous* | ambiguous | n/a |
 | 8 | **Control: no defect** | **pass** | **0** | — | — | — |
 | 9 | Two faults at once, one hot dependency (OTel) | fail | 1 | `dep_a_slow` | **caused** | ✅ `Client.Timeout` |
+| 10 | **Control: real fault, resilient service** | **pass** | **0** | — | — | — |
 
 ```
 detection      8/8   every planted defect produced a finding
 attribution    5/8   findings that named a causing fault
 candidates     3/4   cases whose ground truth names a config knob
-false positive 0     on the control (the metric that carries the most weight)
+false positive 0     on BOTH controls — case 8 (no fault) and case 10 (real fault, survived)
 confidence     1/1   the one OTel-instrumented case reaches `caused`; the seven without
                      tracing top out at `correlated`, which is exactly D-4's claim
 ```

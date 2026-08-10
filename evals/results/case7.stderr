@@ -1,3 +1,3 @@
-time="2026-08-10T13:46:08Z" level=info msg="TORTUREU_PHASE_START ramp_up 1786369568970" source=console
-time="2026-08-10T13:46:13Z" level=info msg="TORTUREU_PHASE_START peak 1786369573970" source=console
-time="2026-08-10T13:46:33Z" level=error msg="thresholds on metrics 'http_req_duration' have been crossed"
+time="2026-08-10T14:10:36Z" level=info msg="TORTUREU_PHASE_START ramp_up 1786371036579" source=console
+time="2026-08-10T14:10:41Z" level=info msg="TORTUREU_PHASE_START peak 1786371041579" source=console
+time="2026-08-10T14:11:01Z" level=error msg="thresholds on metrics 'http_req_duration' have been crossed"
