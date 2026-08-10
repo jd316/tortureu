@@ -112,11 +112,12 @@ that was a measurement defect rather than the fidelity regression it was publish
    The lesson is worth more than the row: a tolerance narrower than the measurement's own sampling
    error does not test the tool, it tests luck. This one produced a false negative that stood in
    this file — and in the launch go/no-go — for two days.
-2. **`jitter` now passes against the corrected, uniform-distribution tolerance (R-EXE-24).**
-   Measured stddev 30.74ms vs. the derived target 28.87ms (`jitter/√3`) is 6.5% off, well
-   inside ±15%. This is the same underlying Toxiproxy behavior the previous run measured
-   (27.95ms then, against the *old*, mistaken σ=jitter assumption, which read as a 44% miss);
-   nothing about the fault delivery changed — only the tolerance's stated expectation did.
+2. **`jitter` passes against the corrected, uniform-distribution tolerance (R-EXE-24).**
+   Measured stddev 26.33ms vs. the derived target 28.87ms (`jitter/√3`) is 8.8% off, inside
+   ±15%. Across runs this row has measured 27.95ms, 30.74ms and 26.33ms — a spread of ~4ms,
+   which is the sampling noise finding 1 quantifies, not drift in fault delivery. The first of
+   those was once read as a 44% miss against the *old*, mistaken σ=jitter assumption; nothing
+   about the fault delivery changed then either, only the tolerance's stated expectation.
 3. **`kill` now passes, measured at the correct layer (R-EXE-25).** The fault was always
    being delivered (SIGKILL was always sent); the earlier MISS was this benchmark asking a
    question — "does the client see an RST?" — that `docker kill` was never going to be able
@@ -414,8 +415,8 @@ from it.
 ## Status
 
 **B1 is measured** (Linux/Docker Engine, single platform, see the table above and
-`benchmarks/results/2026-08-08-698d549.json`): 6 of 7 `inject:` verbs pass tolerance as of
-the third measured run, driven through the real fault path with no shortcuts. The first run
+`benchmarks/results/2026-08-09-e5402e3.json`): **all 7** `inject:` verbs pass tolerance as of
+the latest measured run, driven through the real fault path with no shortcuts. The first run
 (commit `07acb03`) found `internal/fault/translate.go` never converted the unit-suffixed
 strings a human-authored `torture.yaml` actually produces into the numeric values Toxiproxy's
 API requires; the second run (`bb6723c`) reverified that fix and surfaced three further

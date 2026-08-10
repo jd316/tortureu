@@ -389,6 +389,36 @@ for _f in glob.glob('cmd/tortureu/*.go') + glob.glob('internal/**/*.go', recursi
 ok(not _hard, "no hardcoded docker-compose.yml outside internal/detect (R-DET-15)"
    + (f" — {_hard}" if _hard else ""))
 
+# B1's per-verb verdicts appear in BENCHMARKS.md as a hand-written table and in prose, and they
+# have drifted twice: the latency row sat at MISS after it began passing, and the jitter stddev
+# was quoted from a superseded run. Recompute the pass count from the newest committed B1 result
+# and require the prose to agree.
+_b1 = sorted(p for p in glob.glob('benchmarks/results/*.json') if not p.endswith('-b2.json'))
+if _b1:
+    _latest = _b1[-1]
+    _res = json.load(open(_latest)).get('results') or []
+    _pass = sum(1 for r in _res if r.get('verdict') == 'pass')
+    _tot = len(_res)
+    _bm = open('BENCHMARKS.md').read()
+    _bad = []
+    # any "N of 7"/"N/7" claim about verbs must match the measured pass count
+    for _m in re.findall(r'\b(\d+)\s*(?:/|\s+of\s+)\s*7\b[^.\n]{0,40}(?:verb|row)', _bm):
+        if int(_m) != _pass:
+            _bad.append(f"BENCHMARKS.md claims {_m} of 7 verbs, {_latest} measured {_pass}")
+    # every verdict word in the table must match the JSON for that verb
+    for _r in _res:
+        _v, _verdict = _r.get('verb'), _r.get('verdict')
+        # BENCHMARKS.md has two tables keyed by verb: a tolerance definition
+        # with no verdict column, and the results table. Only the latter can
+        # be checked, so match a row that actually carries a verdict.
+        _row = next((l for l in _bm.splitlines()
+                     if l.startswith(f'| `{_v}') and ('**PASS**' in l or '**MISS**' in l)), None)
+        if _row and _verdict:
+            if ('**PASS**' in _row) != (_verdict == 'pass'):
+                _bad.append(f"{_v}: table says {'PASS' if '**PASS**' in _row else 'not PASS'}, result says {_verdict}")
+    ok(not _bad, f"B1 verdicts in BENCHMARKS.md match {os.path.basename(_latest)}"
+       + (f" — {_bad[:3]}" if _bad else f" ({_pass}/{_tot} pass)"))
+
 # README must name every implemented verb. It said "All nine verbs are real" and listed nine
 # while ten existed — `trend` was invisible to anyone reading the front page. A count in prose
 # cannot be checked, but the presence of each verb name can.
