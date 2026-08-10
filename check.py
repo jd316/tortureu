@@ -365,7 +365,7 @@ if _e1 is None:
 else:
     _valid = set(_e1.values())
     _stale = []
-    for _p in ('README.md', 'BENCHMARKS.md', 'CHANGELOG.md'):
+    for _p in ('README.md', 'BENCHMARKS.md', 'CHANGELOG.md', 'docs/CASE-STUDY.md'):
         for _line in open(_p).read().splitlines():
             if 'detect' not in _line.lower() and 'attribut' not in _line.lower():
                 continue

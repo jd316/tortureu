@@ -1,5 +1,11 @@
 # TortureU
 
+[![ci](https://github.com/jdb316/tortureu/actions/workflows/ci.yml/badge.svg)](https://github.com/jdb316/tortureu/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/jdb316/tortureu.svg)](https://pkg.go.dev/github.com/jdb316/tortureu)
+![Go 1.26](https://img.shields.io/badge/go-1.26-00ADD8)
+![licence MIT](https://img.shields.io/badge/licence-MIT-blue)
+![no Kubernetes required](https://img.shields.io/badge/Kubernetes-not%20required-success)
+
 **Load testing tells you it got slow. TortureU tells you which dependency did it.**
 
 One CLI that drives load and fault injection on the same clock **against a local
@@ -152,6 +158,7 @@ What it does give you is the *candidate config surface* — library plus knob na
 | [`BENCHMARKS.md`](BENCHMARKS.md) | how this gets evaluated, and what we refuse to claim |
 | [`registry.yaml`](registry.yaml) | the tool catalog |
 | [`PLAN.md`](PLAN.md) | the original build plan; historical, and says where its scope was exceeded |
+| [`docs/CASE-STUDY.md`](docs/CASE-STUDY.md) | a defect found end to end, with every number traceable to `evals/results/` |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | **read before your first PR** — spec-first, failing-test-first, and the rule against claiming verification you did not perform |
 
 Two constraints are load-bearing and worth reading before contributing (see
