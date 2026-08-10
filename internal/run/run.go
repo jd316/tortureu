@@ -618,6 +618,14 @@ func Run(cfg *config.Config, sys detect.System, deps Deps, opts Options) (runVer
 		}
 	}
 
+	// R-VER-18: refuse a summary shape we cannot read rather than reporting
+	// every assertion as broken. R-VER-2 — this is a tool error, not a
+	// finding about the user's service.
+	if err := validateThresholdShapes(metrics); err != nil {
+		teardownAll()
+		return fail("k6 summary could not be read", err)
+	}
+
 	thresholdPassed, thresholdFindings := evaluateThresholds(metrics, cfg.Faults, sys, auditFindings)
 	promPassed, promFindings := evaluatePromqlAsserts(cfg.Assert, deps.Prom, cfg.Faults, sys, auditFindings)
 	sqlPassed, sqlFindings, sqlErr := EvaluateSQLAsserts(cfg.Assert, deps.SQL, cfg.Faults, sys, auditFindings)

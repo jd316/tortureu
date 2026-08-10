@@ -249,6 +249,25 @@ same everywhere; only the *magnitude* of an injected fault is unverified.
 
 *(specified before the fix, per R-PROC-2; raised because "macOS fidelity is unmeasured" was being
 carried as a launch caveat in prose that no user would ever read)*
+
+**R-VER-18** *(proposed)* — When a k6 summary's threshold entry is not the shape this project
+parses, `run` **MUST** refuse and name the mismatch. It **MUST NOT** fall through to a default
+verdict.
+
+`internal/run` reads `metrics.<name>.thresholds.<expr>` as `{"ok": bool}`, which is what
+`grafana/k6:0.54.0` — the pinned image — emits. **k6 v2 emits a bare bool, and inverts the
+meaning**: measured against `grafana/k6:latest` (v2.1.0), a threshold that *passed* serialises as
+`false` and one that *failed* as `true`, because the bool now reports "crossed", not "ok".
+
+Today the type assertion simply fails, `ok` defaults to `false`, and **every assertion in the run
+is reported as broken** — a verdict full of findings about a service that is fine. `K6Runner.Image`
+is caller-configurable, so this is reachable now, not only after a future pin bump.
+
+A shape we do not recognise is a tool error (**R-VER-2**, exit 2), never a result: reporting
+"your p95 assertion failed" because we could not read the summary is the confident wrong answer
+this project exists to avoid.
+
+*(specified before the fix, per R-PROC-2; found while evaluating the k6 v2 bump TBD-5 describes)*
 **R-DET-2** — A compose service with an `image:` and no `build:` **MUST** be classified as a
 dependency.
 
@@ -1795,32 +1814,36 @@ nothing to suggest, and only the second is honest.
   each of which now reproduces the `base_url` its committed `torture.yaml` already carried —
   `case8-control` included, at `8080` and not `8081`.
 
-- **TBD-5** — **NARROWED 2026-08-09. The upstream precondition is met; the blocker is now our own
-  k6 pin.** This asked whether to adopt the `grafana/k6-summary` JSON Schema "once it leaves
-  work-in-progress". It has: the repo publishes `schemas/summary/1.0.0/schema.json`, describes
-  itself as the official definition and as "a stable, officially supported alternative to parsing
-  human-readable text summaries", and is versioned for code generation.
+- **TBD-5** — **DECIDED 2026-08-09: stay on `grafana/k6:0.54.0` until the summary shape is handled
+  explicitly. The blocker is measured, not assumed.**
 
-  Measured rather than assumed, against real containers:
+  The upstream precondition is met — `grafana/k6-summary` ships `schemas/summary/1.0.0` as the
+  official contract, and `grafana/k6:latest` (v2.1.0) emits exactly that shape behind
+  `--new-machine-readable-summary` (opt-in even in v2). Our pin cannot emit it at all.
 
-  - `grafana/k6:latest` is **v2.1.0**, and with `--new-machine-readable-summary` it emits exactly
-    the schema's shape — top level `{config, metadata, results, version}` with `version: "1.0.0"`.
-  - That flag is **opt-in even in v2**: `--summary-export` alone still emits the legacy flat
-    metric map. So the new format is not yet what a k6 user gets by default.
-  - Our pin is **`grafana/k6:0.54.0`**, which cannot emit it at all. Its `--summary-export` output
-    is the flat `{metric: {avg, max, med, min, p(90), p(95), thresholds}}` map every consumer in
-    `internal/run` reads.
+  What settles the decision is a **silent inversion**, measured against v2.1.0 rather than reasoned
+  about. `--summary-export` in both versions still emits the flat metric map, but the threshold
+  entry changed:
 
-  **Decision: not adopted now, and the reason is no longer "upstream is unstable".** Adopting it
-  requires bumping k6 from 0.54.0 to v2.x, and that bump is not a schema swap — it moves the
-  ground under the phase markers `internal/run` scans for on k6's console output (R-EXE-8, the
-  one-clock mechanism), the threshold booleans R-VER-10 recomputes, the absent-`contains` finding
-  behind R-VER-15, and every B1 fidelity number measured against 0.54.0. Doing it as a side effect
-  of this TBD would invalidate published benchmarks without re-measuring them.
+  | | k6 0.54.0 (pinned) | k6 v2.1.0 |
+  |---|---|---|
+  | threshold **passed** | `{"ok": true}` | `false` |
+  | threshold **failed**  | `{"ok": false}` | `true` |
 
-  So it stays open as a **scoped, no-longer-blocked** piece of work: bump the pin, re-run B1 and
-  E1, and only then decide whether to read the new shape, keep the legacy one, or accept both. What
-  changed today is that nothing outside this repository is in the way any more.
+  The bool now reports *crossed*, the opposite of *ok*. A pin bump without touching the parser
+  therefore does not fail loudly — `internal/run`'s type assertion drops to `ok=false` and **every
+  assertion in the run is reported as broken**, a verdict full of findings about a service that is
+  fine.
+
+  **R-VER-18 now refuses an unrecognised shape** rather than falling through, because
+  `K6Runner.Image` is caller-configurable and this was already reachable without any pin change.
+  That closes the danger; the bump itself remains open work, and it is now a known quantity: teach
+  the parser both shapes (or adopt `--new-machine-readable-summary` wholesale), then re-run B1 and
+  E1, since every published fidelity number was measured against 0.54.0.
+
+  Verified compatible in the same session, so the bump is not blocked on them: phase markers still
+  arrive on console as `TORTUREU_PHASE_START <phase> <ns>` with `source=console` (R-EXE-8), and
+  `--summary-export` still produces the flat metric shape R-VER-15 reads.
 
 - **TBD-10** — **RESOLVED 2026-08-08.** Standard-library clients were invisible to D-9's candidate
   mechanism: candidates came from lockfile-detected clients (R-DET-5), and Go's `net/http` never

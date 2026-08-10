@@ -643,3 +643,47 @@ func sortStrings(s []string) {
 		}
 	}
 }
+
+// validateThresholdShapes rejects a k6 summary whose threshold entries are not
+// the {"ok": bool} objects this build parses (R-VER-18).
+//
+// grafana/k6:0.54.0, the pinned image, emits that shape. k6 v2 emits a bare
+// bool and inverts the meaning — measured against v2.1.0, a threshold that
+// passed serialises as false and one that failed as true, because the bool
+// reports "crossed". Without this check the type assertion simply failed,
+// leaving ok=false, and every assertion in the run was reported as broken:
+// a verdict full of findings about a service that is fine. K6Runner.Image is
+// caller-configurable, so this is reachable without any pin change.
+func validateThresholdShapes(metrics map[string]any) error {
+	names := make([]string, 0, len(metrics))
+	for name := range metrics {
+		names = append(names, name)
+	}
+	sortStrings(names)
+	for _, name := range names {
+		m, ok := metrics[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		thresholds, ok := m["thresholds"].(map[string]any)
+		if !ok {
+			continue
+		}
+		exprs := make([]string, 0, len(thresholds))
+		for expr := range thresholds {
+			exprs = append(exprs, expr)
+		}
+		sortStrings(exprs)
+		for _, expr := range exprs {
+			if _, ok := thresholds[expr].(map[string]any); !ok {
+				return fmt.Errorf(
+					"k6 summary: threshold %q on metric %q is %T, not the {\"ok\": bool} object this build reads; "+
+						"k6 v2 changed it to a bare bool AND inverted the meaning (true now means crossed), so reading "+
+						"it would turn passing assertions into failures — use grafana/k6:0.54.0, or teach "+
+						"internal/run the newer shape",
+					expr, name, thresholds[expr])
+			}
+		}
+	}
+	return nil
+}
