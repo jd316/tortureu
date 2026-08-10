@@ -18,11 +18,20 @@ func TestREADMESampleIsRealRendererOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read README: %v", err)
 	}
-	parts := strings.SplitN(string(raw), "```\n", 3)
-	if len(parts) < 3 {
-		t.Fatal("README has no fenced sample block")
+	// Locate the block by its content, not its position: the README's
+	// ordering changes, and a positional split silently started reading a
+	// different block when a ```sh fence was added above this one.
+	const marker = "FAIL  checkout-spike"
+	i := strings.Index(string(raw), marker)
+	if i < 0 {
+		t.Fatalf("README no longer contains the sample verdict (%q)", marker)
 	}
-	sample := parts[1]
+	rest := string(raw)[i:]
+	end := strings.Index(rest, "```")
+	if end < 0 {
+		t.Fatal("sample verdict block is not closed")
+	}
+	sample := rest[:end]
 
 	got := Render(Verdict{
 		Scenario: "checkout-spike", Status: StatusFail, DurationS: 280,

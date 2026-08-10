@@ -5,22 +5,14 @@
 One CLI that drives load and fault injection on the same clock **against a local
 `docker-compose` stack — no Kubernetes** — and returns a single verdict naming what broke and why.
 
-```
-FAIL  checkout-spike  280s
+<p align="center">
+  <img src="docs/demo.svg" alt="tortureu run: load and a dependency fault on one clock, returning a verdict that names the cause" width="880">
+</p>
 
-  ✗ http_req_duration: p(95)<500 -> 4218ms
-    caused by  pg_slow (postgres:5432)  [confidence: correlated]
-
-    look at:  github.com/jackc/pgx/v5 MaxConns, MinConns, ConnConfig.ConnectTimeout
-
-  ✓ http_req_failed: rate<0.01     0.003
-
-  egress: 1 mocked, 1 blocked, 0 real, 0 unclassified          exit 1
-```
-
-That is real output, not a mockup — [`What comes back`](#what-comes-back) explains every line of
-it, including what it refuses to claim. On a stack with OpenTelemetry the same run returns
-`caused` and the per-hop chain instead.
+*Real output, not a mockup — every line above is captured from
+[`evals/corpus/case1-no-timeout`](evals/corpus), and a test renders the same verdict to keep it
+that way. [`What comes back`](#what-comes-back) explains each line, including what it refuses to
+claim. On a stack with OpenTelemetry the same run returns `caused` plus the per-hop chain.*
 
 ```sh
 tortureu init && tortureu run          # ~17s to a first verdict on an unfamiliar repo
@@ -85,6 +77,19 @@ Chaos tools can inject the fault — but they need Kubernetes. Grafana's own `xk
 fault injection inside a k6 test, on k6's clock, which is the right idea — and it targets
 Kubernetes Pods and Services. Chaos Mesh, Litmus and Testkube need a cluster too. Toxiproxy runs
 anywhere but has no scheduler, so you drive it by hand.
+
+| | load + fault on one clock | runs without Kubernetes | names the causing dependency |
+|---|---|---|---|
+| **TortureU** | yes | yes | yes |
+| Grafana `xk6-disruptor` | yes | **no** — `PodDisruptor` / `ServiceDisruptor` only | no |
+| Chaos Mesh · Litmus · Testkube | no load generator | **no** | no |
+| Toxiproxy | no scheduler — you drive it by hand | yes | no |
+| k6 · Vegeta · Gatling alone | no fault injection | yes | no |
+
+*Checked against the `grafana/xk6-disruptor` repository on 2026-08-10: it exposes `PodDisruptor` and
+`ServiceDisruptor`, and no file in it mentions docker-compose. It is alpha and pre-v1, so this is a
+snapshot, not a permanent claim — the "one clock" idea is Grafana's too, and the part that is ours
+is doing it without a cluster.*
 
 Nothing lets you say this against a compose file on a laptop:
 
