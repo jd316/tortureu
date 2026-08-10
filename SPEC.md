@@ -268,6 +268,23 @@ A shape we do not recognise is a tool error (**R-VER-2**, exit 2), never a resul
 this project exists to avoid.
 
 *(specified before the fix, per R-PROC-2; found while evaluating the k6 v2 bump TBD-5 describes)*
+
+**R-VER-19** *(proposed)* — `run` **MUST** read both k6 threshold shapes and normalise them to one
+meaning: *did this assertion hold?*
+
+- k6 ≤ 1.x: `{"<expr>": {"ok": true}}` — `true` means **passed**.
+- k6 ≥ 2.x: `{"<expr>": true}` — `true` means **crossed**, i.e. **failed**.
+
+The two are exact opposites, so the shape determines the polarity and a reader that guesses is
+wrong half the time. Normalisation happens once, at the parse boundary, and everything downstream
+sees only "held" — no other code in this project may branch on a k6 version.
+
+**R-VER-18's refusal stands for anything that is neither shape.** Widening what we accept must not
+widen it to "whatever turns up": a third shape is still a tool error, because the failure this
+guards against is not an unknown format, it is a *plausible* format read with inverted meaning.
+
+*(specified before the fix, per R-PROC-2. Both polarities were measured against real containers —
+`grafana/k6:0.54.0` and `grafana/k6:latest` v2.1.0 — not inferred from release notes)*
 **R-DET-2** — A compose service with an `image:` and no `build:` **MUST** be classified as a
 dependency.
 

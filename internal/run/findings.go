@@ -560,8 +560,9 @@ func evaluateThresholds(metrics map[string]any, faults []config.Fault, sys detec
 		sortStrings(exprs)
 
 		for _, expr := range exprs {
-			result, _ := thresholds[expr].(map[string]any)
-			ok, _ := result["ok"].(bool)
+			// R-VER-19: normalised at the parse boundary; nothing downstream
+			// branches on a k6 version. Shape was validated before load.
+			ok, _ := thresholdHeld(thresholds[expr])
 			assertion := fmt.Sprintf("%s: %s", name, expr)
 			observed, measured := measuredValue(name, m, expr)
 			if !measured {
@@ -644,6 +645,40 @@ func sortStrings(s []string) {
 	}
 }
 
+// thresholdHeld normalises k6's two threshold shapes to one meaning: did this
+// assertion hold? (R-VER-19)
+//
+// The shapes are exact opposites, measured against real containers rather
+// than read off release notes:
+//
+//	                 grafana/k6:0.54.0   grafana/k6:latest (v2.1.0)
+//	assertion held   {"ok": true}        false
+//	assertion broke  {"ok": false}       true
+//
+// k6 ≤1.x reports "ok"; k6 ≥2.x reports "crossed". Because the polarity flips
+// with the shape, a reader that guesses is wrong half the time — and wrong in
+// the direction that turns broken assertions into passes.
+//
+// Anything that is neither shape stays an error (R-VER-18): the failure this
+// guards against is a plausible format read with inverted meaning, so
+// accepting a third one on the assumption it means the same thing would
+// reintroduce exactly the bug.
+func thresholdHeld(value any) (bool, error) {
+	switch v := value.(type) {
+	case map[string]any:
+		ok, present := v["ok"].(bool)
+		if !present {
+			return false, fmt.Errorf("threshold object has no boolean \"ok\" field: %v", v)
+		}
+		return ok, nil
+	case bool:
+		// k6 v2: the bool reports "crossed".
+		return !v, nil
+	default:
+		return false, fmt.Errorf("threshold is %T, expected either {\"ok\": bool} (k6 <=1.x) or a bare bool (k6 >=2.x)", value)
+	}
+}
+
 // validateThresholdShapes rejects a k6 summary whose threshold entries are not
 // the {"ok": bool} objects this build parses (R-VER-18).
 //
@@ -675,7 +710,7 @@ func validateThresholdShapes(metrics map[string]any) error {
 		}
 		sortStrings(exprs)
 		for _, expr := range exprs {
-			if _, ok := thresholds[expr].(map[string]any); !ok {
+			if _, err := thresholdHeld(thresholds[expr]); err != nil {
 				return fmt.Errorf(
 					"k6 summary: threshold %q on metric %q is %T, not the {\"ok\": bool} object this build reads; "+
 						"k6 v2 changed it to a bare bool AND inverted the meaning (true now means crossed), so reading "+
