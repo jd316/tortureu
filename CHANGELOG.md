@@ -6,6 +6,16 @@ this project will use [semantic versioning](https://semver.org/) from its first 
 Exit codes 0–4 (`VERDICT.md` §2) and the verdict document's field names are the compatibility
 surface agents parse — those are what a major version protects.
 
+## [0.1.1] — first usable tag
+
+`v0.1.0` was tagged, withdrawn, and must not be used. It was cut while the
+repository was still named `TortureU`, so `proxy.golang.org` cached that
+version with `module github.com/jd316/TortureU`. The proxy is immutable per
+version, so re-tagging `v0.1.0` after the rename could not replace it —
+`go install github.com/jd316/tortureu/...@v0.1.0` fails with a module path
+mismatch and always will. `v0.1.1` is the first tag on the canonical
+lowercase path.
+
 ## [Unreleased]
 
 Everything below is in `main` and has not yet been tagged. There is no published release,
