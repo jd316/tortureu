@@ -14,7 +14,7 @@ You need Docker. You do **not** need k6 — `run` executes it in a pinned contai
 ## What you should see
 
 ```
-FAIL  checkout-api  31s
+FAIL  checkout-api  32s
 
   ✗ http_req_duration: p(95)<1000 -> 3003.87ms
     caused by  dep_slow (dep:9090)  [confidence: correlated]
@@ -24,6 +24,7 @@ FAIL  checkout-api  31s
   ✓ http_req_failed: rate<0.5     0
 ```
 
+(Exact figures shift a little run to run — the injected stall is 3s, so p95 lands just above it.)
 Exit code `1` — an assertion broke. That is a *result*, not an error; `2` would mean TortureU
 itself failed (`VERDICT.md` §2).
 

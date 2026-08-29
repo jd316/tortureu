@@ -30,7 +30,7 @@ on the same clock, is the part that has no off-the-shelf answer outside Kubernet
 `tortureu run` against the same service, with `latency: 3s` injected at the `peak` phase:
 
 ```
-FAIL  checkout-api  31s
+FAIL  checkout-api  32s
 
   ✗ http_req_duration: p(95)<1000 -> 3003.54ms
     caused by  dep_slow (dep:9090)  [confidence: correlated]
@@ -40,6 +40,7 @@ FAIL  checkout-api  31s
   ✓ http_req_failed: rate<0.5     0
 ```
 
+(The wall-clock time varies by machine; the measurements are what matter.)
 Three seconds of dependency latency became **3003.54ms of user latency** — passed straight through,
 because nothing bounded the request. Note `http_req_failed` is **0**: nothing errored. A failure
 that returns no errors is precisely the kind that survives to production.

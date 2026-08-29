@@ -26,8 +26,10 @@ git clone https://github.com/jdb316/tortureu && cd tortureu/examples/quickstart
 tortureu run          # a real verdict on a deliberately broken service — Docker only, no k6 needed
 ```
 
-Or point it at your own stack: `tortureu init && tortureu run` — ~17s to a first verdict on a repo
-it has never seen. See [`examples/quickstart`](examples/quickstart).
+Or point it at your own stack: `tortureu init && tortureu run` — detection and config take seconds
+on a repo it has never seen; the run itself is however long your `load:` block says. The first run
+also pulls the pinned k6 and proxy images, so budget a minute for it and ~30s after that. See
+[`examples/quickstart`](examples/quickstart).
 
 > **Status: alpha.** The core works and is proven against real Docker: load and faults on one
 > clock, topological egress isolation, fault interception on internal dependencies, and a verdict
