@@ -48,7 +48,18 @@ func TestDC2Enforcement_InternalNetworkBlocksExternalButProxyForwardsClassifiedH
 	stack := bringUpDC2Stack(t)
 
 	t.Run("isolated: external blocked, classified host reachable through the proxy", func(t *testing.T) {
-		out, err := exec.Command("docker", "exec", stack.sut, "wget", "-T", "3", "-qO-", "http://fake-upstream:80/").CombinedOutput()
+		// Retry, do not single-shot: EnsureProxies returning means Toxiproxy
+		// accepted the proxy definition, not that its upstream is serving yet.
+		// A single attempt fails intermittently with "Connection reset by
+		// peer" — observed on a GitHub runner, where the same commit passed on
+		// the previous push. A flaky assertion about DC-2 is worse than a slow
+		// one: it trains a reader to re-run a red build rather than read it.
+		var out []byte
+		err := waitFor(20*time.Second, func() error {
+			var werr error
+			out, werr = exec.Command("docker", "exec", stack.sut, "wget", "-T", "3", "-qO-", "http://fake-upstream:80/").CombinedOutput()
+			return werr
+		})
 		if err != nil {
 			t.Errorf("SUT could not reach the classified host through the proxy: %v: %s", err, out)
 		} else if !strings.Contains(string(out), "nginx") && !strings.Contains(string(out), "html") {
