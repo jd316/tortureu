@@ -48,7 +48,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jdb316/tortureu/internal/k6"
+	"github.com/jd316/TortureU/internal/k6"
 )
 
 // k6Image is the default k6 container image used in container mode. Pinned

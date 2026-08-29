@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jdb316/tortureu/internal/queuefault"
+	"github.com/jd316/TortureU/internal/queuefault"
 )
 
 // poisonPillMarker is the payload every poison_pill record carries. It is

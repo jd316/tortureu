@@ -3,9 +3,9 @@ package run
 import (
 	"testing"
 
-	"github.com/jdb316/tortureu/internal/config"
-	"github.com/jdb316/tortureu/internal/detect"
-	"github.com/jdb316/tortureu/internal/doctor"
+	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/TortureU/internal/doctor"
 )
 
 // spec: R-VER-4

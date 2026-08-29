@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jdb316/tortureu/internal/detect"
+	"github.com/jd316/TortureU/internal/detect"
 )
 
 // spec: R-EXE-28

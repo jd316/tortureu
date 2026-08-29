@@ -5,8 +5,8 @@ import (
 	"hash/fnv"
 	"strings"
 
-	"github.com/jdb316/tortureu/internal/config"
-	"github.com/jdb316/tortureu/internal/detect"
+	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/TortureU/internal/detect"
 )
 
 // fixtures — gofakeit (lang:go) / faker (lang:python|lang:js), registry.yaml.

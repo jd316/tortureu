@@ -1,8 +1,8 @@
 package mcp
 
 import (
-	"github.com/jdb316/tortureu/internal/config"
-	"github.com/jdb316/tortureu/internal/k6"
+	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/TortureU/internal/k6"
 )
 
 // EmitK6Script is the DC-1 escape hatch (R-DC1-2): it returns the compiled

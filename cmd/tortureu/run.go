@@ -7,11 +7,11 @@ import (
 	"io"
 	"os"
 
-	"github.com/jdb316/tortureu/internal/config"
-	"github.com/jdb316/tortureu/internal/detect"
-	tortureurun "github.com/jdb316/tortureu/internal/run"
-	"github.com/jdb316/tortureu/internal/trend"
-	"github.com/jdb316/tortureu/internal/verdict"
+	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/TortureU/internal/detect"
+	tortureurun "github.com/jd316/TortureU/internal/run"
+	"github.com/jd316/TortureU/internal/trend"
+	"github.com/jd316/TortureU/internal/verdict"
 )
 
 // emitVerdict writes v to w — JSON when asJSON, otherwise verdict.Render's

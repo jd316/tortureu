@@ -1,6 +1,6 @@
 package egress
 
-import "github.com/jdb316/tortureu/internal/verdict"
+import "github.com/jd316/TortureU/internal/verdict"
 
 // Audit converts a resolved classification into the verdict's egress audit
 // (R-VER-6): the auditable evidence that nothing escaped unmocked and

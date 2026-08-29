@@ -235,7 +235,7 @@ for root, _dirs, files in os.walk('.'):
         rel = os.path.relpath(root, '.')
         if rel.startswith('internal'):
             pkgs.setdefault(rel.replace(os.sep, '/'), p)
-        for m in re.finditer(r'"github\.com/jdb316/tortureu/(internal/[\w/]+)"', open(p).read()):
+        for m in re.finditer(r'"github\.com/jd316/TortureU/(internal/[\w/]+)"', open(p).read()):
             if not root.replace(os.sep, '/').endswith(m.group(1)):
                 imports.add(m.group(1))
 orphans = sorted(set(pkgs) - imports)

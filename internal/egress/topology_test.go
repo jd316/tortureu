@@ -3,7 +3,7 @@ package egress_test
 import (
 	"testing"
 
-	"github.com/jdb316/tortureu/internal/egress"
+	"github.com/jd316/TortureU/internal/egress"
 )
 
 // spec: R-DC2-3

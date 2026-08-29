@@ -50,8 +50,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/jdb316/tortureu/internal/config"
-	"github.com/jdb316/tortureu/internal/detect"
+	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/TortureU/internal/detect"
 	"gopkg.in/yaml.v3"
 )
 

@@ -11,10 +11,10 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/jdb316/tortureu/internal/config"
-	"github.com/jdb316/tortureu/internal/egress"
-	"github.com/jdb316/tortureu/internal/fault"
-	"github.com/jdb316/tortureu/internal/run"
+	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/TortureU/internal/egress"
+	"github.com/jd316/TortureU/internal/fault"
+	"github.com/jd316/TortureU/internal/run"
 )
 
 type composeService struct {

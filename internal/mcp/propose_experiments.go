@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/jdb316/tortureu/internal/detect"
-	"github.com/jdb316/tortureu/internal/doctor"
+	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/TortureU/internal/doctor"
 )
 
 // ExperimentProposal is one ranked, ready-to-paste torture.yaml faults:

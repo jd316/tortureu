@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	tortureu "github.com/jdb316/tortureu"
-	"github.com/jdb316/tortureu/internal/detect"
+	tortureu "github.com/jd316/TortureU"
+	"github.com/jd316/TortureU/internal/detect"
 	"gopkg.in/yaml.v3"
 )
 

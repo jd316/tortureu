@@ -7,8 +7,8 @@ import (
 	"io"
 	"sync"
 
-	"github.com/jdb316/tortureu/internal/detect"
-	"github.com/jdb316/tortureu/internal/verdict"
+	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/TortureU/internal/verdict"
 )
 
 // protocolVersion is the MCP protocol date-version this server speaks.

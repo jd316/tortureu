@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/jdb316/tortureu/internal/fault"
+	"github.com/jd316/TortureU/internal/fault"
 )
 
 func readJSON(r *http.Request, v any) error {

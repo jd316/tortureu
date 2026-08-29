@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jdb316/tortureu/internal/config"
+	"github.com/jd316/TortureU/internal/config"
 )
 
 // R-CLI-8 (proposed): `tortureu emit iptables` translates the `down` verb

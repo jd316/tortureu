@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jdb316/tortureu/internal/config"
-	"github.com/jdb316/tortureu/internal/detect"
-	"github.com/jdb316/tortureu/internal/trace"
-	"github.com/jdb316/tortureu/internal/verdict"
+	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/TortureU/internal/trace"
+	"github.com/jd316/TortureU/internal/verdict"
 )
 
 // traceURLEnv names the trace backend to ingest from (R-VER-13). It is an

@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jdb316/tortureu/internal/config"
-	"github.com/jdb316/tortureu/internal/fault"
+	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/TortureU/internal/fault"
 )
 
 // spec: R-SCOPE-2

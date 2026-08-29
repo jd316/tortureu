@@ -53,9 +53,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jdb316/tortureu/internal/config"
-	"github.com/jdb316/tortureu/internal/detect"
-	"github.com/jdb316/tortureu/internal/fault"
+	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/TortureU/internal/fault"
 )
 
 // hoverflySimHeredoc delimits the simulation JSON inside the emitted

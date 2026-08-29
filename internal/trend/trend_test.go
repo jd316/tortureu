@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jdb316/tortureu/internal/verdict"
+	"github.com/jd316/TortureU/internal/verdict"
 )
 
 // v builds a verdict with the fields a trend record projects.

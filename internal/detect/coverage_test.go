@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jdb316/tortureu/internal/detect"
+	"github.com/jd316/TortureU/internal/detect"
 )
 
 func plainCompose(t *testing.T, dir string) string {

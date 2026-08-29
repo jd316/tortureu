@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jdb316/tortureu/internal/mcp"
+	"github.com/jd316/TortureU/internal/mcp"
 )
 
 // spec: R-MCP-7

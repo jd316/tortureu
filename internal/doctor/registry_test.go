@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jdb316/tortureu/internal/detect"
-	"github.com/jdb316/tortureu/internal/doctor"
+	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/TortureU/internal/doctor"
 )
 
 const registryPath = "../../registry.yaml"

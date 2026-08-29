@@ -1,8 +1,8 @@
 package run
 
 import (
-	realapplier "github.com/jdb316/tortureu/internal/applier"
-	"github.com/jdb316/tortureu/internal/queuefault"
+	realapplier "github.com/jd316/TortureU/internal/applier"
+	"github.com/jd316/TortureU/internal/queuefault"
 )
 
 // NewRealDeps wires the concrete Docker/Toxiproxy/k6/Prometheus

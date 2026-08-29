@@ -4,7 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/jdb316/tortureu/internal/detect"
+	"github.com/jd316/TortureU/internal/detect"
 	"io"
 	"net"
 	"net/http"
@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jdb316/tortureu/internal/capture"
+	"github.com/jd316/TortureU/internal/capture"
 )
 
 // runCapture is the `tortureu capture` verb (R-CLI-9): run a small

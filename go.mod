@@ -1,4 +1,4 @@
-module github.com/jdb316/tortureu
+module github.com/jd316/TortureU
 
 go 1.26.5
 

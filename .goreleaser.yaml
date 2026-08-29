@@ -66,7 +66,7 @@ release:
   # Stated rather than inferred from the git remote: `goreleaser check` (and
   # a snapshot build) must work in a checkout that has no remote configured.
   github:
-    owner: jdb316
+    owner: jd316
     name: tortureu
   # Created as a draft: a release is a decision a maintainer makes, and the
   # download URLs the generated pipelines point at only resolve once it is
@@ -76,10 +76,10 @@ release:
   footer: |
     Install:
 
-        go install github.com/jdb316/tortureu/cmd/tortureu@{{ .Tag }}
+        go install github.com/jd316/TortureU/cmd/tortureu@{{ .Tag }}
 
     or download the archive for your platform and verify it against
-    `checksums.txt`. Container image: `ghcr.io/jdb316/tortureu:{{ .Tag }}`.
+    `checksums.txt`. Container image: `ghcr.io/jd316/tortureu:{{ .Tag }}`.
 
     TortureU is MIT. It drives k6 (AGPL-3) as a separate process and neither
     links nor ships it — install k6 separately.

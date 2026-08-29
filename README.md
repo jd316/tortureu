@@ -1,7 +1,7 @@
 # TortureU
 
-[![ci](https://github.com/jdb316/tortureu/actions/workflows/ci.yml/badge.svg)](https://github.com/jdb316/tortureu/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/jdb316/tortureu.svg)](https://pkg.go.dev/github.com/jdb316/tortureu)
+[![ci](https://github.com/jd316/TortureU/actions/workflows/ci.yml/badge.svg)](https://github.com/jd316/TortureU/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/jd316/TortureU.svg)](https://pkg.go.dev/github.com/jd316/TortureU)
 ![Go 1.26](https://img.shields.io/badge/go-1.26-00ADD8)
 ![licence MIT](https://img.shields.io/badge/licence-MIT-blue)
 ![no Kubernetes required](https://img.shields.io/badge/Kubernetes-not%20required-success)
@@ -22,7 +22,7 @@ OpenTelemetry the same run returns `correlated` and no chain, because a chain th
 would have to be invented. [`What comes back`](#what-comes-back) explains every line.*
 
 ```sh
-git clone https://github.com/jdb316/tortureu && cd tortureu/examples/quickstart
+git clone https://github.com/jd316/TortureU && cd TortureU/examples/quickstart
 tortureu run          # a real verdict on a deliberately broken service — Docker only, no k6 needed
 ```
 
@@ -58,7 +58,7 @@ also pulls the pinned k6 and proxy images, so budget a minute for it and ~30s af
 The zero-infrastructure route — needs a Go toolchain and nothing else:
 
 ```bash
-go install github.com/jdb316/tortureu/cmd/tortureu@latest   # pin to @v0.1.0 once tagged
+go install github.com/jd316/TortureU/cmd/tortureu@latest   # pin to @v0.1.0 once tagged
 ```
 
 Before the first tag, `@latest` resolves to a pseudo-version of the default branch — it works as
@@ -68,7 +68,7 @@ checksum could verify.
 
 Two more routes exist once a tag is pushed: the release archive for your platform
 (`tortureu_<version>_<os>_<arch>.tar.gz`, verified against that release's `checksums.txt`) and the
-CI job image `ghcr.io/jdb316/tortureu:<tag>`, which carries the Docker CLI so the container can
+CI job image `ghcr.io/jd316/tortureu:<tag>`, which carries the Docker CLI so the container can
 drive your compose stack. `.goreleaser.yaml` and `Dockerfile` build both; `.github/workflows/release.yml`
 runs them on a `v*` tag. **No tag has been pushed yet, so none of those URLs resolve today.**
 

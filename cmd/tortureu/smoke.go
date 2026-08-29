@@ -6,8 +6,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/jdb316/tortureu/internal/detect"
-	"github.com/jdb316/tortureu/internal/smoke"
+	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/TortureU/internal/smoke"
 )
 
 // runSmoke is the `tortureu smoke` verb (R-CLI-6, proposed): a

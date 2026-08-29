@@ -13,7 +13,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/jdb316/tortureu/internal/fault"
+	"github.com/jd316/TortureU/internal/fault"
 )
 
 // DockerApplier drives Docker via the CLI (no Docker SDK dependency —

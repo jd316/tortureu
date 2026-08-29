@@ -7,8 +7,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/jdb316/tortureu/internal/trend"
-	"github.com/jdb316/tortureu/internal/verdict"
+	"github.com/jd316/TortureU/internal/trend"
+	"github.com/jd316/TortureU/internal/verdict"
 )
 
 // trendUsage is printed for `trend` with no subcommand, or an unknown one. It

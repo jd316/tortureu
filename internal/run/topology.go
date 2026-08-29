@@ -24,7 +24,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"gopkg.in/yaml.v3"
 
-	"github.com/jdb316/tortureu/internal/egress"
+	"github.com/jd316/TortureU/internal/egress"
 )
 
 // proxyImage is the TortureU egress proxy's container image. SPEC.md and

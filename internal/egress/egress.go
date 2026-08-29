@@ -4,7 +4,7 @@
 // R-DC2-2). See SPEC.md §2 and RESEARCH.md "DC-2" for the reasoning.
 package egress
 
-import "github.com/jdb316/tortureu/internal/config"
+import "github.com/jd316/TortureU/internal/config"
 
 // Class is a host's resolved egress classification.
 type Class string

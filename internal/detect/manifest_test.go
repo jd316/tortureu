@@ -3,7 +3,7 @@ package detect_test
 import (
 	"testing"
 
-	"github.com/jdb316/tortureu/internal/detect"
+	"github.com/jd316/TortureU/internal/detect"
 )
 
 // spec: R-DET-14

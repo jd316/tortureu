@@ -1,6 +1,6 @@
 package run
 
-import "github.com/jdb316/tortureu/internal/fault"
+import "github.com/jd316/TortureU/internal/fault"
 
 // CombinedApplier implements fault.Applier by routing to the backend that
 // actually owns the action kind (R-EXE-15): network toxics to Toxiproxy,

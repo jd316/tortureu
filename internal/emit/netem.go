@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jdb316/tortureu/internal/config"
-	"github.com/jdb316/tortureu/internal/fault"
+	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/TortureU/internal/fault"
 )
 
 // netemHeader documents the one limitation that matters most: plain `tc

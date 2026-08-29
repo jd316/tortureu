@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jdb316/tortureu/internal/config"
+	"github.com/jd316/TortureU/internal/config"
 )
 
 // fakeApplier is a test double for Applier: no live broker involved, just

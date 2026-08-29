@@ -7,7 +7,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/jdb316/tortureu/internal/detect"
+	"github.com/jd316/TortureU/internal/detect"
 )
 
 // fragmentDoc is enough of torture.yaml's faults: shape (SPEC.md §4.4) to

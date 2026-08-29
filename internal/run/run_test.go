@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	realapplier "github.com/jdb316/tortureu/internal/applier"
-	"github.com/jdb316/tortureu/internal/config"
-	"github.com/jdb316/tortureu/internal/detect"
-	"github.com/jdb316/tortureu/internal/egress"
-	"github.com/jdb316/tortureu/internal/fault"
-	"github.com/jdb316/tortureu/internal/verdict"
+	realapplier "github.com/jd316/TortureU/internal/applier"
+	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/TortureU/internal/egress"
+	"github.com/jd316/TortureU/internal/fault"
+	"github.com/jd316/TortureU/internal/verdict"
 )
 
 // fakeResetter records whether Reset was called and returns a canned error.

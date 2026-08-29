@@ -17,7 +17,7 @@
 // against that wording creeping back in.
 package mcp
 
-import "github.com/jdb316/tortureu/internal/detect"
+import "github.com/jd316/TortureU/internal/detect"
 
 // Tool is one entry TortureU's MCP surface exposes to a calling agent.
 type Tool struct {

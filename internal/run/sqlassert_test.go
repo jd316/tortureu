@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jdb316/tortureu/internal/config"
-	"github.com/jdb316/tortureu/internal/detect"
+	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/TortureU/internal/detect"
 )
 
 // fakeSQLQuerier answers each expression from a table, so a test can pin

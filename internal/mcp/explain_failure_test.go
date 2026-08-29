@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jdb316/tortureu/internal/detect"
-	"github.com/jdb316/tortureu/internal/verdict"
+	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/TortureU/internal/verdict"
 )
 
 func verdictWithFinding(f verdict.Finding) *verdict.Verdict {

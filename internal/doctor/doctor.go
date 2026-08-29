@@ -18,7 +18,7 @@ package doctor
 import (
 	"fmt"
 
-	"github.com/jdb316/tortureu/internal/detect"
+	"github.com/jd316/TortureU/internal/detect"
 )
 
 // Level marks a Finding as informational only. There is exactly one value:
