@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/tortureu/internal/config"
 )
 
 // spec: R-EXE-15

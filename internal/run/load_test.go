@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jd316/TortureU/internal/k6"
+	"github.com/jd316/tortureu/internal/k6"
 )
 
 // fakeK6Script writes a shell script standing in for the k6 binary: it

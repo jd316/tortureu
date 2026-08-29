@@ -3,8 +3,8 @@ package egress_test
 import (
 	"testing"
 
-	"github.com/jd316/TortureU/internal/config"
-	"github.com/jd316/TortureU/internal/egress"
+	"github.com/jd316/tortureu/internal/config"
+	"github.com/jd316/tortureu/internal/egress"
 )
 
 // spec: R-DC2-6

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/tortureu/internal/config"
 )
 
 // fakeApplier is a test double for Applier: no live Toxiproxy or Docker

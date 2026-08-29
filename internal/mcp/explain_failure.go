@@ -3,8 +3,8 @@ package mcp
 import (
 	"fmt"
 
-	"github.com/jd316/TortureU/internal/detect"
-	"github.com/jd316/TortureU/internal/verdict"
+	"github.com/jd316/tortureu/internal/detect"
+	"github.com/jd316/tortureu/internal/verdict"
 )
 
 // knobsByDepType is a small, honest catalogue: library knobs this package

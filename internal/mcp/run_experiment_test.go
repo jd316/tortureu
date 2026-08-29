@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jd316/TortureU/internal/config"
-	"github.com/jd316/TortureU/internal/detect"
-	"github.com/jd316/TortureU/internal/egress"
-	"github.com/jd316/TortureU/internal/fault"
-	"github.com/jd316/TortureU/internal/run"
-	"github.com/jd316/TortureU/internal/verdict"
+	"github.com/jd316/tortureu/internal/config"
+	"github.com/jd316/tortureu/internal/detect"
+	"github.com/jd316/tortureu/internal/egress"
+	"github.com/jd316/tortureu/internal/fault"
+	"github.com/jd316/tortureu/internal/run"
+	"github.com/jd316/tortureu/internal/verdict"
 )
 
 type fakeResetter struct{ called bool }

@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"os"
 
-	"github.com/jd316/TortureU/internal/capture"
-	"github.com/jd316/TortureU/internal/egress"
+	"github.com/jd316/tortureu/internal/capture"
+	"github.com/jd316/tortureu/internal/egress"
 )
 
 // runReplay is the `tortureu replay` verb (R-CLI-10): read a cassette

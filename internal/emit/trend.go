@@ -69,9 +69,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jd316/TortureU/internal/config"
-	"github.com/jd316/TortureU/internal/detect"
-	"github.com/jd316/TortureU/internal/fault"
+	"github.com/jd316/tortureu/internal/config"
+	"github.com/jd316/tortureu/internal/detect"
+	"github.com/jd316/tortureu/internal/fault"
 )
 
 // bencherDurationMetrics are the k6 built-in metrics whose Trend statistics

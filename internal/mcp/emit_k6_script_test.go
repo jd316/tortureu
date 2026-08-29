@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jd316/TortureU/internal/k6"
+	"github.com/jd316/tortureu/internal/k6"
 )
 
 // spec: R-DC1-2

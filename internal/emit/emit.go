@@ -28,8 +28,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jd316/TortureU/internal/config"
-	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/tortureu/internal/config"
+	"github.com/jd316/tortureu/internal/detect"
 )
 
 // Emitter renders one delegate-tier tool. sys may be nil: several

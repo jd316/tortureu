@@ -1710,7 +1710,7 @@ nothing to suggest, and only the second is honest.
   install routes therefore exist, and R-CLI-11 now names which one the generated pipeline takes:
   GitHub Actions downloads the pinned release archive and verifies it against `checksums.txt`;
   GitLab runs the job *in* the image at the same pinned tag; and `go install
-  github.com/jd316/TortureU/cmd/tortureu@<tag>` is the zero-infrastructure route documented in
+  github.com/jd316/tortureu/cmd/tortureu@<tag>` is the zero-infrastructure route documented in
   README for humans, deliberately not the one CI takes — it needs a Go toolchain on the runner and
   pins nothing that a checksum could verify.
 

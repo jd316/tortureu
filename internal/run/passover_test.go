@@ -4,11 +4,11 @@ import (
 	"testing"
 	"time"
 
-	realapplier "github.com/jd316/TortureU/internal/applier"
-	"github.com/jd316/TortureU/internal/config"
-	"github.com/jd316/TortureU/internal/egress"
-	"github.com/jd316/TortureU/internal/fault"
-	"github.com/jd316/TortureU/internal/queuefault"
+	realapplier "github.com/jd316/tortureu/internal/applier"
+	"github.com/jd316/tortureu/internal/config"
+	"github.com/jd316/tortureu/internal/egress"
+	"github.com/jd316/tortureu/internal/fault"
+	"github.com/jd316/tortureu/internal/queuefault"
 )
 
 // spec: R-EXE-19

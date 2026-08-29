@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jd316/TortureU/internal/config"
-	"github.com/jd316/TortureU/internal/fault"
+	"github.com/jd316/tortureu/internal/config"
+	"github.com/jd316/tortureu/internal/fault"
 )
 
 // iptablesHeader documents this tool's one job: connection-refused

@@ -73,8 +73,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jd316/TortureU/internal/config"
-	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/tortureu/internal/config"
+	"github.com/jd316/tortureu/internal/detect"
 )
 
 func init() {

@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/jd316/TortureU/internal/config"
-	"github.com/jd316/TortureU/internal/detect"
-	"github.com/jd316/TortureU/internal/emit"
+	"github.com/jd316/tortureu/internal/config"
+	"github.com/jd316/tortureu/internal/detect"
+	"github.com/jd316/tortureu/internal/emit"
 )
 
 // runEmit is the `tortureu emit` verb (proposed R-CLI-8): generate a

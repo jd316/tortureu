@@ -1,6 +1,6 @@
 # TortureU
 
-[![ci](https://github.com/jd316/TortureU/actions/workflows/ci.yml/badge.svg)](https://github.com/jd316/TortureU/actions/workflows/ci.yml)
+[![ci](https://github.com/jd316/tortureu/actions/workflows/ci.yml/badge.svg)](https://github.com/jd316/tortureu/actions/workflows/ci.yml)
 ![Go 1.26](https://img.shields.io/badge/go-1.26-00ADD8)
 ![licence MIT](https://img.shields.io/badge/licence-MIT-blue)
 ![no Kubernetes required](https://img.shields.io/badge/Kubernetes-not%20required-success)
@@ -21,7 +21,7 @@ OpenTelemetry the same run returns `correlated` and no chain, because a chain th
 would have to be invented. [`What comes back`](#what-comes-back) explains every line.*
 
 ```sh
-git clone https://github.com/jd316/TortureU && cd TortureU/examples/quickstart
+git clone https://github.com/jd316/tortureu && cd tortureu/examples/quickstart
 tortureu run          # a real verdict on a deliberately broken service — Docker only, no k6 needed
 ```
 
@@ -57,7 +57,7 @@ also pulls the pinned k6 and proxy images, so budget a minute for it and ~30s af
 The zero-infrastructure route — needs a Go toolchain and nothing else:
 
 ```bash
-go install github.com/jd316/TortureU/cmd/tortureu@latest   # pin to @v0.1.0 once tagged
+go install github.com/jd316/tortureu/cmd/tortureu@latest   # pin to @v0.1.0 once tagged
 ```
 
 Before the first tag, `@latest` resolves to a pseudo-version of the default branch — it works as

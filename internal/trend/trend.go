@@ -28,7 +28,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jd316/TortureU/internal/verdict"
+	"github.com/jd316/tortureu/internal/verdict"
 )
 
 // SchemaVersion is the version stamped on every record written by this build

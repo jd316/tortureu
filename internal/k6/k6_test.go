@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/tortureu/internal/config"
 )
 
 func testConfig(t *testing.T) *config.Config {

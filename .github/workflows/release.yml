@@ -56,6 +56,4 @@ jobs:
           # Tagged only, never `latest`: R-CLI-11 forbids the generated
           # pipeline from floating, and a floating tag in the registry is the
           # thing that makes floating possible.
-          # GHCR rejects uppercase image names, and this repo is "TortureU",
-          # so github.repository cannot be used here verbatim.
-          tags: ghcr.io/jd316/tortureu:${{ github.ref_name }}
+          tags: ghcr.io/${{ github.repository }}:${{ github.ref_name }}

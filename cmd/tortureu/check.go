@@ -6,8 +6,8 @@ import (
 	"io"
 	"path/filepath"
 
-	"github.com/jd316/TortureU/internal/contracts"
-	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/tortureu/internal/contracts"
+	"github.com/jd316/tortureu/internal/detect"
 )
 
 // runCheck is the `tortureu check` verb: currently just contract

@@ -1,8 +1,8 @@
 package mcp
 
 import (
-	"github.com/jd316/TortureU/internal/detect"
-	"github.com/jd316/TortureU/internal/doctor"
+	"github.com/jd316/tortureu/internal/detect"
+	"github.com/jd316/tortureu/internal/doctor"
 )
 
 // DepInfo is one detected dependency, mirrored from detect.Dep for the

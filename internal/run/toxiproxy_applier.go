@@ -29,7 +29,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/jd316/TortureU/internal/fault"
+	"github.com/jd316/tortureu/internal/fault"
 )
 
 // ToxiproxyApplier drives a Toxiproxy instance's HTTP control API.

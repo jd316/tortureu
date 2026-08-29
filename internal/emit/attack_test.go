@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jd316/TortureU/internal/config"
-	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/tortureu/internal/config"
+	"github.com/jd316/tortureu/internal/detect"
 )
 
 // attackFixture is a torture.yaml with a base_url, a bounded load window and

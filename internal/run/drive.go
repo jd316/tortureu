@@ -48,10 +48,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jd316/TortureU/internal/config"
-	"github.com/jd316/TortureU/internal/detect"
-	"github.com/jd316/TortureU/internal/doctor"
-	"github.com/jd316/TortureU/internal/verdict"
+	"github.com/jd316/tortureu/internal/config"
+	"github.com/jd316/tortureu/internal/detect"
+	"github.com/jd316/tortureu/internal/doctor"
+	"github.com/jd316/tortureu/internal/verdict"
 )
 
 // DBLoadRunner saturates the database independently of the application

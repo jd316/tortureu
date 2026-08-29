@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/tortureu/internal/detect"
 )
 
 // writeCompose puts a compose file in a temp dir and returns its path.

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/tortureu/internal/detect"
 )
 
 var errResetBoom = errors.New("docker compose: boom")

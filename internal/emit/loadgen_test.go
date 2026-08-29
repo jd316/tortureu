@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/tortureu/internal/config"
 )
 
 // assertPyCompiles shells out to `python3 -m py_compile` (present on this

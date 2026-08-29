@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jd316/TortureU/internal/fault"
+	"github.com/jd316/tortureu/internal/fault"
 )
 
 // TestDockerApplier_KillDoesNotProduceClientVisibleRST is committed evidence

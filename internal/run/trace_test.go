@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jd316/TortureU/internal/config"
-	"github.com/jd316/TortureU/internal/detect"
-	"github.com/jd316/TortureU/internal/trace"
-	"github.com/jd316/TortureU/internal/verdict"
+	"github.com/jd316/tortureu/internal/config"
+	"github.com/jd316/tortureu/internal/detect"
+	"github.com/jd316/tortureu/internal/trace"
+	"github.com/jd316/tortureu/internal/verdict"
 )
 
 // fakeTraceSource stands in for a real Jaeger. The spans it returns are the

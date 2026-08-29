@@ -3,8 +3,8 @@ package applier
 import (
 	"fmt"
 
-	"github.com/jd316/TortureU/internal/config"
-	"github.com/jd316/TortureU/internal/egress"
+	"github.com/jd316/tortureu/internal/config"
+	"github.com/jd316/tortureu/internal/egress"
 )
 
 // defaultErrorRateStatus is used when error_rate's `status` modifier is

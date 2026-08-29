@@ -127,13 +127,11 @@ const ReleaseVersion = ""
 // releaseRepo is the GitHub repository the artefacts come from. Named once so
 // the download URL, the image reference and the `go install` path in the
 // generated comments cannot drift apart.
-const releaseRepo = "jd316/TortureU"
-
-// releaseImage is the container image the artefacts publish to. It is NOT
-// releaseRepo lowercased by accident: GHCR rejects uppercase image names, and
-// this repository is "TortureU", so the two genuinely differ and must be
-// written separately rather than derived from one another.
-const releaseImage = "jd316/tortureu"
+// releaseRepo is the GitHub repository the artefacts come from, and also the
+// GHCR image path. They were separate constants while the repository was
+// named "TortureU": GHCR forbids uppercase image names, so the two genuinely
+// differed. The repository is lowercase now, so one name serves both.
+const releaseRepo = "jd316/tortureu"
 
 // Generate renders the pipeline for provider, returning the path it belongs
 // at and its content (R-CLI-11). An unknown provider is an error listing what
@@ -171,7 +169,7 @@ echo "  Nothing was installed, so nothing was proven. Exit 2 = harness error (VE
 echo "  Replace this step with whichever install route you prefer, pinned to a tag:" >&2
 echo "    - go install github.com/` + releaseRepo + `/cmd/tortureu@vX.Y.Z   (needs Go on the runner)" >&2
 echo "    - download tortureu_X.Y.Z_linux_amd64.tar.gz from the release and verify it against checksums.txt" >&2
-echo "    - run this job inside the ghcr.io/` + releaseImage + `:vX.Y.Z image" >&2
+echo "    - run this job inside the ghcr.io/` + releaseRepo + `:vX.Y.Z image" >&2
 exit 2
 `
 
@@ -296,7 +294,7 @@ func gitlabInstall(version string) string {
   # so this job cannot install one and fails instead of pulling a tag that
   # does not exist. docker:cli is a placeholder image with the Docker CLI in
   # it; once a release exists, replace both it and this before_script with
-  #   image: ghcr.io/` + releaseImage + `:vX.Y.Z
+  #   image: ghcr.io/` + releaseRepo + `:vX.Y.Z
   image: docker:cli
   before_script:
 ` + indent(scriptList(noReleaseShell), "    ") + `

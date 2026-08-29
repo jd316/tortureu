@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/jd316/TortureU/internal/config"
-	"github.com/jd316/TortureU/internal/detect"
-	"github.com/jd316/TortureU/internal/run"
+	"github.com/jd316/tortureu/internal/config"
+	"github.com/jd316/tortureu/internal/detect"
+	"github.com/jd316/tortureu/internal/run"
 )
 
 // This file turns tools/call's raw JSON arguments into calls against the

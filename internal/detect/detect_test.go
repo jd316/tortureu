@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/tortureu/internal/detect"
 )
 
 // writeFile writes body to path relative to dir, creating parent dirs as needed.

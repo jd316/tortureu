@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jd316/TortureU/internal/ci"
-	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/tortureu/internal/ci"
+	"github.com/jd316/tortureu/internal/detect"
 )
 
 // initOutput is the torture.yaml content init derives from detection

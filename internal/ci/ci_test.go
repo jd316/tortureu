@@ -428,7 +428,7 @@ func TestInstallStepFailsLoudlyWhileNoReleaseExists(t *testing.T) {
 			if body == "" {
 				t.Fatalf("%s pipeline has no install step while no release exists; it must fail loudly", provider)
 			}
-			for _, download := range []string{"curl", "wget", "http://", "https://github.com/jd316/TortureU/releases/download"} {
+			for _, download := range []string{"curl", "wget", "http://", "https://github.com/jd316/tortureu/releases/download"} {
 				if strings.Contains(body, download) {
 					t.Errorf("%s install step attempts %q with no release published — a missing release must not be reported as a network failure:\n%s", provider, download, body)
 				}

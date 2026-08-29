@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/tortureu/internal/config"
 )
 
 // hostPort splits a torture.yaml fault target ("postgres:5432",

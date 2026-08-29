@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/jd316/TortureU/internal/mcp"
+	"github.com/jd316/tortureu/internal/mcp"
 )
 
 // mcpInputShape is a short, honest note on what each internal/mcp tool

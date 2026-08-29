@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jd316/TortureU/internal/fault"
+	"github.com/jd316/tortureu/internal/fault"
 )
 
 // dockerAvailable skips a test rather than passing it when no Docker daemon

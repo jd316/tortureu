@@ -5,8 +5,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/jd316/TortureU/internal/egress"
-	"github.com/jd316/TortureU/internal/verdict"
+	"github.com/jd316/tortureu/internal/egress"
+	"github.com/jd316/tortureu/internal/verdict"
 )
 
 // spec: R-VER-6

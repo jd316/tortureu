@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jd316/TortureU/internal/egress"
-	"github.com/jd316/TortureU/internal/fault"
+	"github.com/jd316/tortureu/internal/egress"
+	"github.com/jd316/tortureu/internal/fault"
 )
 
 // spec: R-EXE-20

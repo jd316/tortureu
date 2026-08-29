@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/tortureu/internal/detect"
 	"gopkg.in/yaml.v3"
 )
 

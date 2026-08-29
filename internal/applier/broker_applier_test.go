@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jd316/TortureU/internal/queuefault"
+	"github.com/jd316/tortureu/internal/queuefault"
 )
 
 // spec: R-EXE-17

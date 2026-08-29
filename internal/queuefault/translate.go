@@ -24,7 +24,7 @@ package queuefault
 import (
 	"fmt"
 
-	"github.com/jd316/TortureU/internal/config"
+	"github.com/jd316/tortureu/internal/config"
 )
 
 // ActionKind distinguishes the two verbs this package owns (R-EXE-15).

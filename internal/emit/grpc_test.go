@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/tortureu/internal/detect"
 )
 
 // spec: R-CLI-8

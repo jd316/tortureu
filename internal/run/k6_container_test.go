@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jd316/TortureU/internal/egress"
-	"github.com/jd316/TortureU/internal/k6"
+	"github.com/jd316/tortureu/internal/egress"
+	"github.com/jd316/tortureu/internal/k6"
 )
 
 // spec: R-DC2-3

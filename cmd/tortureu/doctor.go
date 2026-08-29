@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jd316/TortureU/internal/detect"
-	"github.com/jd316/TortureU/internal/doctor"
+	"github.com/jd316/tortureu/internal/detect"
+	"github.com/jd316/tortureu/internal/doctor"
 )
 
 // loadRegistry resolves the registry doctor evaluates against (R-COV-8): an

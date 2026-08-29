@@ -71,7 +71,7 @@ import (
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/loader"
-	"github.com/jd316/TortureU/internal/detect"
+	"github.com/jd316/tortureu/internal/detect"
 )
 
 // KeployBinary is the name looked up on PATH. Presence is all that is
