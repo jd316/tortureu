@@ -21,3 +21,9 @@ require (
 	golang.org/x/sys v0.5.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 )
+
+// v0.1.0 was published while this module was named github.com/jd316/TortureU.
+// proxy.golang.org caches a module path per version immutably, so that version
+// resolves to a go.mod declaring the old path and can never be installed under
+// the current one. Retracted rather than left to be picked by `go get`.
+retract v0.1.0
