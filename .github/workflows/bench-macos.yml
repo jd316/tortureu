@@ -1,0 +1,50 @@
+# B1 fault fidelity on macOS — the platform BENCHMARKS.md says is unmeasured.
+#
+# Manual only (workflow_dispatch): it needs a Docker runtime on a macOS runner,
+# which is neither preinstalled nor fast, and it exists to answer one question
+# rather than to gate pushes.
+#
+# GitHub's macOS images ship no Docker daemon, so this installs Colima. If that
+# turns out not to work, the job says so and the "unmeasured on macOS" note in
+# BENCHMARKS.md stands with a reason attached instead of an assumption.
+name: bench-macos
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  b1:
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.26' }
+
+      - name: install a docker runtime
+        run: |
+          brew install docker colima
+          colima start --cpu 3 --memory 6 --vm-type=vz --network-address
+          docker info | head -20
+
+      - name: platform provenance
+        run: |
+          sw_vers
+          uname -a
+          docker version --format 'server: {{.Server.Version}} os/arch: {{.Server.Os}}/{{.Server.Arch}}'
+
+      - name: B1 fault fidelity
+        env:
+          TORTUREU_BENCH_DATE: ${{ github.event.repository.updated_at }}
+          TORTUREU_BENCH_COMMIT: ${{ github.sha }}
+        run: go run ./benchmarks/b1
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: b1-macos-results
+          path: benchmarks/results/*.json
+          if-no-files-found: warn
