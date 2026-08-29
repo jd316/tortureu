@@ -46,6 +46,21 @@ effect. `make bench` runs it; results land in `benchmarks/results/<date>-<commit
 | `kill` (SIGKILL) | SIGKILL delivered, exit 137 | signal + exit code (**not** client RST — see R-EXE-25) | exact |
 | `cpu: 90%` | 90% of quota | cgroup cpu.stat | ±5% |
 
+**On macOS.** These numbers are Linux/cgroup v2. `tortureu doctor` says so on other platforms
+rather than letting a reader assume otherwise, and `.github/workflows/bench-macos.yml`
+(`workflow_dispatch`) exists to close the gap. What is settled so far, by running it rather than
+reasoning about it:
+
+- **Apple Silicon runners cannot host the benchmark.** On `macos-14`, Colima's `vz` driver exits
+  immediately — nested virtualisation is not available to the runner — so no Docker daemon, so no
+  B1. That is a property of GitHub's runner, not of TortureU or of macOS.
+- The Intel path (`macos-13` + Colima/QEMU) is what the workflow now uses. Those runners are
+  heavily contended and a dispatch can sit queued for a long time; until one completes, macOS
+  fidelity stays **unmeasured**, and it is labelled that way everywhere rather than estimated from
+  the Linux figures.
+
+Anyone with a Mac can settle it in one command: `make bench`.
+
 **Platform:** Linux 7.0.0-29-generic, Docker 29.5.3, AMD Ryzen 7 5800H (16 cores), cgroup v2.
 Measured `2026-08-09T08:02:43Z` at commit `72ca62b`
 ([full JSON](benchmarks/results/2026-08-08-698d549.json)). Not yet measured on macOS or
