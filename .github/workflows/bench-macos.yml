@@ -17,8 +17,8 @@ permissions:
 
 jobs:
   b1:
-    runs-on: macos-14
-    timeout-minutes: 45
+    runs-on: macos-13
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -26,8 +26,12 @@ jobs:
 
       - name: install a docker runtime
         run: |
-          brew install docker colima
-          colima start --cpu 3 --memory 6 --vm-type=vz --network-address
+          # macos-14+ runners are Apple Silicon and their VZ driver cannot
+          # start a VM here (nested virtualisation is unavailable) — tried, it
+          # exits immediately. macos-13 is Intel, where Colima's QEMU driver
+          # works, slowly.
+          brew install docker colima qemu
+          colima start --cpu 3 --memory 6 --disk 14 --vm-type=qemu
           docker info | head -20
 
       - name: platform provenance
