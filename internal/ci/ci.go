@@ -122,7 +122,7 @@ func indent(s, pad string) string {
 // SPEC.md TBD-11) — it does not fall back to `latest`, and it does not emit a
 // download of a URL that does not resolve. Set this constant to the tag as
 // part of releasing, after confirming the artefacts are public.
-const ReleaseVersion = ""
+const ReleaseVersion = "v0.1.2"
 
 // releaseRepo is the GitHub repository the artefacts come from. Named once so
 // the download URL, the image reference and the `go install` path in the

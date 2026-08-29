@@ -1,6 +1,8 @@
 # TortureU
 
 [![ci](https://github.com/jd316/tortureu/actions/workflows/ci.yml/badge.svg)](https://github.com/jd316/tortureu/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/jd316/tortureu.svg)](https://pkg.go.dev/github.com/jd316/tortureu)
+[![release](https://img.shields.io/github/v/release/jd316/tortureu)](https://github.com/jd316/tortureu/releases/latest)
 ![Go 1.26](https://img.shields.io/badge/go-1.26-00ADD8)
 ![licence MIT](https://img.shields.io/badge/licence-MIT-blue)
 ![no Kubernetes required](https://img.shields.io/badge/Kubernetes-not%20required-success)
@@ -37,10 +39,6 @@ also pulls the pinned k6 and proxy images, so budget a minute for it and ~30s af
 > Every one of the 155 tools in [`registry.yaml`](registry.yaml) is reachable from the CLI, so no
 > entry tells you to run something that does not work.
 >
-> **Not yet:** no tag has been pushed, so no release archive or image exists to install from —
-> until one does, the pipeline `init --ci` writes fails its install step with exit `2` and names
-> the routes rather than downloading a URL that 404s.
->
 > **What the evidence actually shows.** On the labelled corpus (`make eval`, results in
 > [`BENCHMARKS.md`](BENCHMARKS.md)) TortureU detects **8/8** planted defects and reports **0
 > findings on either control** — one with no defect, and one where a real 3s dependency stall is
@@ -57,7 +55,7 @@ also pulls the pinned k6 and proxy images, so budget a minute for it and ~30s af
 The zero-infrastructure route — needs a Go toolchain and nothing else:
 
 ```bash
-go install github.com/jd316/tortureu/cmd/tortureu@latest   # pin to @v0.1.0 once tagged
+go install github.com/jd316/tortureu/cmd/tortureu@v0.1.2
 ```
 
 Before the first tag, `@latest` resolves to a pseudo-version of the default branch — it works as
@@ -69,7 +67,7 @@ Two more routes exist once a tag is pushed: the release archive for your platfor
 (`tortureu_<version>_<os>_<arch>.tar.gz`, verified against that release's `checksums.txt`) and the
 CI job image `ghcr.io/jd316/tortureu:<tag>`, which carries the Docker CLI so the container can
 drive your compose stack. `.goreleaser.yaml` and `Dockerfile` build both; `.github/workflows/release.yml`
-runs them on a `v*` tag. **No tag has been pushed yet, so none of those URLs resolve today.**
+runs them on a `v*` tag. Both are published for `v0.1.2`.
 
 k6 is not bundled. It is AGPL-3 and TortureU is MIT, so TortureU drives it as a separate,
 unmodified process and never links it (`SPEC.md` §10) — install k6 yourself.

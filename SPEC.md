@@ -1718,10 +1718,12 @@ nothing to suggest, and only the second is honest.
   updates itself under a pipeline makes every regression ambiguous — the service changed, or the
   thing measuring it did, and the run cannot say which.
 
-  What genuinely cannot be closed here: **no tag has been pushed and no artefact published** — that
-  is a maintainer's decision, not an implementer's. So `ci.ReleaseVersion` is `""`, and while it is,
-  the generated install step **fails the job with exit 2** naming the reason and listing the routes,
-  which is the honest reading: the harness could not be installed, so nothing was proven. It does
+  **Closed 2026-08-29:** `v0.1.2` is tagged and published — cross-platform archives with
+  `checksums.txt`, and `ghcr.io/jd316/tortureu:v0.1.2`. `ci.ReleaseVersion` is set, so the pipeline
+  `init --ci` writes downloads the archive and verifies it against the release's own checksums;
+  that step was executed end to end, not merely generated. `v0.1.0` and `v0.1.1` were superseded
+  during the rename to the canonical lowercase module path, and `v0.1.0` is retracted in `go.mod`
+  because the module proxy caches a path per version immutably.
   not emit a download that 404s (a missing release is not a network flake) and it does not pass.
   Setting that one constant to the first tag, and confirming the published URL resolves, is all that
   remains.
