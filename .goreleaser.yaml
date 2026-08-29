@@ -67,7 +67,7 @@ release:
   # a snapshot build) must work in a checkout that has no remote configured.
   github:
     owner: jd316
-    name: tortureu
+    name: TortureU
   # Created as a draft: a release is a decision a maintainer makes, and the
   # download URLs the generated pipelines point at only resolve once it is
   # published. Publish it, then set internal/ci.ReleaseVersion to the tag.
