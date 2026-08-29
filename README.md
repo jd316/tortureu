@@ -1,7 +1,6 @@
 # TortureU
 
 [![ci](https://github.com/jd316/TortureU/actions/workflows/ci.yml/badge.svg)](https://github.com/jd316/TortureU/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/jd316/TortureU.svg)](https://pkg.go.dev/github.com/jd316/TortureU)
 ![Go 1.26](https://img.shields.io/badge/go-1.26-00ADD8)
 ![licence MIT](https://img.shields.io/badge/licence-MIT-blue)
 ![no Kubernetes required](https://img.shields.io/badge/Kubernetes-not%20required-success)
